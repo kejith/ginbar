@@ -1,0 +1,38 @@
+backend/tmp/
+backend/public/
+backend/fullchain.pem
+backend/privkey.pem
+backend/.vscode/dlv-sudo.sh
+backend/.vscode/launch.json
+backend/.vscode/settings.json
+backend/.env
+backend/ginbar
+backend/ginbar
+backend/sessions.sqlite3
+backend/vendor/
+backend/data/
+
+# dependencies
+frontend/node_modules
+frontend/.pnp
+frontend/.pnp.js
+
+# testing
+frontend//coverage
+
+# production
+frontend//build
+
+# misc
+frontend/.DS_Store
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
+
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/.vscode/
+frontend/.env
+frontend/.vscode/settings.json

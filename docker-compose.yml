@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  backend:
+    build: .
+    ports:
+      - "3000:3000"
+    command: ["./ginbar"]
+    env_file:
+      - .env
+    environment:
+      DB_DRIVER: ${DB_DRIVER}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_HOST: mysql
+      DB_PORT: ${DB_PORT}
+      DB_NAME: ${DB_NAME}
+    depends_on:
+      - mysql
+    volumes:
+      - images:/app/public/images
+
+  mysql:
+    image: mysql:latest
+    environment:
+      MYSQL_DATABASE: "ginbar"
+      MYSQL_USER: "ginbar"
+      MYSQL_PASSWORD: "test-password"
+      MYSQL_ROOT_PASSWORD: "test-password"
+    ports:
+      - "3309:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+
+volumes:
+  mysql-data:
+  images:
+    driver: local
+    driver_opts:
+      type: none
+      device: $PWD/backend/data/images
+      o: bind
