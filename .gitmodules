@@ -1,0 +1,6 @@
+[submodule "backend"]
+	path = backend
+	url = https://github.com/kejith/ginbar-backend
+[submodule "frontend"]
+	path = frontend
+	url = https://github.com/kejith/ginbar-frontend
