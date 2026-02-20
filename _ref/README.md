@@ -1,13 +1,13 @@
 # Reference — Legacy Code
-The old implementation lives in the git submodules at the repo root:
-- `../backend/` — Go backend (Gin + Fiber v2, MySQL, Go 1.15)
-- `../frontend/` — React frontend (CRA, Redux, plain CSS)
 
-These are **read-only reference**. The rewrite lives in `../src/`.
+The legacy submodules (`backend/`, `frontend/`) have been removed from the repo.
+They served as read-only reference during the rewrite and are no longer needed.
 
-Key reference files to consult:
-- `../backend/fiberapi/` — all route handlers
-- `../backend/mysql/schema/` — original DB schema (8 files)
+The full rewrite lives in `src/`:
+- `src/backend/` — Go backend (Fiber v3, pgx/v5, sqlc, goose, PostgreSQL)
+- `src/frontend/` — Vite 6 + React 19 frontend (Zustand, Tailwind v4, nginx)
+
+The `_plan/PLAN.md` file documents the full 9-chunk rewrite plan.
 - `../backend/mysql/query/` — all sqlc query definitions
 - `../backend/models/` — JSON response structs
 - `../backend/utils/` — image/video/download pipeline
