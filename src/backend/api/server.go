@@ -5,9 +5,11 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"time"
 
 	"ginbar/db"
+	"ginbar/utils"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/gofiber/fiber/v3/middleware/cors"
@@ -31,6 +33,7 @@ type Server struct {
 	store    *db.Store
 	sessions *session.Store
 	log      *slog.Logger
+	dirs     utils.Directories
 }
 
 // NewServer wires up the Fiber v3 application.
@@ -64,11 +67,21 @@ func NewServer(store *db.Store, sessionSecret string, log *slog.Logger) *Server 
 	// Register the session user type for gob encoding.
 	sessions.RegisterType(SessionUser{})
 
+	cwd, _ := os.Getwd()
+	dirs := utils.SetupDirectories(cwd)
+
+	// Ensure required subdirs exist.
+	for _, d := range []string{dirs.Image, dirs.Thumbnail, dirs.Video, dirs.Tmp,
+		filepath.Join(dirs.Tmp, "thumbnails"), dirs.Upload} {
+		_ = os.MkdirAll(d, 0o755)
+	}
+
 	srv := &Server{
 		App:      app,
 		store:    store,
 		sessions: sessions,
 		log:      log,
+		dirs:     dirs,
 	}
 
 	// ── Global middleware ─────────────────────────────────────────────────────

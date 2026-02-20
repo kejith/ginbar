@@ -3,9 +3,12 @@ module ginbar
 go 1.23
 
 require (
+	github.com/corona10/goimagehash v1.1.0
 	github.com/gofiber/fiber/v3 v3.0.0-beta.3
 	github.com/gofiber/storage/postgres v1.3.4
+	github.com/harukasan/go-libwebp v0.0.0-20220408054828-61eedf90d768
 	github.com/jackc/pgx/v5 v5.6.0
+	github.com/muesli/smartcrop v0.3.0
 	golang.org/x/crypto v0.25.0
 )
 
@@ -20,10 +23,12 @@ require (
 	github.com/lib/pq v1.10.7 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/nfnt/resize v0.0.0-20180221191011-83c6a9932646 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.55.0 // indirect
 	github.com/valyala/tcplisten v1.0.0 // indirect
-	golang.org/x/sync v0.7.0 // indirect
+	golang.org/x/image v0.21.0 // indirect
+	golang.org/x/sync v0.8.0 // indirect
 	golang.org/x/sys v0.22.0 // indirect
-	golang.org/x/text v0.16.0 // indirect
+	golang.org/x/text v0.19.0 // indirect
 )
