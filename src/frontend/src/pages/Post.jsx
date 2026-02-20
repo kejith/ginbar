@@ -17,9 +17,9 @@ export default function Post() {
   const { current, postLoading, postError, fetchPost, votePost } =
     usePostStore();
   const seedComments = useCommentStore((s) => s.seed);
-  const comments = useCommentStore((s) => s.byPost[postId] ?? null);
+  const comments = useCommentStore((s) => s.byPost[postId]);
   const seedTags = useTagStore((s) => s.seed);
-  const tags = useTagStore((s) => s.byPost[postId] ?? []);
+  const tags = useTagStore((s) => s.byPost[postId]);
   const voteTag = useTagStore((s) => s.voteTag);
 
   useEffect(() => {
@@ -42,6 +42,8 @@ export default function Post() {
   if (!current) return null;
 
   const post = current.data;
+  const tagList = tags ?? [];
+  const commentList = comments ?? [];
   const isVideo =
     post.content_type?.startsWith("video/") ||
     post.filename?.match(/\.(mp4|webm|mov)$/i);
@@ -94,9 +96,9 @@ export default function Post() {
               {post.user_name}
             </Link>
           </p>
-          {tags.length > 0 && (
+          {tagList.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-1">
-              {tags.map((t) => (
+              {tagList.map((t) => (
                 <TagChip
                   key={t.id}
                   tag={t}
@@ -113,11 +115,10 @@ export default function Post() {
       {/* Comments */}
       <section>
         <h2 className="mb-2 text-sm font-semibold text-(--color-muted) uppercase tracking-wide">
-          comments{comments ? ` (${comments.length})` : ""}
+          comments{commentList.length > 0 ? ` (${commentList.length})` : ""}
         </h2>
         <CommentForm postId={postId} />
-        {comments &&
-          comments.map((c) => (
+        {commentList.map((c) => (
             <CommentItem key={c.id} comment={c} postId={postId} />
           ))}
       </section>
