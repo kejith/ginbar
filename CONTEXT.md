@@ -1,33 +1,37 @@
 # Ginbar Rewrite — Session Context
+
 > Full rewrite plan: `_plan/PLAN.md` · Legacy reference: `_ref/README.md`
 > Read this first when starting a new conversation inside the devcontainer.
 
 ---
 
-## Status: Chunks 0–5 complete — backend done, frontend not started
+## Status: Chunks 0–6 complete — backend done, Vite scaffold done
 
 ### Chunk progress
-| # | Status | Notes |
-|---|---|---|
-| 0 | ✅ | Devcontainer, plan docs, repo scaffold |
-| 1 | ✅ | 8 goose PG migrations — `make migrate-up` verified (version 8) |
-| 2 | ✅ | `go.mod` (Go 1.23, pgx/v5.6.0, fiber/v3-beta.3), sqlc.yaml, 8 query files, 11 generated files, `db/store.go` |
-| 3 | ✅ | `main.go` (pgxpool, graceful shutdown), `api/server.go` (Fiber v3, sessions, CORS, slog middleware, all routes) |
-| 4 | ✅ | `api/user.go`, `api/post.go`, `api/comment.go`, `api/tag.go` — all handlers implemented |
-| 5 | ✅ | `utils/` — download (30s timeout, max 5 redirects), image (cwebp+goimagehash+smartcrop), video (ffmpeg), validation (bcrypt); CreatePost/UploadPost fully wired |
-| 6 | ⏳ | **NEXT** — Vite scaffold in `src/frontend/` |
-| 7 | ⏳ | Zustand stores, axios api.js |
-| 8 | ⏳ | UI layout (full-width grid, Tailwind v4) |
-| 9 | ⏳ | Production Docker Compose + nginx |
+
+| #   | Status | Notes                                                                                                                                                           |
+| --- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 0   | ✅     | Devcontainer, plan docs, repo scaffold                                                                                                                          |
+| 1   | ✅     | 8 goose PG migrations — `make migrate-up` verified (version 8)                                                                                                  |
+| 2   | ✅     | `go.mod` (Go 1.23, pgx/v5.6.0, fiber/v3-beta.3), sqlc.yaml, 8 query files, 11 generated files, `db/store.go`                                                    |
+| 3   | ✅     | `main.go` (pgxpool, graceful shutdown), `api/server.go` (Fiber v3, sessions, CORS, slog middleware, all routes)                                                 |
+| 4   | ✅     | `api/user.go`, `api/post.go`, `api/comment.go`, `api/tag.go` — all handlers implemented                                                                         |
+| 5   | ✅     | `utils/` — download (30s timeout, max 5 redirects), image (cwebp+goimagehash+smartcrop), video (ffmpeg), validation (bcrypt); CreatePost/UploadPost fully wired |
+| 6   | ✅     | Vite 6, React 19, SWC, Tailwind v4, RR v7, lazy routes, `/api` proxy          |
+| 7   | ⏳     | **NEXT** — Zustand stores, axios api.js                                        |
+| 8   | ⏳     | UI layout (full-width grid, Tailwind v4)                                                                                                                        |
+| 9   | ⏳     | Production Docker Compose + nginx                                                                                                                               |
 
 ### Git state
+
 - Branch: `rewrite` (on top of `master`)
-- 6 commits: chunk 0 → chunk 5
+- 7 commits: chunk 0 → chunk 6
 - `go build ./...` → clean binary ✅
 
 ---
 
 ## Backend layout (complete)
+
 ```
 src/backend/
   main.go                   # pgxpool connect, signal handler, graceful shutdown
@@ -53,6 +57,7 @@ src/backend/
 ```
 
 ### Key implementation notes (pitfalls already hit)
+
 - Sessions store `SessionUser{ID int32, Name string, Level int32}` via gob
 - sqlc import alias: `dbgen "ginbar/db/gen"` (package name is `db`, not `gen`)
 - Vote fields are `int16` (column name `vote`, not `upvoted`)
@@ -66,26 +71,52 @@ src/backend/
 
 ---
 
-## Next: Chunk 6 — Frontend scaffold
+## Frontend layout (scaffold done)
 
-```bash
-cd /workspace/src/frontend
-pnpm create vite@latest . -- --template react
-# Accept overwrite prompts
-pnpm add react-router-dom@7 zustand@5 axios
-pnpm add -D @tailwindcss/vite tailwindcss
+```
+src/frontend/
+  package.json          # react@19, react-dom@19, react-router-dom@7, zustand@5, axios
+  vite.config.js        # SWC plugin, @tailwindcss/vite, /api proxy, es2022, manualChunks
+  index.html            # minimal shell, preconnect hint
+  pnpm-lock.yaml
+  pnpm-workspace.yaml   # ignoredBuiltDependencies: @swc/core, esbuild
+  public/
+    favicon.svg         # brand orange SVG
+  src/
+    main.jsx            # createRoot + BrowserRouter
+    App.jsx             # lazy Routes (Home/Post/Login/Profile/NotFound)
+    index.css           # @import "tailwindcss"; dark tokens; full-bleed grid
+    pages/
+      Home.jsx          # stub
+      Post.jsx          # stub
+      Login.jsx         # stub
+      Profile.jsx       # stub
+      NotFound.jsx      # stub
 ```
 
-Then update `vite.config.js` with API proxy:
-```js
-server: { proxy: { '/api': 'http://localhost:3000' } }
-```
+Build stats: 771 ms, main bundle 58 kB gzip.
 
-After that: Chunk 7 (Zustand stores + api.js), Chunk 8 (UI components), Chunk 9 (Docker+nginx).
+### Key notes (pitfalls already hit)
+- `pnpm install` requires `sudo chown -R $(whoami) node_modules` first (root-owned from earlier)
+- `@swc/core` and `esbuild` build scripts are ignored by pnpm — native bins (`@swc/core-linux-x64-gnu`, `esbuild-linux-x64`) are downloaded directly as separate packages; build works fine
+- React 19 ESM means `react-vendor` manualChunk comes out empty — omit it
+- Tailwind v4: CSS-first, no `tailwind.config.js`; just `@import "tailwindcss"` in the CSS entry
+
+## Next: Chunk 7 — Zustand stores + api.js
+
+Create:
+- `src/utils/api.js` — thin axios instance (baseURL `/api`, `withCredentials: true`)
+- `src/stores/authStore.js` — user session (me, login, logout)
+- `src/stores/postStore.js` — posts list, single post, vote
+- `src/stores/commentStore.js` — comments for a post, vote
+- `src/stores/tagStore.js` — tags for a post, vote
+
+After that: Chunk 8 (UI layout), Chunk 9 (Docker+nginx).
 
 ---
 
 ## Key env vars (dev)
+
 ```
 DB_URL=postgres://ginbar:devpassword@localhost:5432/ginbar?sslmode=disable
 SESSION_SECRET=change-me-in-prod
@@ -93,6 +124,7 @@ PORT=3000
 ```
 
 ## Useful make targets
+
 ```bash
 make migrate-up          # run all pending goose migrations
 make sqlc                # regenerate db/gen/ from queries
