@@ -5,7 +5,7 @@
 
 ---
 
-## Status: Chunks 0–6 complete — backend done, Vite scaffold done
+## Status: Chunks 0–7 complete — backend done, state layer done
 
 ### Chunk progress
 
@@ -17,16 +17,17 @@
 | 3   | ✅     | `main.go` (pgxpool, graceful shutdown), `api/server.go` (Fiber v3, sessions, CORS, slog middleware, all routes)                                                 |
 | 4   | ✅     | `api/user.go`, `api/post.go`, `api/comment.go`, `api/tag.go` — all handlers implemented                                                                         |
 | 5   | ✅     | `utils/` — download (30s timeout, max 5 redirects), image (cwebp+goimagehash+smartcrop), video (ffmpeg), validation (bcrypt); CreatePost/UploadPost fully wired |
-| 6   | ✅     | Vite 6, React 19, SWC, Tailwind v4, RR v7, lazy routes, `/api` proxy          |
-| 7   | ⏳     | **NEXT** — Zustand stores, axios api.js                                        |
-| 8   | ⏳     | UI layout (full-width grid, Tailwind v4)                                                                                                                        |
+| 6   | ✅     | Vite 6, React 19, SWC, Tailwind v4, RR v7, lazy routes, `/api` proxy                                                                                            |
+| 7   | ✅     | `utils/api.js` (axios), `stores/authStore`, `postStore`, `commentStore`, `tagStore`                                                                             |
+| 8   | ⏳     | **NEXT** — UI layout (full-width grid, sticky nav, Tailwind v4)                                                                                                |
 | 9   | ⏳     | Production Docker Compose + nginx                                                                                                                               |
 
 ### Git state
 
 - Branch: `rewrite` (on top of `master`)
-- 7 commits: chunk 0 → chunk 6
+- 8 commits: chunk 0 → chunk 7
 - `go build ./...` → clean binary ✅
+- `pnpm build` (frontend) → clean, 73 kB gzip main bundle ✅
 
 ---
 
@@ -84,34 +85,49 @@ src/frontend/
     favicon.svg         # brand orange SVG
   src/
     main.jsx            # createRoot + BrowserRouter
-    App.jsx             # lazy Routes (Home/Post/Login/Profile/NotFound)
+    App.jsx             # lazy Routes + hydrate() on mount
     index.css           # @import "tailwindcss"; dark tokens; full-bleed grid
     pages/
-      Home.jsx          # stub
-      Post.jsx          # stub
-      Login.jsx         # stub
-      Profile.jsx       # stub
+      Home.jsx          # stub → Chunk 8
+      Post.jsx          # stub → Chunk 8
+      Login.jsx         # stub → Chunk 8
+      Profile.jsx       # stub → Chunk 8
       NotFound.jsx      # stub
+    stores/
+      authStore.js      # user {id,name,level}/null/false; hydrate,login,logout,register
+      postStore.js      # fetchPosts(paginated), search, fetchPost, votePost (optimistic),
+                        # createPost, uploadPost
+      commentStore.js   # seed(postId,comments), createComment, voteComment (optimistic)
+      tagStore.js       # seed(postId,tags), createTag, voteTag (optimistic)
+    utils/
+      api.js            # axios {baseURL:/api, withCredentials:true} + error interceptor
 ```
 
-Build stats: 771 ms, main bundle 58 kB gzip.
+Build stats: 860 ms, main bundle 73 kB gzip (stores + axios included).
 
 ### Key notes (pitfalls already hit)
+
 - `pnpm install` requires `sudo chown -R $(whoami) node_modules` first (root-owned from earlier)
 - `@swc/core` and `esbuild` build scripts are ignored by pnpm — native bins (`@swc/core-linux-x64-gnu`, `esbuild-linux-x64`) are downloaded directly as separate packages; build works fine
 - React 19 ESM means `react-vendor` manualChunk comes out empty — omit it
 - Tailwind v4: CSS-first, no `tailwind.config.js`; just `@import "tailwindcss"` in the CSS entry
 
-## Next: Chunk 7 — Zustand stores + api.js
+## Next: Chunk 8 — UI layout
 
-Create:
-- `src/utils/api.js` — thin axios instance (baseURL `/api`, `withCredentials: true`)
-- `src/stores/authStore.js` — user session (me, login, logout)
-- `src/stores/postStore.js` — posts list, single post, vote
-- `src/stores/commentStore.js` — comments for a post, vote
-- `src/stores/tagStore.js` — tags for a post, vote
+Implement real components in `src/frontend/src/`:
 
-After that: Chunk 8 (UI layout), Chunk 9 (Docker+nginx).
+- `components/Nav.jsx` — sticky top bar: logo, search input (→ `/search?q=`), login link or username
+- `components/PostCard.jsx` — image/video thumb, score, upvote/downvote buttons, tag chips, link to post page
+- `components/VoteButtons.jsx` — ±1 / 0 vote UI, uses store action passed as prop
+- `components/TagChip.jsx` — clickable tag (navigates to `/?tag=name`), vote badge
+- `components/CommentItem.jsx` — user, timestamp, content, vote buttons
+- `components/CommentForm.jsx` — textarea + submit; uses `useAuthStore` to gate
+- Pages wired:
+  - `Home.jsx` → `usePostStore.fetchPosts`, infinite scroll or load-more button, grid of `PostCard`
+  - `Post.jsx` → `usePostStore.fetchPost`, seed comment/tag stores, full-res media, `CommentSection`
+  - `Login.jsx` → form wired to `useAuthStore.login`; redirect on success
+
+Layout: full-width CSS grid (no max-width cap on the board), sticky nav 48 px tall, dark theme tokens already in index.css.
 
 ---
 
