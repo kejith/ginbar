@@ -1,6 +1,29 @@
 package api
 
-import "github.com/gofiber/fiber/v3"
+import (
+	"regexp"
+	"strconv"
+
+	dbgen "ginbar/db/gen"
+
+	"github.com/gofiber/fiber/v3"
+	"golang.org/x/crypto/bcrypt"
+)
+
+// ── Forms ─────────────────────────────────────────────────────────────────────
+
+type loginForm struct {
+	Name     string `form:"name"     json:"name"`
+	Password string `form:"password" json:"password"`
+}
+
+type registerForm struct {
+	Name     string `form:"name"     json:"name"`
+	Email    string `form:"email"    json:"email"`
+	Password string `form:"password" json:"password"`
+}
+
+// ── Handlers ──────────────────────────────────────────────────────────────────
 
 func (s *Server) Me(c fiber.Ctx) error {
 	u, err := s.sessionUser(c)
@@ -10,22 +33,106 @@ func (s *Server) Me(c fiber.Ctx) error {
 	return c.JSON(u)
 }
 
-func (s *Server) GetUser(c fiber.Ctx) error {
-	return fiber.ErrNotImplemented
+func (s *Server) GetUsers(c fiber.Ctx) error {
+	users, err := s.store.GetUsers(c.Context())
+	if err != nil {
+		return err
+	}
+	return c.JSON(fiber.Map{"data": users})
 }
 
-func (s *Server) GetUsers(c fiber.Ctx) error {
-	return fiber.ErrNotImplemented
+func (s *Server) GetUser(c fiber.Ctx) error {
+	id, err := strconv.ParseInt(c.Params("id"), 10, 32)
+	if err != nil || id == 0 {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid user id")
+	}
+	user, err := s.store.GetUser(c.Context(), int32(id))
+	if err != nil {
+		return err
+	}
+	return c.JSON(fiber.Map{"data": user})
 }
 
 func (s *Server) Login(c fiber.Ctx) error {
-	return fiber.ErrNotImplemented
+	form := new(loginForm)
+	if err := c.Bind().Body(form); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, err.Error())
+	}
+
+	user, err := s.store.GetUserByName(c.Context(), form.Name)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid credentials")
+	}
+
+	if err = bcrypt.CompareHashAndPassword([]byte(user.Password), []byte(form.Password)); err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid credentials")
+	}
+
+	sess, err := s.sessionGet(c)
+	if err != nil {
+		return err
+	}
+	sess.Set("user", SessionUser{ID: user.ID, Name: user.Name, Level: user.Level})
+	if err = sess.Save(); err != nil {
+		return err
+	}
+
+	return c.JSON(fiber.Map{"id": user.ID, "name": user.Name, "level": user.Level})
 }
 
 func (s *Server) Logout(c fiber.Ctx) error {
-	return fiber.ErrNotImplemented
+	sess, err := s.sessionGet(c)
+	if err != nil {
+		return err
+	}
+	return sess.Destroy()
 }
 
 func (s *Server) CreateUser(c fiber.Ctx) error {
-	return fiber.ErrNotImplemented
+	form := new(registerForm)
+	if err := c.Bind().Body(form); err != nil {
+		return fiber.NewError(fiber.StatusBadRequest, err.Error())
+	}
+
+	// Must not already be logged in.
+	if u, _ := s.sessionUser(c); u != nil && u.ID > 0 {
+		return fiber.NewError(fiber.StatusConflict, "already logged in")
+	}
+
+	if len(form.Name) < 4 {
+		return fiber.NewError(fiber.StatusBadRequest, "name too short (min 4 chars)")
+	}
+	if !isEmailValid(form.Email) {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid email address")
+	}
+
+	hash, err := bcrypt.GenerateFromPassword([]byte(form.Password), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+
+	_, err = s.store.CreateUser(c.Context(), dbgen.CreateUserParams{
+		Name:     form.Name,
+		Email:    form.Email,
+		Password: string(hash),
+	})
+	if err != nil {
+		return err
+	}
+
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"name": form.Name})
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+var emailRx = regexp.MustCompile(`^[a-zA-Z0-9.!#$%&'*+\/=?^_` + "`" + `{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*$`)
+
+func isEmailValid(e string) bool {
+	if len(e) < 3 || len(e) > 254 {
+		return false
+	}
+	if !emailRx.MatchString(e) {
+		return false
+	}
+	return true
 }
