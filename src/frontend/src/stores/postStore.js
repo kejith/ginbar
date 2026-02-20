@@ -1,0 +1,111 @@
+import { create } from 'zustand'
+import api from '../utils/api.js'
+
+/**
+ * Post store — wraps:
+ *   GET  /api/post/*             → { posts }
+ *   GET  /api/post/search/:q     → { posts }
+ *   GET  /api/post/:id           → { data, comments, tags }
+ *   POST /api/post/vote          → 200
+ *   POST /api/post/create        → post
+ *   POST /api/post/upload        → post (multipart)
+ */
+const usePostStore = create((set, get) => ({
+  // ── list state ────────────────────────────────────────────────────────────
+  posts: [],
+  page: 1,
+  hasMore: true,
+  listLoading: false,
+  listError: null,
+
+  // ── single post state ─────────────────────────────────────────────────────
+  current: null,       // { data, comments, tags }
+  postLoading: false,
+  postError: null,
+
+  // ── fetchPosts (paginated) ────────────────────────────────────────────────
+  fetchPosts: async ({ page = 1, limit = 50, tag, reset = false } = {}) => {
+    set({ listLoading: true, listError: null })
+    try {
+      const params = { page, limit }
+      if (tag) params.tag = tag
+      const { data } = await api.get('/post/', { params })
+      const incoming = data.posts ?? []
+      set((s) => ({
+        posts: reset ? incoming : [...s.posts, ...incoming],
+        page,
+        hasMore: incoming.length === limit,
+        listLoading: false,
+      }))
+    } catch (err) {
+      set({ listLoading: false, listError: err.message })
+    }
+  },
+
+  // ── search ────────────────────────────────────────────────────────────────
+  // Tags are space-separated; pass as a plain string — the store handles encoding.
+  search: async (query) => {
+    set({ listLoading: true, listError: null })
+    try {
+      const encoded = encodeURIComponent(query.trim()).replace(/%20/g, '%20')
+      const { data } = await api.get(`/post/search/${encoded}`)
+      set({ posts: data.posts ?? [], listLoading: false, hasMore: false })
+    } catch (err) {
+      set({ listLoading: false, listError: err.message })
+    }
+  },
+
+  // ── fetchPost (single) ────────────────────────────────────────────────────
+  fetchPost: async (id) => {
+    set({ postLoading: true, postError: null, current: null })
+    try {
+      const { data } = await api.get(`/post/${id}`)
+      set({ current: data, postLoading: false })
+    } catch (err) {
+      set({ postLoading: false, postError: err.message })
+    }
+  },
+
+  // ── vote ──────────────────────────────────────────────────────────────────
+  // voteState: 1 = up, -1 = down, 0 = remove
+  votePost: async (postId, voteState) => {
+    try {
+      await api.post('/post/vote', { post_id: postId, vote_state: voteState })
+      // Optimistically update score in the list
+      set((s) => ({
+        posts: s.posts.map((p) =>
+          p.id === postId ? { ...p, score: p.score + voteState } : p,
+        ),
+        current:
+          s.current?.data?.id === postId
+            ? { ...s.current, data: { ...s.current.data, score: s.current.data.score + voteState } }
+            : s.current,
+      }))
+    } catch (err) {
+      throw err
+    }
+  },
+
+  // ── createPost (URL-based) ────────────────────────────────────────────────
+  createPost: async (url) => {
+    const { data } = await api.post('/post/create', { URL: url })
+    set((s) => ({ posts: [data, ...s.posts] }))
+    return data
+  },
+
+  // ── uploadPost (file) ─────────────────────────────────────────────────────
+  uploadPost: async (file) => {
+    const form = new FormData()
+    form.append('file', file)
+    const { data } = await api.post('/post/upload', form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    set((s) => ({ posts: [data, ...s.posts] }))
+    return data
+  },
+
+  clearListError: () => set({ listError: null }),
+  clearPostError: () => set({ postError: null }),
+}))
+
+export default usePostStore
