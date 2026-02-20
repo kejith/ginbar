@@ -1,3 +1,17 @@
+# ── src/ new rewrite ──────────────────────────────────────────────────────────
+src/backend/ginbar
+src/backend/tmp/
+src/backend/public/
+src/backend/sessions.sqlite3
+src/backend/vendor/
+src/backend/data/
+src/backend/.env
+src/frontend/node_modules/
+src/frontend/dist/
+src/frontend/.env.local
+.env
+
+# ── submodule ref (legacy) ────────────────────────────────────────────────────
 backend/tmp/
 backend/public/
 backend/fullchain.pem

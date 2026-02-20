@@ -2,7 +2,9 @@ version: '3.8'
 
 services:
   backend:
-    build: .
+    build: 
+      context: .
+      dockerfile: Dockerfile
     ports:
       - "3000:3000"
     command: ["./ginbar"]
@@ -16,12 +18,20 @@ services:
       DB_PORT: ${DB_PORT}
       DB_NAME: ${DB_NAME}
     depends_on:
-      - mysql
+      mysql:
+        condition: service_healthy
     volumes:
       - images:/app/public/images
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "./ginbar", "-health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
   mysql:
-    image: mysql:latest
+    image: mysql:8.0
     environment:
       MYSQL_DATABASE: "ginbar"
       MYSQL_USER: "ginbar"
@@ -31,12 +41,21 @@ services:
       - "3309:3306"
     volumes:
       - mysql-data:/var/lib/mysql
+      - ./backend/mysql/schema:/docker-entrypoint-initdb.d:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-ptest-password"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
 volumes:
   mysql-data:
+    driver: local
   images:
     driver: local
     driver_opts:
       type: none
-      device: $PWD/backend/data/images
+      device: ${PWD}/backend/data/images
       o: bind
