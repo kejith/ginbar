@@ -119,8 +119,8 @@ export default function Post() {
         </h2>
         <CommentForm postId={postId} />
         {commentList.map((c) => (
-            <CommentItem key={c.id} comment={c} postId={postId} />
-          ))}
+          <CommentItem key={c.id} comment={c} postId={postId} />
+        ))}
       </section>
     </main>
   );

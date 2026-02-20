@@ -1,20 +1,12 @@
-import { Link } from "react-router-dom";
-import VoteButtons from "./VoteButtons.jsx";
-import TagChip from "./TagChip.jsx";
-import useAuthStore from "../stores/authStore.js";
-import usePostStore from "../stores/postStore.js";
-
 /**
- * PostCard — grid cell for the home feed.
+ * PostCard — thumbnail-only grid cell for the home feed.
  *
  * Props:
- *   post   post object from API (Post or GetVotedPostsRow)
- *   tags   optional tag array for this post
+ *   post        post object from API
+ *   onExpand    (id: number) => void — called when thumbnail is clicked
+ *   isExpanded  boolean — highlight ring when this post is expanded
  */
-export default function PostCard({ post, tags }) {
-  const user = useAuthStore((s) => s.user);
-  const votePost = usePostStore((s) => s.votePost);
-
+export default function PostCard({ post, onExpand, isExpanded }) {
   const isVideo =
     post.content_type?.startsWith("video/") ||
     post.filename?.match(/\.(mp4|webm|mov)$/i);
@@ -23,17 +15,22 @@ export default function PostCard({ post, tags }) {
   const thumb = post.thumbnail_filename || post.filename;
   const thumbSrc = thumb ? `/images/thumbnails/${thumb}` : null;
 
-  function handleVote(v) {
-    if (!user) return;
-    votePost(post.id, v);
+  function handleThumbClick(e) {
+    e.preventDefault();
+    if (onExpand) onExpand(post.id);
   }
 
   return (
-    <article className="group relative flex flex-col overflow-hidden rounded-lg border border-(--color-border) bg-(--color-surface)">
+    <article
+      className={`group relative overflow-hidden rounded-sm border bg-(--color-surface) transition-colors ${
+        isExpanded ? "border-(--color-accent)" : "border-(--color-border)"
+      }`}
+    >
       {/* Thumbnail */}
-      <Link
-        to={`/post/${post.id}`}
-        className="block aspect-square overflow-hidden bg-black"
+      <button
+        onClick={handleThumbClick}
+        className="block aspect-square w-full overflow-hidden bg-black cursor-pointer"
+        aria-label={`View post ${post.id}`}
       >
         {thumbSrc ? (
           isVideo ? (
@@ -63,35 +60,7 @@ export default function PostCard({ post, tags }) {
             no preview
           </div>
         )}
-      </Link>
-
-      {/* Footer */}
-      <div className="flex items-start gap-2 p-2">
-        <VoteButtons
-          score={post.score}
-          vote={post.vote ?? 0}
-          onVote={handleVote}
-          disabled={!user}
-        />
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-xs text-(--color-muted)">
-            <Link
-              to={`/user/${post.user_name}`}
-              className="hover:text-(--color-text)"
-            >
-              {post.user_name}
-            </Link>
-          </p>
-          {/* Tags */}
-          {tags && tags.length > 0 && (
-            <div className="mt-1 flex flex-wrap gap-1">
-              {tags.map((t) => (
-                <TagChip key={t.id} tag={t} />
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
+      </button>
     </article>
   );
 }

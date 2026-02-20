@@ -1,16 +1,20 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
-import PostCard from "../components/PostCard.jsx";
+import PostGrid from "../components/PostGrid.jsx";
 import usePostStore from "../stores/postStore.js";
 
 export default function Home() {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const query = searchParams.get("q") || "";
   const tag = searchParams.get("tag") || "";
+  const postParam = searchParams.get("post");
+  const initialExpanded = postParam ? Number(postParam) : null;
 
-  const { posts, page, hasMore, listLoading, listError, fetchPosts, search } =
-    usePostStore();
+  const [expandedId, setExpandedId] = useState(initialExpanded);
 
+  const { listError, fetchPosts, search } = usePostStore();
+
+  // Initial data load
   useEffect(() => {
     if (query) {
       search(query);
@@ -20,52 +24,53 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [query, tag]);
 
-  function loadMore() {
-    if (query) return;
-    fetchPosts({ page: page + 1, tag: tag || undefined });
+  function handlePostOpen(id) {
+    setExpandedId(id);
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.set("post", id);
+        return next;
+      },
+      { replace: true },
+    );
+  }
+
+  function handlePostClose() {
+    setExpandedId(null);
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev);
+        next.delete("post");
+        return next;
+      },
+      { replace: true },
+    );
   }
 
   return (
-    <main className="p-3">
+    <div className="flex flex-col" style={{ height: "calc(100vh - 3rem)" }}>
       {(query || tag) && (
-        <p className="mb-3 text-sm text-(--color-muted)">
+        <p className="px-3 pt-2 pb-1 text-sm text-(--color-muted)">
           {query ? `results for "${query}"` : `tag: ${tag}`}
         </p>
       )}
 
-      {listError && <p className="mb-3 text-sm text-red-400">{listError}</p>}
-
-      <div
-        className="grid gap-2"
-        style={{ gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))" }}
-      >
-        {posts.map((post) => (
-          <PostCard key={post.id} post={post} />
-        ))}
-      </div>
-
-      {!listLoading && posts.length === 0 && (
-        <p className="mt-12 text-center text-sm text-(--color-muted)">
-          nothing here yet
-        </p>
+      {listError && (
+        <p className="px-3 pt-2 pb-1 text-sm text-red-400">{listError}</p>
       )}
 
-      {listLoading && (
-        <p className="mt-6 text-center text-sm text-(--color-muted)">
-          loading…
-        </p>
-      )}
-
-      {!listLoading && hasMore && !query && (
-        <div className="mt-6 flex justify-center">
-          <button
-            onClick={loadMore}
-            className="rounded border border-(--color-border) px-5 py-2 text-sm text-(--color-muted) hover:text-(--color-text)"
-          >
-            load more
-          </button>
-        </div>
-      )}
-    </main>
+      <PostGrid
+        tag={tag || undefined}
+        initialExpanded={initialExpanded}
+        expandedId={expandedId}
+        setExpandedId={(id) => {
+          if (id == null) handlePostClose();
+          else handlePostOpen(id);
+        }}
+        onPostOpen={handlePostOpen}
+        onPostClose={handlePostClose}
+      />
+    </div>
   );
 }
