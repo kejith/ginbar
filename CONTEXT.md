@@ -5,7 +5,7 @@
 
 ---
 
-## Status: Chunks 0–7 complete — backend done, state layer done
+## Status: Chunks 0–8 complete — full frontend UI done, Docker+nginx remaining
 
 ### Chunk progress
 
@@ -19,15 +19,16 @@
 | 5   | ✅     | `utils/` — download (30s timeout, max 5 redirects), image (cwebp+goimagehash+smartcrop), video (ffmpeg), validation (bcrypt); CreatePost/UploadPost fully wired |
 | 6   | ✅     | Vite 6, React 19, SWC, Tailwind v4, RR v7, lazy routes, `/api` proxy                                                                                            |
 | 7   | ✅     | `utils/api.js` (axios), `stores/authStore`, `postStore`, `commentStore`, `tagStore`                                                                             |
-| 8   | ⏳     | **NEXT** — UI layout (full-width grid, sticky nav, Tailwind v4)                                                                                                |
+| 8   | ✅     | Nav, VoteButtons, TagChip, PostCard, CommentItem/Form; Home/Post/Login pages wired                                                                              |
+| 9   | ⏳     | **NEXT** — Production Docker Compose + nginx                                                                                                                    |
 | 9   | ⏳     | Production Docker Compose + nginx                                                                                                                               |
 
 ### Git state
 
 - Branch: `rewrite` (on top of `master`)
-- 8 commits: chunk 0 → chunk 7
+- 9 commits: chunk 0 → chunk 8
 - `go build ./...` → clean binary ✅
-- `pnpm build` (frontend) → clean, 73 kB gzip main bundle ✅
+- `pnpm build` (frontend) → 14 chunks, 73.9 kB gzip main, 3.9 kB CSS ✅
 
 ---
 
@@ -101,33 +102,34 @@ src/frontend/
       tagStore.js       # seed(postId,tags), createTag, voteTag (optimistic)
     utils/
       api.js            # axios {baseURL:/api, withCredentials:true} + error interceptor
+    components/
+      Nav.jsx           # sticky 48px bar: logo, search (->/?q=), user link + logout
+      VoteButtons.jsx   # reusable ▲score▼; active colours; toggle-off to 0
+      TagChip.jsx       # clickable tag (->/?q=name), inline ±vote
+      PostCard.jsx      # lazy thumb (aspect-square), video badge, vote, tags
+      CommentItem.jsx   # vote + username + timestamp + content
+      CommentForm.jsx   # auth-gated textarea, posts to commentStore
 ```
 
-Build stats: 860 ms, main bundle 73 kB gzip (stores + axios included).
+Build stats: 960 ms, 14 chunks, main bundle 73.9 kB gzip, CSS 3.9 kB gzip.
 
 ### Key notes (pitfalls already hit)
 
 - `pnpm install` requires `sudo chown -R $(whoami) node_modules` first (root-owned from earlier)
-- `@swc/core` and `esbuild` build scripts are ignored by pnpm — native bins (`@swc/core-linux-x64-gnu`, `esbuild-linux-x64`) are downloaded directly as separate packages; build works fine
+- `@swc/core` and `esbuild` build scripts are ignored by pnpm — native bins downloaded directly; build works fine
 - React 19 ESM means `react-vendor` manualChunk comes out empty — omit it
 - Tailwind v4: CSS-first, no `tailwind.config.js`; just `@import "tailwindcss"` in the CSS entry
+- Tailwind v4 CSS custom property syntax: `text-(--color-accent)` not `text-[var(--color-accent)]`
+- `pgtype.Text` name field serialises to plain string in JSON (custom MarshalJSON) — TagChip handles both shapes defensively
+- Images served from backend `./public/images/`; dev Vite proxy now covers `/images` and `/videos` in addition to `/api`
 
-## Next: Chunk 8 — UI layout
+## Next: Chunk 9 — Production Docker Compose + nginx
 
-Implement real components in `src/frontend/src/`:
-
-- `components/Nav.jsx` — sticky top bar: logo, search input (→ `/search?q=`), login link or username
-- `components/PostCard.jsx` — image/video thumb, score, upvote/downvote buttons, tag chips, link to post page
-- `components/VoteButtons.jsx` — ±1 / 0 vote UI, uses store action passed as prop
-- `components/TagChip.jsx` — clickable tag (navigates to `/?tag=name`), vote badge
-- `components/CommentItem.jsx` — user, timestamp, content, vote buttons
-- `components/CommentForm.jsx` — textarea + submit; uses `useAuthStore` to gate
-- Pages wired:
-  - `Home.jsx` → `usePostStore.fetchPosts`, infinite scroll or load-more button, grid of `PostCard`
-  - `Post.jsx` → `usePostStore.fetchPost`, seed comment/tag stores, full-res media, `CommentSection`
-  - `Login.jsx` → form wired to `useAuthStore.login`; redirect on success
-
-Layout: full-width CSS grid (no max-width cap on the board), sticky nav 48 px tall, dark theme tokens already in index.css.
+Files to create:
+- `nginx/nginx.conf` — upstream `backend:3000`; serve `/images`, `/videos` directly from shared volume; SPA fallback for `/*`
+- `Dockerfile` (multi-stage): stage 1 = `node:22-alpine` pnpm build; stage 2 = `golang:1.23-alpine` build binary; stage 3 = scratch/alpine runtime
+- `docker-compose.yml` — services: `postgres`, `backend`, `frontend` (nginx), shared `media` volume, `.env` file
+- `.env.sample`
 
 ---
 
