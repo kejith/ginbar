@@ -92,10 +92,22 @@ const usePostStore = create((set, get) => ({
     }
   },
 
+  // ── fetchPostsByUser ──────────────────────────────────────────────────────
+  fetchPostsByUser: async (username) => {
+    set({ listLoading: true, listError: null });
+    try {
+      const { data } = await api.get("/post/", { params: { username } });
+      set({ posts: data.posts ?? [], listLoading: false, hasMore: false });
+    } catch (err) {
+      set({ listLoading: false, listError: err.message });
+    }
+  },
+
   // ── createPost (URL-based) ────────────────────────────────────────────────
   createPost: async (url) => {
     const { data } = await api.post("/post/create", { URL: url });
-    set((s) => ({ posts: [data, ...s.posts] }));
+    const post = data.posts?.[0];
+    if (post) set((s) => ({ posts: [post, ...s.posts] }));
     return data;
   },
 
@@ -106,7 +118,8 @@ const usePostStore = create((set, get) => ({
     const { data } = await api.post("/post/upload", form, {
       headers: { "Content-Type": "multipart/form-data" },
     });
-    set((s) => ({ posts: [data, ...s.posts] }));
+    const post = data.posts?.[0];
+    if (post) set((s) => ({ posts: [post, ...s.posts] }));
     return data;
   },
 

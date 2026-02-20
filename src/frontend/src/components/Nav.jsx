@@ -1,12 +1,14 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import useAuthStore from "../stores/authStore.js";
+import UploadModal from "./UploadModal.jsx";
 
 export default function Nav() {
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
   const inputRef = useRef(null);
   const navigate = useNavigate();
+  const [showUpload, setShowUpload] = useState(false);
 
   function handleSearch(e) {
     e.preventDefault();
@@ -44,6 +46,13 @@ export default function Nav() {
       <div className="shrink-0 text-sm">
         {user ? (
           <div className="flex items-center gap-3">
+            <button
+              onClick={() => setShowUpload(true)}
+              className="rounded bg-(--color-accent) px-2.5 py-1 text-xs font-semibold text-white"
+              title="Upload post"
+            >
+              + post
+            </button>
             <Link
               to={`/user/${user.name}`}
               className="text-(--color-text) hover:text-(--color-accent)"
@@ -66,6 +75,8 @@ export default function Nav() {
           </Link>
         )}
       </div>
+
+      {showUpload && <UploadModal onClose={() => setShowUpload(false)} />}
     </nav>
   );
 }
