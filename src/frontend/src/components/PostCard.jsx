@@ -15,6 +15,14 @@ export default function PostCard({ post, onExpand, isExpanded }) {
   const thumb = post.thumbnail_filename || post.filename;
   const thumbSrc = thumb ? `/images/thumbnails/${thumb}` : null;
 
+  // Preload full image on hover so it's in the browser cache before expand
+  function handleMouseEnter() {
+    if (!isVideo && post.filename) {
+      const img = new window.Image();
+      img.src = `/images/${post.filename}`;
+    }
+  }
+
   function handleThumbClick(e) {
     e.preventDefault();
     if (onExpand) onExpand(post.id);
@@ -29,6 +37,7 @@ export default function PostCard({ post, onExpand, isExpanded }) {
       {/* Thumbnail */}
       <button
         onClick={handleThumbClick}
+        onMouseEnter={handleMouseEnter}
         className="block aspect-square w-full overflow-hidden bg-black cursor-pointer"
         aria-label={`View post ${post.id}`}
       >

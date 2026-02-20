@@ -54,13 +54,6 @@ export default function InlinePost({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current, postId]);
 
-  // Scroll panel into view when it opens or postId changes
-  useEffect(() => {
-    if (panelRef.current) {
-      panelRef.current.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    }
-  }, [postId]);
-
   // Keyboard navigation
   useEffect(() => {
     function onKey(e) {

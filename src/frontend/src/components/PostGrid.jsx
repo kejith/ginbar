@@ -70,23 +70,22 @@ export default function PostGrid({
     }
   }, [virtualItems, rows.length, hasMore, listLoading, page, tag, fetchPosts]);
 
-  // ── Scroll to expanded panel when it opens ────────────────────────────────
+  // ── Scroll so the clicked card row is at the top (panel appears right below nav)
   useEffect(() => {
     if (expandedId == null) return;
-    const expandedRowIdx = rows.findIndex(
-      (r) => r.type === "expanded" && r.postId === expandedId,
+    // Target the card row, not the expanded panel — this guarantees the panel
+    // starts exactly at the top edge of the scroll viewport.
+    const cardRowIdx = rows.findIndex(
+      (r) => r.type === "posts" && r.items.some((p) => p.id === expandedId),
     );
-    if (expandedRowIdx !== -1) {
-      // A small delay so the virtualizer has measured the new rows
-      const t = setTimeout(() => {
-        virtualizer.scrollToIndex(expandedRowIdx, {
-          align: "start",
-          behavior: "smooth",
-        });
-      }, 50);
-      return () => clearTimeout(t);
+    if (cardRowIdx !== -1) {
+      virtualizer.scrollToIndex(cardRowIdx, {
+        align: "start",
+        behavior: "auto",
+      });
     }
-  }, [expandedId, rows, virtualizer]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [expandedId]); // intentionally omit rows/virtualizer — only trigger on id change
 
   // ── Initial expanded post from URL (on mount) ─────────────────────────────
   useEffect(() => {
@@ -96,6 +95,20 @@ export default function PostGrid({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialExpanded]);
+
+  // ── Preload full-size image as soon as a post is expanded ──────────────────
+  useEffect(() => {
+    if (expandedId == null) return;
+    const post = posts.find((p) => p.id === expandedId);
+    if (!post || !post.filename) return;
+    const isVideo =
+      post.content_type?.startsWith("video/") ||
+      post.filename.match(/\.(mp4|webm|mov)$/i);
+    if (!isVideo) {
+      const img = new window.Image();
+      img.src = `/images/${post.filename}`;
+    }
+  }, [expandedId, posts]);
 
   // ── Handlers ──────────────────────────────────────────────────────────────
   const handleExpand = useCallback(
