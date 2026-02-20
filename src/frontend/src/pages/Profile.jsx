@@ -21,25 +21,26 @@ export default function Profile() {
       <div className="mb-6 flex items-center gap-4">
         <div
           className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full text-xl font-bold"
-          style={{ background: "var(--color-surface)", color: "var(--color-accent)" }}
+          style={{
+            background: "var(--color-surface)",
+            color: "var(--color-accent)",
+          }}
         >
           {name[0]?.toUpperCase()}
         </div>
         <div>
           <h1 className="text-xl font-bold text-(--color-text)">{name}</h1>
           {isOwn && (
-            <span className="text-xs text-(--color-muted)">level {currentUser.level}</span>
+            <span className="text-xs text-(--color-muted)">
+              level {currentUser.level}
+            </span>
           )}
         </div>
       </div>
 
       {/* Posts grid */}
-      {listLoading && (
-        <p className="text-sm text-(--color-muted)">Loading…</p>
-      )}
-      {listError && (
-        <p className="text-sm text-red-400">{listError}</p>
-      )}
+      {listLoading && <p className="text-sm text-(--color-muted)">Loading…</p>}
+      {listError && <p className="text-sm text-red-400">{listError}</p>}
       {!listLoading && !listError && posts.length === 0 && (
         <p className="text-sm text-(--color-muted)">No posts yet.</p>
       )}
@@ -62,4 +63,3 @@ export default function Profile() {
     </main>
   );
 }
-
