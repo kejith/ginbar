@@ -7,6 +7,7 @@ export default defineConfig({
 
   server: {
     port: 5173,
+    host: "0.0.0.0", // bind all interfaces so VS Code port forwarding reaches the Windows host
     proxy: {
       "/api": {
         target: "http://localhost:3000",
