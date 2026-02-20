@@ -2,7 +2,7 @@
 # Targets delegate into src/ sub-projects.
 # Run from repo root inside devcontainer.
 
-.PHONY: dev-backend dev-frontend migrate sqlc lint build
+.PHONY: dev-backend dev-frontend migrate sqlc lint build up down logs migrate-prod
 
 # ── Dev ────────────────────────────────────────────────────────────────────────
 dev-backend:
@@ -37,6 +37,18 @@ lint-frontend:
 # ── Build (prod) ──────────────────────────────────────────────────────────────
 build:
 	docker compose build
+
+up:
+	docker compose up -d
+
+down:
+	docker compose down
+
+logs:
+	docker compose logs -f
+
+migrate-prod:
+	docker compose run --rm migrate
 
 # ── Convenience ───────────────────────────────────────────────────────────────
 psql:

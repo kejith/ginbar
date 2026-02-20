@@ -1,61 +1,80 @@
-version: '3.8'
+# docker-compose.yml — ginbar production stack
+# Spin up: docker compose up -d
+# First run:  docker compose run --rm migrate
 
 services:
-  backend:
-    build: 
-      context: .
-      dockerfile: Dockerfile
-    ports:
-      - "3000:3000"
-    command: ["./ginbar"]
-    env_file:
-      - .env
-    environment:
-      DB_DRIVER: ${DB_DRIVER}
-      DB_USER: ${DB_USER}
-      DB_PASSWORD: ${DB_PASSWORD}
-      DB_HOST: mysql
-      DB_PORT: ${DB_PORT}
-      DB_NAME: ${DB_NAME}
-    depends_on:
-      mysql:
-        condition: service_healthy
-    volumes:
-      - images:/app/public/images
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "./ginbar", "-health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
 
-  mysql:
-    image: mysql:8.0
-    environment:
-      MYSQL_DATABASE: "ginbar"
-      MYSQL_USER: "ginbar"
-      MYSQL_PASSWORD: "test-password"
-      MYSQL_ROOT_PASSWORD: "test-password"
-    ports:
-      - "3309:3306"
-    volumes:
-      - mysql-data:/var/lib/mysql
-      - ./backend/mysql/schema:/docker-entrypoint-initdb.d:ro
+  # ── PostgreSQL 17 ─────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:17-alpine
     restart: unless-stopped
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB:-ginbar}
+      POSTGRES_USER:     ${POSTGRES_USER:-ginbar}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-u", "root", "-ptest-password"]
-      interval: 10s
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ginbar}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Go / Fiber backend ────────────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      target: backend
+    restart: unless-stopped
+    environment:
+      DB_URL:         postgres://${POSTGRES_USER:-ginbar}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ginbar}?sslmode=disable
+      PORT:           3000
+      SESSION_SECRET: ${SESSION_SECRET:?required}
+    volumes:
+      # Shared media volume — backend writes, nginx reads
+      - media:/app/public
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/check/me || exit 0"]
+      interval: 15s
       timeout: 5s
       retries: 5
-      start_period: 30s
+      start_period: 10s
+
+  # ── nginx: SPA + media + API proxy ───────────────────────────────────────
+  nginx:
+    build:
+      context: .
+      target: frontend
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    volumes:
+      # Read media files written by backend
+      - media:/var/www/media:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+
+  # ── goose migrations (run once: docker compose run --rm migrate) ──────────
+  migrate:
+    build:
+      context: .
+      target: backend
+    environment:
+      DB_URL: postgres://${POSTGRES_USER:-ginbar}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ginbar}?sslmode=disable
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - /app/goose -dir /app/db/migrations postgres "$$DB_URL" up
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    profiles:
+      - migrate
 
 volumes:
-  mysql-data:
-    driver: local
-  images:
-    driver: local
-    driver_opts:
-      type: none
-      device: ${PWD}/backend/data/images
-      o: bind
+  pgdata:
+  media:

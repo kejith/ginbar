@@ -1,83 +1,84 @@
-# ================================================
-# | NPM BUILDER - FRONTEND
-# ================================================
+# syntax=docker/dockerfile:1
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 1: build Vite frontend
+# ─────────────────────────────────────────────────────────────────────────────
+FROM node:22-alpine AS frontend-builder
 
-# Use Node 20 LTS (modern version)
-FROM node:20-alpine AS npm_builder
+# Enable pnpm via corepack (matches pnpm v10 used in devcontainer)
+RUN corepack enable && corepack prepare pnpm@10 --activate
 
-# Set the working directory
 WORKDIR /app
 
-# Copy package files
-COPY ./frontend/package*.json ./
+# Install deps first (layer-cached)
+COPY src/frontend/package.json src/frontend/pnpm-lock.yaml src/frontend/pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
 
-# Install dependencies
-RUN npm ci --only=production
+# Build
+COPY src/frontend/ ./
+RUN pnpm build
 
-# Copy the rest of the application code
-COPY ./frontend .
 
-# Build the React app
-RUN npm run build
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 2: build Go backend (CGO required by go-libwebp)
+# ─────────────────────────────────────────────────────────────────────────────
+FROM golang:1.23-bookworm AS backend-builder
 
-# ================================================
-# | GO BUILDER - BACKEND
-# ================================================
-
-# Use Go 1.22 (latest stable)
-FROM golang:1.22-bookworm AS go_builder
-
-# Install required system packages
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libwebp-dev \
     ffmpeg \
-    webp \
     && rm -rf /var/lib/apt/lists/*
 
-# Set the working directory
 WORKDIR /app
 
-# Copy go mod files
-COPY ./backend/go.mod ./backend/go.sum ./
+# Cache go modules
+COPY src/backend/go.mod src/backend/go.sum ./
 RUN go mod download
 
-# Copy the backend source code
-COPY ./backend .
+COPY src/backend/ ./
 
-# Build the Go project
-RUN CGO_ENABLED=1 GOOS=linux go build -o ginbar -a -ldflags '-linkmode external -extldflags "-static"' .
+# Build app binary and install goose for migrations
+RUN CGO_ENABLED=1 GOOS=linux go build -o ginbar . \
+ && go install github.com/pressly/goose/v3/cmd/goose@latest
 
-# ================================================
-# | FINAL STAGE
-# ================================================
 
-FROM debian:bookworm-slim
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 3: backend runtime image
+# ─────────────────────────────────────────────────────────────────────────────
+FROM debian:bookworm-slim AS backend
 
-# Install runtime dependencies
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libwebp7 \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# Set the working directory
 WORKDIR /app
 
-# Copy the built frontend from npm_builder
-COPY --from=npm_builder /app/build ./public
+COPY --from=backend-builder /app/ginbar ./ginbar
+COPY --from=backend-builder /go/bin/goose ./goose
+COPY --from=backend-builder /app/db/migrations ./db/migrations
 
-# Copy the built Go binary from go_builder
-COPY --from=go_builder /app/ginbar .
+# Media dirs — overridden at runtime by the shared volume mount
+RUN mkdir -p \
+    ./public/images/thumbnails \
+    ./public/videos \
+    ./public/upload \
+    ./tmp/thumbnails
 
-# Create necessary directories
-RUN mkdir -p ./tmp/thumbnails ./public/images
-
-# Expose port
 EXPOSE 3000
-
-# Health check
-HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
-    CMD ["./ginbar", "-health"] || exit 1
-
-# Run the application
 CMD ["./ginbar"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 4: nginx — SPA + /api proxy + static media from shared volume
+# ─────────────────────────────────────────────────────────────────────────────
+FROM nginx:1.27-alpine AS frontend
+
+# Bake the compiled frontend into the image
+COPY --from=frontend-builder /app/dist /var/www/html
+
+# Nginx config
+COPY nginx/nginx.conf /etc/nginx/nginx.conf
+
+EXPOSE 80
+
