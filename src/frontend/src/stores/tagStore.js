@@ -1,5 +1,5 @@
-import { create } from 'zustand'
-import api from '../utils/api.js'
+import { create } from "zustand";
+import api from "../utils/api.js";
 
 /**
  * Tag store — wraps:
@@ -20,23 +20,23 @@ const useTagStore = create((set) => ({
 
   // ── createTag ─────────────────────────────────────────────────────────────
   createTag: async (postId, name) => {
-    set({ loading: true, error: null })
+    set({ loading: true, error: null });
     try {
-      const { data } = await api.post('/tag/create', {
+      const { data } = await api.post("/tag/create", {
         post_id: postId,
         name,
-      })
+      });
       set((s) => ({
         loading: false,
         byPost: {
           ...s.byPost,
           [postId]: [...(s.byPost[postId] ?? []), data],
         },
-      }))
-      return data
+      }));
+      return data;
     } catch (err) {
-      set({ loading: false, error: err.message })
-      throw err
+      set({ loading: false, error: err.message });
+      throw err;
     }
   },
 
@@ -44,10 +44,10 @@ const useTagStore = create((set) => ({
   // voteState: 1 = up, -1 = down, 0 = remove
   voteTag: async (postId, postTagId, voteState) => {
     try {
-      await api.post('/tag/vote', {
+      await api.post("/tag/vote", {
         post_tag_id: postTagId,
         vote_state: voteState,
-      })
+      });
       // Optimistic update
       set((s) => ({
         byPost: {
@@ -56,13 +56,13 @@ const useTagStore = create((set) => ({
             t.id === postTagId ? { ...t, score: t.score + voteState } : t,
           ),
         },
-      }))
+      }));
     } catch (err) {
-      throw err
+      throw err;
     }
   },
 
   clearError: () => set({ error: null }),
-}))
+}));
 
-export default useTagStore
+export default useTagStore;

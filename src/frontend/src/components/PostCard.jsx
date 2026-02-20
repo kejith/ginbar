@@ -31,7 +31,10 @@ export default function PostCard({ post, tags }) {
   return (
     <article className="group relative flex flex-col overflow-hidden rounded-lg border border-(--color-border) bg-(--color-surface)">
       {/* Thumbnail */}
-      <Link to={`/post/${post.id}`} className="block aspect-square overflow-hidden bg-black">
+      <Link
+        to={`/post/${post.id}`}
+        className="block aspect-square overflow-hidden bg-black"
+      >
         {thumbSrc ? (
           isVideo ? (
             <div className="relative h-full w-full">

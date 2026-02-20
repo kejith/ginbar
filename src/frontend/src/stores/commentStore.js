@@ -1,5 +1,5 @@
-import { create } from 'zustand'
-import api from '../utils/api.js'
+import { create } from "zustand";
+import api from "../utils/api.js";
 
 /**
  * Comment store — wraps:
@@ -22,23 +22,23 @@ const useCommentStore = create((set) => ({
 
   // ── createComment ─────────────────────────────────────────────────────────
   createComment: async (postId, content) => {
-    set({ loading: true, error: null })
+    set({ loading: true, error: null });
     try {
-      const { data } = await api.post('/comment/create', {
+      const { data } = await api.post("/comment/create", {
         post_id: postId,
         content,
-      })
+      });
       set((s) => ({
         loading: false,
         byPost: {
           ...s.byPost,
           [postId]: [data, ...(s.byPost[postId] ?? [])],
         },
-      }))
-      return data
+      }));
+      return data;
     } catch (err) {
-      set({ loading: false, error: err.message })
-      throw err
+      set({ loading: false, error: err.message });
+      throw err;
     }
   },
 
@@ -46,10 +46,10 @@ const useCommentStore = create((set) => ({
   // voteState: 1 = up, -1 = down, 0 = remove
   voteComment: async (postId, commentId, voteState) => {
     try {
-      await api.post('/comment/vote', {
+      await api.post("/comment/vote", {
         comment_id: commentId,
         vote_state: voteState,
-      })
+      });
       // Optimistic update
       set((s) => ({
         byPost: {
@@ -58,13 +58,13 @@ const useCommentStore = create((set) => ({
             c.id === commentId ? { ...c, score: c.score + voteState } : c,
           ),
         },
-      }))
+      }));
     } catch (err) {
-      throw err
+      throw err;
     }
   },
 
   clearError: () => set({ error: null }),
-}))
+}));
 
-export default useCommentStore
+export default useCommentStore;

@@ -33,9 +33,7 @@ export default function Home() {
         </p>
       )}
 
-      {listError && (
-        <p className="mb-3 text-sm text-red-400">{listError}</p>
-      )}
+      {listError && <p className="mb-3 text-sm text-red-400">{listError}</p>}
 
       <div
         className="grid gap-2"
@@ -53,7 +51,9 @@ export default function Home() {
       )}
 
       {listLoading && (
-        <p className="mt-6 text-center text-sm text-(--color-muted)">loading…</p>
+        <p className="mt-6 text-center text-sm text-(--color-muted)">
+          loading…
+        </p>
       )}
 
       {!listLoading && hasMore && !query && (

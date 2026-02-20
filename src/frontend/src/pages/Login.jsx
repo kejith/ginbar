@@ -65,7 +65,9 @@ export default function Login() {
             type="password"
             value={form.password}
             onChange={change}
-            autoComplete={mode === "login" ? "current-password" : "new-password"}
+            autoComplete={
+              mode === "login" ? "current-password" : "new-password"
+            }
             required
             className="rounded bg-(--color-bg) px-3 py-2 text-(--color-text) ring-1 ring-(--color-border) focus:outline-none focus:ring-(--color-accent)"
           />
@@ -83,14 +85,26 @@ export default function Login() {
         {mode === "login" ? (
           <>
             no account?{" "}
-            <button onClick={() => { clearError(); setMode("register"); }} className="underline hover:text-(--color-text)">
+            <button
+              onClick={() => {
+                clearError();
+                setMode("register");
+              }}
+              className="underline hover:text-(--color-text)"
+            >
               register
             </button>
           </>
         ) : (
           <>
             have an account?{" "}
-            <button onClick={() => { clearError(); setMode("login"); }} className="underline hover:text-(--color-text)">
+            <button
+              onClick={() => {
+                clearError();
+                setMode("login");
+              }}
+              className="underline hover:text-(--color-text)"
+            >
               sign in
             </button>
           </>

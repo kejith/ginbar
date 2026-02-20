@@ -3,14 +3,13 @@
 # First run:  docker compose run --rm migrate
 
 services:
-
   # ── PostgreSQL 17 ─────────────────────────────────────────────────────────
   postgres:
     image: postgres:17-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB:       ${POSTGRES_DB:-ginbar}
-      POSTGRES_USER:     ${POSTGRES_USER:-ginbar}
+      POSTGRES_DB: ${POSTGRES_DB:-ginbar}
+      POSTGRES_USER: ${POSTGRES_USER:-ginbar}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -27,8 +26,8 @@ services:
       target: backend
     restart: unless-stopped
     environment:
-      DB_URL:         postgres://${POSTGRES_USER:-ginbar}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ginbar}?sslmode=disable
-      PORT:           3000
+      DB_URL: postgres://${POSTGRES_USER:-ginbar}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ginbar}?sslmode=disable
+      PORT: 3000
       SESSION_SECRET: ${SESSION_SECRET:?required}
     volumes:
       # Shared media volume — backend writes, nginx reads
@@ -37,7 +36,8 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/check/me || exit 0"]
+      test:
+        ["CMD-SHELL", "wget -qO- http://localhost:3000/api/check/me || exit 0"]
       interval: 15s
       timeout: 5s
       retries: 5

@@ -145,10 +145,12 @@ make down
 ```
 
 **Volume layout:**
+
 - `pgdata` — postgres data directory
 - `media` — mounted at `/app/public` in backend (writes) and `/var/www/media` in nginx (read-only)
 
 **nginx traffic flow:**
+
 ```
 client
   → :80 nginx
