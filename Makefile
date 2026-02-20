@@ -2,9 +2,14 @@
 # Targets delegate into src/ sub-projects.
 # Run from repo root inside devcontainer.
 
-.PHONY: dev-backend dev-frontend migrate sqlc lint build up down logs migrate-prod
+.PHONY: dev dev-backend dev-frontend migrate sqlc lint build up down logs migrate-prod
 
-# ── Dev ────────────────────────────────────────────────────────────────────────
+# ── Dev ───────────────────────────────────────────────────────────────────────
+
+## dev: migrate + start backend (air) + frontend (vite) — Ctrl-C stops all
+dev:
+	@bash dev.sh
+
 dev-backend:
 	cd src/backend && air
 
