@@ -5,7 +5,7 @@
 
 ---
 
-## Status: Chunks 0–8 complete — full frontend UI done, Docker+nginx remaining
+## Status: ALL CHUNKS COMPLETE — full rewrite done ✅
 
 ### Chunk progress
 
@@ -20,13 +20,13 @@
 | 6   | ✅     | Vite 6, React 19, SWC, Tailwind v4, RR v7, lazy routes, `/api` proxy                                                                                            |
 | 7   | ✅     | `utils/api.js` (axios), `stores/authStore`, `postStore`, `commentStore`, `tagStore`                                                                             |
 | 8   | ✅     | Nav, VoteButtons, TagChip, PostCard, CommentItem/Form; Home/Post/Login pages wired                                                                              |
-| 9   | ⏳     | **NEXT** — Production Docker Compose + nginx                                                                                                                    |
+| 9   | ✅     | Multi-stage Dockerfile, nginx.conf (media aliases, SPA fallback), docker-compose.yml (PG+backend+nginx+migrate)                                                 |
 | 9   | ⏳     | Production Docker Compose + nginx                                                                                                                               |
 
 ### Git state
 
 - Branch: `rewrite` (on top of `master`)
-- 9 commits: chunk 0 → chunk 8
+- 10 commits: chunk 0 → chunk 9 (+ 1 context commit)
 - `go build ./...` → clean binary ✅
 - `pnpm build` (frontend) → 14 chunks, 73.9 kB gzip main, 3.9 kB CSS ✅
 
@@ -123,13 +123,41 @@ Build stats: 960 ms, 14 chunks, main bundle 73.9 kB gzip, CSS 3.9 kB gzip.
 - `pgtype.Text` name field serialises to plain string in JSON (custom MarshalJSON) — TagChip handles both shapes defensively
 - Images served from backend `./public/images/`; dev Vite proxy now covers `/images` and `/videos` in addition to `/api`
 
-## Next: Chunk 9 — Production Docker Compose + nginx
+## Production deployment (Chunk 9 complete)
 
-Files to create:
-- `nginx/nginx.conf` — upstream `backend:3000`; serve `/images`, `/videos` directly from shared volume; SPA fallback for `/*`
-- `Dockerfile` (multi-stage): stage 1 = `node:22-alpine` pnpm build; stage 2 = `golang:1.23-alpine` build binary; stage 3 = scratch/alpine runtime
-- `docker-compose.yml` — services: `postgres`, `backend`, `frontend` (nginx), shared `media` volume, `.env` file
-- `.env.sample`
+```bash
+# 1. Copy env and fill in secrets
+cp .env.sample .env
+$EDITOR .env   # set POSTGRES_PASSWORD and SESSION_SECRET
+
+# 2. Build images
+make build
+
+# 3. Run migrations (first deploy or after schema changes)
+make migrate-prod
+
+# 4. Start everything
+make up        # docker compose up -d
+
+# Tail logs / stop
+make logs
+make down
+```
+
+**Volume layout:**
+- `pgdata` — postgres data directory
+- `media` — mounted at `/app/public` in backend (writes) and `/var/www/media` in nginx (read-only)
+
+**nginx traffic flow:**
+```
+client
+  → :80 nginx
+      /api/*       → proxy_pass backend:3000
+      /images/*    → alias /var/www/media/images/ (shared vol, no Go hop, 30d cache)
+      /videos/*    → alias /var/www/media/videos/ (shared vol, 30d cache)
+      /assets/*    → /var/www/html/assets/ (1y immutable, Vite content hashes)
+      /*           → /var/www/html/index.html (SPA fallback)
+```
 
 ---
 
@@ -144,10 +172,17 @@ PORT=3000
 ## Useful make targets
 
 ```bash
-make migrate-up          # run all pending goose migrations
-make sqlc                # regenerate db/gen/ from queries
+# Dev
 make dev-backend         # air hot-reload on :3000
 make dev-frontend        # vite dev on :5173
-make psql                # psql into postgres
-PGPASSWORD=devpassword psql -h localhost -U ginbar ginbar
+make migrate-up          # run goose migrations (dev PG)
+make sqlc                # regenerate db/gen/ from queries
+make psql                # psql into dev postgres
+
+# Production
+make build               # docker compose build
+make up                  # docker compose up -d
+make down                # docker compose down
+make logs                # docker compose logs -f
+make migrate-prod        # docker compose run --rm migrate (goose up)
 ```
