@@ -246,7 +246,6 @@ function ContentSection() {
   }
 
   async function deleteComment(id) {
-    if (!confirm(`Delete comment #${id}?`)) return;
     setBusy(`comment-${id}`);
     try {
       await api.delete(`/admin/comments/${id}`);
@@ -259,7 +258,6 @@ function ContentSection() {
   }
 
   async function deleteTag(id, name) {
-    if (!confirm(`Delete tag "${name}"?`)) return;
     setBusy(`tag-${id}`);
     try {
       await api.delete(`/admin/tags/${id}`);

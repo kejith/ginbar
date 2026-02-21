@@ -98,7 +98,7 @@ func GetScore(ctx context.Context, rdb *redis.Client, entityType string, entityI
 // exist (SET NX).  Used during cold-start preload to avoid overwriting live data.
 func SeedScore(ctx context.Context, rdb *redis.Client, entityType string, entityID int32, score int64) error {
 	idStr := strconv.FormatInt(int64(entityID), 10)
-	return rdb.SetNX(ctx, scoreKey(entityType, idStr), score, 0).Err()
+	return rdb.SetArgs(ctx, scoreKey(entityType, idStr), score, redis.SetArgs{Mode: "NX"}).Err()
 }
 
 // GetUserVote returns the current user's vote for an entity from the Redis

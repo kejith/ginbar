@@ -229,6 +229,10 @@ const usePostStore = create((set, get) => ({
     return finalEvent ?? { imported: 0, failed: 0, total: 0 };
   },
 
+  // ── removePost (admin) ───────────────────────────────────────────────────
+  removePost: (postId) =>
+    set((s) => ({ posts: s.posts.filter((p) => p.id !== postId) })),
+
   clearListError: () => set({ listError: null }),
   clearPostError: () => set({ postError: null }),
 }));

@@ -1,3 +1,9 @@
+import { useState } from "react";
+import useAuthStore from "../stores/authStore.js";
+import usePostStore from "../stores/postStore.js";
+import { isAdmin } from "../utils/roles.js";
+import api from "../utils/api.js";
+
 /**
  * PostCard — thumbnail-only grid cell for the home feed.
  *
@@ -7,6 +13,11 @@
  *   isExpanded  boolean — highlight ring when this post is expanded
  */
 export default function PostCard({ post, onExpand, isExpanded }) {
+  const user = useAuthStore((s) => s.user);
+  const removePost = usePostStore((s) => s.removePost);
+  const admin = isAdmin(user);
+  const [deleting, setDeleting] = useState(false);
+
   const isVideo =
     post.content_type?.startsWith("video/") ||
     post.filename?.match(/\.(mp4|webm|mov)$/i);
@@ -26,6 +37,19 @@ export default function PostCard({ post, onExpand, isExpanded }) {
   function handleThumbClick(e) {
     e.preventDefault();
     if (onExpand) onExpand(post.id);
+  }
+
+  async function handleDelete(e) {
+    e.stopPropagation();
+    if (deleting) return;
+    setDeleting(true);
+    try {
+      await api.delete(`/admin/posts/${post.id}`);
+      removePost(post.id);
+    } catch (err) {
+      console.error("delete post failed", err);
+      setDeleting(false);
+    }
   }
 
   return (
@@ -70,6 +94,18 @@ export default function PostCard({ post, onExpand, isExpanded }) {
           </div>
         )}
       </button>
+
+      {/* Admin delete overlay */}
+      {admin && (
+        <button
+          onClick={handleDelete}
+          disabled={deleting}
+          className="absolute top-1 right-1 z-10 rounded bg-red-700/80 px-1.5 py-0.5 text-[10px] text-white opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-600 disabled:cursor-wait"
+          aria-label="Delete post"
+        >
+          {deleting ? "…" : "×"}
+        </button>
+      )}
     </article>
   );
 }

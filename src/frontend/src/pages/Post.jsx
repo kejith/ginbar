@@ -55,7 +55,6 @@ export default function Post() {
   }
 
   async function handleDeleteComment(commentId) {
-    if (!confirm(`Delete comment #${commentId}?`)) return;
     setDeletingComment(commentId);
     try {
       await api.delete(`/admin/comments/${commentId}`);
@@ -71,7 +70,6 @@ export default function Post() {
   }
 
   async function handleDeleteTag(tagId) {
-    if (!confirm(`Delete tag #${tagId}?`)) return;
     setDeletingTag(tagId);
     try {
       await api.delete(`/admin/tags/${tagId}`);

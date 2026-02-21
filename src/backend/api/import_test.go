@@ -73,26 +73,6 @@ func newMockPr0grammServer(t *testing.T, items []pr0grammItem, atEnd bool) *http
 	return srv
 }
 
-// newMockImageServer starts a test HTTP server that responds with a tiny
-// valid JPEG payload for every GET request.
-func newMockImageServer(t *testing.T) *httptest.Server {
-	t.Helper()
-	// Minimal valid JPEG (SOI + EOI markers only).
-	minJPEG := []byte{
-		0xFF, 0xD8, // SOI
-		0xFF, 0xE0, 0x00, 0x10, // APP0 marker + length
-		0x4A, 0x46, 0x49, 0x46, 0x00, // "JFIF\0"
-		0x01, 0x01, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00,
-		0xFF, 0xD9, // EOI
-	}
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "image/jpeg")
-		_, _ = w.Write(minJPEG)
-	}))
-	t.Cleanup(srv.Close)
-	return srv
-}
-
 // redirectAPIBase temporarily replaces pr0grammAPIBase and pr0grammImgBase with
 // the given URLs and restores them when the test ends.
 func redirectAPIBase(t *testing.T, apiBase, imgBase string) {

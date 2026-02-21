@@ -112,7 +112,7 @@ func NewServer(store *db.Store, rdb *redis.Client, sessionSecret string, log *sl
 	user.Get("/:id", srv.GetUser)
 	user.Get("/*", srv.GetUsers)
 	user.Post("/login", srv.Login)
-	user.Post("/logout", srv.Logout)
+	user.Post("/logout", srv.requireAuth, srv.Logout)
 	user.Post("/create", srv.CreateUser)
 
 	// Posts
@@ -121,22 +121,22 @@ func NewServer(store *db.Store, rdb *redis.Client, sessionSecret string, log *sl
 	post.Get("/search/:query", srv.Search)
 	post.Get("/:post_id", srv.GetPost)
 	post.Get("/*", srv.GetPosts)
-	post.Post("/vote", srv.VotePost)
-	post.Post("/create", srv.CreatePost)
-	post.Post("/upload", srv.UploadPost)
+	post.Post("/vote", srv.requireAuth, srv.VotePost)
+	post.Post("/create", srv.requireAuth, srv.CreatePost)
+	post.Post("/upload", srv.requireAuth, srv.UploadPost)
 	// Import is restricted to admins.
 	post.Post("/import/pr0gramm", srv.requireAdmin, srv.ImportFromPr0gramm)
 
 	// Comments
 	comment := api.Group("/comment")
-	comment.Post("/create", srv.CreateComment)
-	comment.Post("/vote", srv.VoteComment)
+	comment.Post("/create", srv.requireAuth, srv.CreateComment)
+	comment.Post("/vote", srv.requireAuth, srv.VoteComment)
 
 	// Tags
 	tag := api.Group("/tag")
 	tag.Get("/", srv.GetTags)
-	tag.Post("/create", srv.CreatePostTag)
-	tag.Post("/vote", srv.VotePostTag)
+	tag.Post("/create", srv.requireAuth, srv.CreatePostTag)
+	tag.Post("/vote", srv.requireAuth, srv.VotePostTag)
 
 	// ── Admin routes (all require level >= LevelAdmin) ────────────────────────
 	admin := api.Group("/admin", srv.requireAdmin)

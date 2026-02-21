@@ -1,0 +1,6 @@
+{
+  "go.goroot": "/usr/local/go",
+  "gopls": {
+    "build.directoryFilters": ["-**/node_modules"]
+  }
+}

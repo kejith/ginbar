@@ -7,6 +7,8 @@ import usePostStore from "../stores/postStore.js";
 import useCommentStore from "../stores/commentStore.js";
 import useTagStore from "../stores/tagStore.js";
 import { timeAgo } from "../utils/timeAgo.js";
+import { isAdmin } from "../utils/roles.js";
+import api from "../utils/api.js";
 
 const TOP_TAGS = 5;
 
@@ -43,8 +45,12 @@ export default function InlinePost({
   const [copied, setCopied] = useState(false);
   // true once the full-resolution image has fired its onLoad event
   const [imgReady, setImgReady] = useState(false);
+  const [deletingPost, setDeletingPost] = useState(false);
+  const [deletingComment, setDeletingComment] = useState(null);
+  const [deletingTag, setDeletingTag] = useState(null);
 
   const user = useAuthStore((s) => s.user);
+  const admin = isAdmin(user);
   const { current, postLoading, postError, fetchPost, votePost } =
     usePostStore();
   const seedComments = useCommentStore((s) => s.seed);
@@ -143,6 +149,48 @@ export default function InlinePost({
 
   const uploadedAt = post?.created_at?.Time ?? post?.created_at;
   const timeStr = timeAgo(uploadedAt);
+
+  async function handleDeletePost() {
+    if (!confirm(`Delete post #${postId}? This cannot be undone.`)) return;
+    setDeletingPost(true);
+    try {
+      await api.delete(`/admin/posts/${postId}`);
+      onClose();
+    } catch (e) {
+      alert(e.message);
+      setDeletingPost(false);
+    }
+  }
+
+  async function handleDeleteComment(commentId) {
+    setDeletingComment(commentId);
+    try {
+      await api.delete(`/admin/comments/${commentId}`);
+      seedComments(
+        postId,
+        (comments ?? []).filter((c) => c.id !== commentId),
+      );
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      setDeletingComment(null);
+    }
+  }
+
+  async function handleDeleteTag(tagId) {
+    setDeletingTag(tagId);
+    try {
+      await api.delete(`/admin/tags/${tagId}`);
+      seedTags(
+        postId,
+        (tags ?? []).filter((t) => t.id !== tagId),
+      );
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      setDeletingTag(null);
+    }
+  }
 
   async function handleAddTag(e) {
     e.preventDefault();
@@ -373,6 +421,15 @@ export default function InlinePost({
                   >
                     permalink
                   </Link>
+                  {admin && (
+                    <button
+                      disabled={deletingPost}
+                      onClick={handleDeletePost}
+                      className="ml-auto rounded bg-red-700 px-2 py-0.5 text-xs text-white disabled:opacity-50"
+                    >
+                      {deletingPost ? "deleting…" : "delete post"}
+                    </button>
+                  )}
                 </div>
 
                 {/* Row 3: tags */}
@@ -422,6 +479,16 @@ export default function InlinePost({
                                 −
                               </button>
                             </span>
+                          )}
+                          {admin && (
+                            <button
+                              disabled={deletingTag === t.id}
+                              onClick={() => handleDeleteTag(t.id)}
+                              title="delete tag"
+                              className="text-[11px] font-bold leading-none text-red-500 hover:text-red-400 disabled:opacity-40"
+                            >
+                              ×
+                            </button>
                           )}
                         </span>
                       );
@@ -501,7 +568,15 @@ export default function InlinePost({
                 </h2>
                 <CommentForm postId={postId} />
                 {(comments ?? []).map((c) => (
-                  <CommentItem key={c.id} comment={c} postId={postId} />
+                  <CommentItem
+                    key={c.id}
+                    comment={c}
+                    postId={postId}
+                    onDelete={
+                      admin ? () => handleDeleteComment(c.id) : undefined
+                    }
+                    deleting={deletingComment === c.id}
+                  />
                 ))}
               </section>
             </>

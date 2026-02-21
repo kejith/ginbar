@@ -71,12 +71,6 @@ PostID   int32  `json:"post_id"`
 Image    string `json:"image"`
 }
 
-type pr0grammImportError struct {
-SourceID int64  `json:"source_id"`
-Image    string `json:"image"`
-Error    string `json:"error"`
-}
-
 // importConcurrency caps simultaneous download+process goroutines.
 // Must match the constant referenced in import_test.go.
 const importConcurrency = 16
