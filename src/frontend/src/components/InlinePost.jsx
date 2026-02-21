@@ -230,12 +230,12 @@ export default function InlinePost({
       )}
 
       {!postError && (
-        <div className="relative mx-auto max-w-[920px] pb-4 space-y-3">
+        <div className="relative mx-auto max-w-230 pb-4 space-y-3">
           {/* ── Overlay nav arrows ── */}
           <button
             onClick={onNewer}
             disabled={!canGoNewer}
-            className="absolute left-2 top-[200px] z-10 flex h-10 w-10 items-center justify-center rounded-full bg-black/50 text-white transition-opacity hover:bg-black/70 disabled:opacity-0 disabled:pointer-events-none"
+            className="absolute left-2 top-50 z-10 flex h-10 w-10 items-center justify-center rounded-full bg-black/50 text-white transition-opacity hover:bg-black/70 disabled:opacity-0 disabled:pointer-events-none"
             aria-label="Newer"
           >
             <svg
@@ -254,7 +254,7 @@ export default function InlinePost({
           <button
             onClick={onOlder}
             disabled={!canGoOlder}
-            className="absolute right-2 top-[200px] z-10 flex h-10 w-10 items-center justify-center rounded-full bg-black/50 text-white transition-opacity hover:bg-black/70 disabled:opacity-0 disabled:pointer-events-none"
+            className="absolute right-2 top-50 z-10 flex h-10 w-10 items-center justify-center rounded-full bg-black/50 text-white transition-opacity hover:bg-black/70 disabled:opacity-0 disabled:pointer-events-none"
             aria-label="Older"
           >
             <svg
