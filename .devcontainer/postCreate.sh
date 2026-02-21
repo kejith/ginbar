@@ -7,8 +7,9 @@ mkdir -p "$HOME/.local/bin"
 
 # gopls + goimports are version-specific — better installed fresh per-user.
 # sqlc, goose, air, golangci-lint are pre-baked in the image.
-go install golang.org/x/tools/cmd/goimports@latest
-go install golang.org/x/tools/gopls@latest
+# Pin to the last release that supports Go 1.24 (gopls v0.21+ requires Go 1.25).
+go install golang.org/x/tools/cmd/goimports@v0.30.0
+go install golang.org/x/tools/gopls@v0.20.0
 
 # pgcli — nicer psql
 pip3 install --user pgcli 2>/dev/null || true
