@@ -1,73 +1,48 @@
-<!-- PROJECT LOGO -->
-<div align="center">
-  <a href="https://kejith.de/">
-    <img src="https://github.com/othneildrew/Best-README-Template/raw/master/images/logo.png" alt="Logo" width="80" height="80">
-  </a>
+# Ginbar
 
-  <h3 align="center">Ginbar a custom made Imageboard with React & Redux</h3>
-</div>
+A custom-made imageboard. Go/Fiber backend, React frontend.
 
-<!-- ABOUT THE PROJECT -->
-## About The Project
-[![Screenshot](https://github.com/kejith/ginbar-frontend/blob/main/ginbar-screenshot.png?raw=true)](https://kejith.de/)
+## Stack
 
-Ginbar is a custom-made image board that combines React with a custom API written in GO. It's lightning-fast, highly scalable, and was developed for learning purposes.
+| Layer | Tech |
+|-------|------|
+| Backend | Go · Fiber v3 · sqlc · goose |
+| Frontend | React 19 · Vite · Zustand · Tailwind CSS v4 |
+| Data | PostgreSQL 17 · Redis 7 |
+| Prod | Docker Compose · nginx |
 
-Why Ginbar is a great choice:
-* 💨 Extremely fast
-* 📈 Scalable
-* 🎓 Perfect for learning
+## Development
 
-[Live Demo](https://ginbar.kejith.de/)
+Requires: Go, Node, pnpm, air, goose, PostgreSQL & Redis running locally.
 
-Test Account:
-- Username: test
-- Password: test
+```sh
+make dev          # migrate + backend (air) + frontend (vite)
+make dev-backend  # backend only
+make dev-frontend # frontend only
+```
 
-<p align="right">(<a href="#top">back to top</a>)</p>
+Default DB URL: `postgres://ginbar:devpassword@localhost:5432/ginbar`
 
-## TODOs
-- If the search is empty, display a page with Status Code 404
-- Look into FlatView for virtualisation
-- Caching
+### Database
 
-## Available Scripts
+```sh
+make migrate-up     # apply migrations
+make migrate-down   # roll back one
+make migrate-status # show migration state
+make sqlc           # regenerate query code
+make psql           # open psql shell
+```
 
-In the project directory, you can run:
+## Production
 
-### `npm start`
+Copy `.env.example` to `.env` and set the required secrets, then:
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in the browser.
+```sh
+make build        # build Docker images
+make up           # docker compose up -d
+make migrate-prod # run goose inside container (first run)
+make logs         # tail logs
+make down         # stop stack
+```
 
-The page will reload if you make edits.\
-You will also see any lint errors in the console.
-
-### `npm test`
-
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
-
-### `npm run build`
-
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
-
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
-
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
-
-### `npm run eject`
-
-**Note: this is a one-way operation. Once you `eject`, you can’t go back!**
-
-If you aren’t satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
-
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you’re on your own.
-
-You don’t have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn’t feel obligated to use this feature. However we understand that this tool wouldn’t be useful if you couldn’t customize it when you are ready for it.
-
-=======
-# ginbar-frontend
->>>>>>> c632515d53b3fec7a2966ac00c0c17c986850ce4
+Required env vars: `POSTGRES_PASSWORD`, `SESSION_SECRET`.
