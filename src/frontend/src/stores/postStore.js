@@ -69,25 +69,55 @@ const usePostStore = create((set, get) => ({
   // ── vote ──────────────────────────────────────────────────────────────────
   // voteState: 1 = up, -1 = down, 0 = remove
   votePost: async (postId, voteState) => {
+    // Capture previous state for rollback
+    const prev = get();
+    const oldVoteInList = prev.posts.find((p) => p.id === postId)?.vote ?? 0;
+    const delta = voteState - oldVoteInList;
+    const oldCurrentVote =
+      prev.current?.data?.id === postId ? (prev.current.data.vote ?? 0) : null;
+
+    // Optimistic update — instant
+    set((s) => ({
+      posts: s.posts.map((p) =>
+        p.id === postId ? { ...p, score: p.score + delta, vote: voteState } : p,
+      ),
+      current:
+        s.current?.data?.id === postId
+          ? {
+              ...s.current,
+              data: {
+                ...s.current.data,
+                score:
+                  s.current.data.score +
+                  (voteState - (s.current.data.vote ?? 0)),
+                vote: voteState,
+              },
+            }
+          : s.current,
+    }));
+
     try {
       await api.post("/post/vote", { post_id: postId, vote_state: voteState });
-      // Optimistically update score in the list
+    } catch (err) {
+      // Revert on failure
       set((s) => ({
         posts: s.posts.map((p) =>
-          p.id === postId ? { ...p, score: p.score + voteState } : p,
+          p.id === postId
+            ? { ...p, score: p.score - delta, vote: oldVoteInList }
+            : p,
         ),
         current:
-          s.current?.data?.id === postId
+          oldCurrentVote !== null
             ? {
                 ...s.current,
                 data: {
                   ...s.current.data,
-                  score: s.current.data.score + voteState,
+                  score: s.current.data.score - (voteState - oldCurrentVote),
+                  vote: oldCurrentVote,
                 },
               }
             : s.current,
       }));
-    } catch (err) {
       throw err;
     }
   },

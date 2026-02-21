@@ -43,21 +43,41 @@ const useTagStore = create((set) => ({
   // ── voteTag ───────────────────────────────────────────────────────────────
   // voteState: 1 = up, -1 = down, 0 = remove
   voteTag: async (postId, postTagId, voteState) => {
+    // Capture old tag state for rollback
+    const tags = useTagStore.getState().byPost[postId] ?? [];
+    const oldTag = tags.find((t) => t.id === postTagId);
+    const oldVote = oldTag?.vote ?? 0;
+    const delta = voteState - oldVote;
+
+    // Optimistic update — instant
+    set((s) => ({
+      byPost: {
+        ...s.byPost,
+        [postId]: (s.byPost[postId] ?? []).map((t) =>
+          t.id !== postTagId
+            ? t
+            : { ...t, score: t.score + delta, vote: voteState },
+        ),
+      },
+    }));
+
     try {
       await api.post("/tag/vote", {
         post_tag_id: postTagId,
         vote_state: voteState,
       });
-      // Optimistic update
+    } catch (err) {
+      // Revert on failure
       set((s) => ({
         byPost: {
           ...s.byPost,
           [postId]: (s.byPost[postId] ?? []).map((t) =>
-            t.id === postTagId ? { ...t, score: t.score + voteState } : t,
+            t.id !== postTagId
+              ? t
+              : { ...t, score: t.score - delta, vote: oldVote },
           ),
         },
       }));
-    } catch (err) {
       throw err;
     }
   },

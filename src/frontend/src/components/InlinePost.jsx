@@ -330,11 +330,6 @@ export default function InlinePost({
                       >
                         {name}
                       </Link>
-                      {t.score !== 0 && (
-                        <span className="font-mono tabular-nums text-[10px] text-(--color-muted)">
-                          {t.score > 0 ? `+${t.score}` : t.score}
-                        </span>
-                      )}
                       {user && (
                         <span className="ml-0.5 flex gap-0.5">
                           <button
