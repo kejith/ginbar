@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	dbgen "ginbar/db/gen"
 	"ginbar/utils"
@@ -235,4 +236,55 @@ func removeFiles(paths ...string) {
 			_ = os.Remove(p)
 		}
 	}
+}
+
+// BackfillPostDimensions reads every post that still has width=0 / height=0
+// from disk, extracts its real dimensions, and writes them back to the DB.
+// This is a one-time admin operation for content uploaded before the
+// dimension columns were added; it is safe to call multiple times.
+//
+// POST /api/admin/posts/backfill-dimensions
+func (s *Server) BackfillPostDimensions(c fiber.Ctx) error {
+	ctx := c.Context()
+
+	posts, err := s.store.GetPostsMissingDimensions(ctx)
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "query failed: "+err.Error())
+	}
+
+	var updated, skipped, failed int
+	for _, p := range posts {
+		w, h, dimErr := dimensionsForPost(p, s.dirs)
+		if dimErr != nil || w == 0 || h == 0 {
+			failed++
+			continue
+		}
+		if updateErr := s.store.UpdatePostDimensions(ctx, p.ID, int32(w), int32(h)); updateErr != nil {
+			failed++
+			continue
+		}
+		updated++
+	}
+	skipped = len(posts) - updated - failed
+
+	return c.JSON(fiber.Map{
+		"total":   len(posts),
+		"updated": updated,
+		"failed":  failed,
+		"skipped": skipped,
+	})
+}
+
+// dimensionsForPost derives (width, height) from a post's media file on disk.
+// It uses ffprobe for all file types since the stored images are WebP and
+// Go's standard image.Decode does not support WebP natively.
+func dimensionsForPost(p dbgen.Post, dirs utils.Directories) (int, int, error) {
+	isVideo := strings.HasPrefix(p.ContentType, "video/")
+	if isVideo {
+		filePath := filepath.Join(dirs.Video, p.Filename)
+		return utils.GetVideoDimensions(filePath)
+	}
+	// Images are stored as .webp — use ffprobe which handles both.
+	filePath := filepath.Join(dirs.Image, p.Filename)
+	return utils.GetVideoDimensions(filePath)
 }

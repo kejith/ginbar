@@ -214,6 +214,23 @@ export default function InlinePost({
     });
   }
 
+  // Dimension info from the list post (populated for newly uploaded content;
+  // zero for legacy rows where the columns didn't exist yet).
+  const hasKnownDimensions = listPost?.width > 0 && listPost?.height > 0;
+
+  // When dimensions are known the container gets a CSS aspect-ratio so the
+  // browser reserves the exact height on first paint and all children are
+  // absolutely positioned inside it — zero layout shift.
+  // For legacy posts (no dimensions) children flow naturally; the image
+  // determines its own height so content below may shift once, but only
+  // for the subset of posts that pre-date this feature.
+  const mediaContainerStyle = hasKnownDimensions
+    ? { aspectRatio: `${listPost.width}/${listPost.height}` }
+    : {};
+  const mediaChildCls = hasKnownDimensions
+    ? "absolute inset-0 w-full h-full object-contain"
+    : "w-full object-contain";
+
   return (
     <div
       ref={panelRef}
@@ -252,39 +269,51 @@ export default function InlinePost({
       {!postError && (
         <div className="mx-auto max-w-3xl px-3 py-4 space-y-3">
           {/* ── Media ── Always rendered so the thumbnail can show immediately
-               and the full image can be preloaded before the fetch completes. */}
-          <div className="overflow-hidden rounded-lg bg-black relative">
-            {/* Blurred thumbnail placeholder — visible until the full image is
-                 ready. Provides instant visual feedback on expand, prevents
-                 the blank-then-flash effect. */}
+               and the full image can be preloaded before the fetch completes.
+               When dimensions are known the aspect-ratio style reserves the
+               exact height on first paint (zero CLS). When unknown the
+               container grows with the content. */}
+          <div
+            className={`rounded-lg bg-black ${
+              hasKnownDimensions ? "overflow-hidden relative" : ""
+            }`}
+            style={mediaContainerStyle}
+          >
+            {/* Blurred thumbnail placeholder — visible until full image ready */}
             {!imgReady && !listIsVideo && thumbUrl && (
               <img
                 src={thumbUrl}
                 alt=""
                 aria-hidden
-                className="mx-auto w-full object-contain opacity-50 blur-sm"
+                className={`opacity-50 blur-sm ${
+                  hasKnownDimensions
+                    ? "absolute inset-0 w-full h-full object-contain"
+                    : "w-full object-contain"
+                }`}
               />
             )}
 
-            {/* Fallback spinner when there is absolutely no thumbnail to show */}
+            {/* Fallback spinner when there is no thumbnail at all */}
             {postLoading && !thumbUrl && (
-              <div className="flex h-64 items-center justify-center text-sm text-(--color-muted) animate-pulse">
+              <div
+                className={`flex items-center justify-center text-sm text-(--color-muted) animate-pulse ${
+                  hasKnownDimensions ? "absolute inset-0" : "h-48"
+                }`}
+              >
                 loading…
               </div>
             )}
 
-            {/* Full-resolution image — positioned off-flow while loading so
-                 the thumbnail determines the container height. Fades in once
-                 its onLoad fires (which may be immediate if the browser cached
-                 it from the eager-preload effect above). */}
+            {/* Full-resolution image — only opacity is toggled so layout
+                 does not shift when the image loads. */}
             {isReady && !isVideo && mediaSrc && (
               <img
                 key={mediaSrc}
                 src={mediaSrc}
                 alt=""
                 onLoad={() => setImgReady(true)}
-                className={`mx-auto w-full object-contain transition-opacity duration-300 ${
-                  imgReady ? "block opacity-100" : "absolute inset-0 opacity-0"
+                className={`transition-opacity duration-300 ${mediaChildCls} ${
+                  imgReady ? "opacity-100" : "opacity-0"
                 }`}
               />
             )}
@@ -295,13 +324,17 @@ export default function InlinePost({
                 key={mediaSrc}
                 src={mediaSrc}
                 controls
-                className="mx-auto w-full object-contain"
+                className={mediaChildCls}
               />
             )}
 
             {/* No media at all */}
             {isReady && !mediaSrc && (
-              <div className="flex h-48 items-center justify-center text-sm text-(--color-muted)">
+              <div
+                className={`flex items-center justify-center text-sm text-(--color-muted) ${
+                  hasKnownDimensions ? "absolute inset-0" : "h-48"
+                }`}
+              >
                 no media
               </div>
             )}

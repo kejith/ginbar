@@ -45,7 +45,7 @@ INSERT INTO posts (url, user_name, filename, thumbnail_filename, content_type, d
 VALUES ($1, $2, '', '', 'image', TRUE)
 RETURNING id, url, uploaded_filename, filename, thumbnail_filename, content_type,
           score, user_level, p_hash_0, p_hash_1, p_hash_2, p_hash_3,
-          user_name, created_at, deleted_at, dirty
+          user_name, created_at, deleted_at, dirty, width, height
 `
 	row := s.Pool.QueryRow(ctx, q, url, userName)
 	var p dbgen.Post
@@ -66,6 +66,8 @@ RETURNING id, url, uploaded_filename, filename, thumbnail_filename, content_type
 		&p.CreatedAt,
 		&p.DeletedAt,
 		&p.Dirty,
+		&p.Width,
+		&p.Height,
 	)
 	return p, err
 }
@@ -81,6 +83,8 @@ type FinalizePostParams struct {
 	PHash1            int64
 	PHash2            int64
 	PHash3            int64
+	Width             int32
+	Height            int32
 }
 
 // FinalizePost sets all file/hash fields on a dirty post and clears the dirty
@@ -96,8 +100,10 @@ SET filename           = $1,
     p_hash_1           = $6,
     p_hash_2           = $7,
     p_hash_3           = $8,
+    width              = $9,
+    height             = $10,
     dirty              = FALSE
-WHERE id = $9
+WHERE id = $11
 `
 	_, err := s.Pool.Exec(ctx, q,
 		arg.Filename,
@@ -108,6 +114,8 @@ WHERE id = $9
 		arg.PHash1,
 		arg.PHash2,
 		arg.PHash3,
+		arg.Width,
+		arg.Height,
 		arg.ID,
 	)
 	return err
@@ -126,7 +134,7 @@ func (s *Store) GetDirtyPosts(ctx context.Context) ([]dbgen.Post, error) {
 	const q = `
 SELECT id, url, uploaded_filename, filename, thumbnail_filename, content_type,
        score, user_level, p_hash_0, p_hash_1, p_hash_2, p_hash_3,
-       user_name, created_at, deleted_at, dirty
+       user_name, created_at, deleted_at, dirty, width, height
 FROM posts WHERE dirty = TRUE AND deleted_at IS NULL ORDER BY id
 `
 	rows, err := s.Pool.Query(ctx, q)
@@ -143,6 +151,7 @@ FROM posts WHERE dirty = TRUE AND deleted_at IS NULL ORDER BY id
 			&p.ContentType, &p.Score, &p.UserLevel,
 			&p.PHash0, &p.PHash1, &p.PHash2, &p.PHash3,
 			&p.UserName, &p.CreatedAt, &p.DeletedAt, &p.Dirty,
+			&p.Width, &p.Height,
 		); err != nil {
 			return nil, err
 		}

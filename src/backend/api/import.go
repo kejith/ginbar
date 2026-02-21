@@ -440,6 +440,8 @@ PHash0:            int64(h[0]),
 PHash1:            int64(h[1]),
 PHash2:            int64(h[2]),
 PHash3:            int64(h[3]),
+Width:             int32(res.Width),
+Height:            int32(res.Height),
 }); err != nil {
 _ = s.store.DeleteDirtyPost(ctx, postID)
 return fmt.Errorf("finalize post: %w", err)

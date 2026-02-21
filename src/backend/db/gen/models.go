@@ -41,6 +41,8 @@ type Post struct {
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	DeletedAt         pgtype.Timestamptz `json:"deleted_at"`
 	Dirty             bool               `json:"dirty"`
+	Width             int32              `json:"width"`
+	Height            int32              `json:"height"`
 }
 
 type PostTag struct {

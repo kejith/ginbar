@@ -63,9 +63,11 @@ INSERT INTO posts (
     p_hash_1,
     p_hash_2,
     p_hash_3,
-    uploaded_filename
+    uploaded_filename,
+    width,
+    height
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 RETURNING *;
 
 -- name: UpdatePostFiles :exec
