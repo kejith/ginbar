@@ -52,6 +52,9 @@ rm -rf "${FRONTEND_DIR:?}"/*
 docker cp "${FE_CONTAINER}:/app/dist/." "$FRONTEND_DIR/"
 docker rm "$FE_CONTAINER" >/dev/null
 docker rmi ginbar/fe-build:update >/dev/null
+# Ensure www-data (nginx worker) can traverse the install dir and read assets
+chmod o+x "$INSTALL_DIR"
+chmod -R o+rX "$FRONTEND_DIR"
 success "Frontend assets updated at $FRONTEND_DIR"
 
 # ── 3. Run any new migrations ────────────────────────────────────────────────

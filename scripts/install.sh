@@ -279,8 +279,12 @@ mkdir -p \
   "${MEDIA_DIR}/images/thumbnails" \
   "${MEDIA_DIR}/videos" \
   "${MEDIA_DIR}/upload"
-# Allow the Docker backend user (uid 0 in debian:slim) and nginx (www-data) to read
+# Allow the Docker backend user (uid 0 in debian:slim) and nginx (www-data) to
+# read and traverse.  o+x on the parent dir is critical — without it www-data
+# cannot stat files inside even if the files themselves are world-readable.
+chmod o+x "$INSTALL_DIR"
 chmod -R 755 "$MEDIA_DIR"
+chmod -R o+rX "$FRONTEND_DIR"
 success "Media directories ready at $MEDIA_DIR"
 
 info "Running database migrations…"
