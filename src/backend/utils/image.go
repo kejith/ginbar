@@ -22,6 +22,8 @@ type ImageProcessResult struct {
 	ThumbnailFilename string
 	UploadedFilename  string
 	PerceptionHash    *goimagehash.ExtImageHash
+	Width             int
+	Height            int
 }
 
 // ProcessImage converts inputFilePath → webp, computes perceptual hash, and
@@ -49,11 +51,14 @@ func ProcessImage(inputFilePath string, dirs Directories) (*ImageProcessResult, 
 		return nil, fmt.Errorf("thumbnail: %w", err)
 	}
 
+	bounds := (*img).Bounds()
 	return &ImageProcessResult{
 		Filename:          filepath.Base(outputFilePath),
 		ThumbnailFilename: filepath.Base(outputThumbnailFilePath),
 		UploadedFilename:  filepath.Base(inputFilePath),
 		PerceptionHash:    hash,
+		Width:             bounds.Dx(),
+		Height:            bounds.Dy(),
 	}, nil
 }
 

@@ -69,3 +69,47 @@ func (s *Store) EnsureAdminUser(ctx context.Context, password string, log *slog.
 	}
 	return nil
 }
+
+// GetPostsMissingDimensions returns all non-deleted, non-dirty posts where
+// width or height is still 0 (i.e. uploaded before the dimension columns were
+// added).
+func (s *Store) GetPostsMissingDimensions(ctx context.Context) ([]gen.Post, error) {
+	const q = `
+SELECT id, url, uploaded_filename, filename, thumbnail_filename, content_type,
+       score, user_level, p_hash_0, p_hash_1, p_hash_2, p_hash_3,
+       user_name, created_at, deleted_at, dirty, width, height
+FROM posts
+WHERE (width = 0 OR height = 0) AND deleted_at IS NULL AND dirty = FALSE
+ORDER BY id
+`
+	rows, err := s.Pool.Query(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []gen.Post
+	for rows.Next() {
+		var p gen.Post
+		if err := rows.Scan(
+			&p.ID, &p.Url, &p.UploadedFilename, &p.Filename, &p.ThumbnailFilename,
+			&p.ContentType, &p.Score, &p.UserLevel,
+			&p.PHash0, &p.PHash1, &p.PHash2, &p.PHash3,
+			&p.UserName, &p.CreatedAt, &p.DeletedAt, &p.Dirty,
+			&p.Width, &p.Height,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, p)
+	}
+	return items, rows.Err()
+}
+
+// UpdatePostDimensions sets width and height for a single post.
+func (s *Store) UpdatePostDimensions(ctx context.Context, id, width, height int32) error {
+	_, err := s.Pool.Exec(ctx,
+		`UPDATE posts SET width = $1, height = $2 WHERE id = $3`,
+		width, height, id,
+	)
+	return err
+}

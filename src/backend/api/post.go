@@ -244,16 +244,20 @@ func (s *Server) processAndInsertPostCtx(ctx context.Context, srcURL, inputFile,
 		params.Filename = res.Filename
 		params.ThumbnailFilename = res.ThumbnailFilename
 		params.UploadedFilename = res.UploadedFilename
+		params.Width = int32(res.Width)
+		params.Height = int32(res.Height)
 
 	case "video":
-		filename, thumb, err := utils.ProcessVideo(inputFile, mimeType, s.dirs)
+		vres, err := utils.ProcessVideo(inputFile, mimeType, s.dirs)
 		if err != nil {
 			return nil, fiber.NewError(fiber.StatusUnprocessableEntity, "video processing failed: "+err.Error())
 		}
 		params.ContentType = mimeType
-		params.Filename = filepath.Base(filename)
-		params.ThumbnailFilename = filepath.Base(thumb)
+		params.Filename = filepath.Base(vres.Filename)
+		params.ThumbnailFilename = filepath.Base(vres.ThumbnailFilename)
 		params.UploadedFilename = filepath.Base(inputFile)
+		params.Width = int32(vres.Width)
+		params.Height = int32(vres.Height)
 
 	default:
 		return nil, fiber.NewError(fiber.StatusUnsupportedMediaType, "unsupported file type: "+mimeType)

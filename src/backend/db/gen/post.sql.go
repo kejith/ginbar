@@ -48,10 +48,12 @@ INSERT INTO posts (
     p_hash_1,
     p_hash_2,
     p_hash_3,
-    uploaded_filename
+    uploaded_filename,
+    width,
+    height
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-RETURNING id, url, uploaded_filename, filename, thumbnail_filename, content_type, score, user_level, p_hash_0, p_hash_1, p_hash_2, p_hash_3, user_name, created_at, deleted_at, dirty
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+RETURNING id, url, uploaded_filename, filename, thumbnail_filename, content_type, score, user_level, p_hash_0, p_hash_1, p_hash_2, p_hash_3, user_name, created_at, deleted_at, dirty, width, height
 `
 
 type CreatePostParams struct {
@@ -65,6 +67,8 @@ type CreatePostParams struct {
 	PHash2            int64  `json:"p_hash_2"`
 	PHash3            int64  `json:"p_hash_3"`
 	UploadedFilename  string `json:"uploaded_filename"`
+	Width             int32  `json:"width"`
+	Height            int32  `json:"height"`
 }
 
 func (q *Queries) CreatePost(ctx context.Context, arg CreatePostParams) (Post, error) {
@@ -79,6 +83,8 @@ func (q *Queries) CreatePost(ctx context.Context, arg CreatePostParams) (Post, e
 		arg.PHash2,
 		arg.PHash3,
 		arg.UploadedFilename,
+		arg.Width,
+		arg.Height,
 	)
 	var i Post
 	err := row.Scan(
@@ -98,6 +104,8 @@ func (q *Queries) CreatePost(ctx context.Context, arg CreatePostParams) (Post, e
 		&i.CreatedAt,
 		&i.DeletedAt,
 		&i.Dirty,
+		&i.Width,
+		&i.Height,
 	)
 	return i, err
 }
@@ -114,7 +122,7 @@ func (q *Queries) DeletePost(ctx context.Context, id int32) error {
 }
 
 const getNewerPosts = `-- name: GetNewerPosts :many
-SELECT id, url, uploaded_filename, filename, thumbnail_filename, content_type, score, user_level, p_hash_0, p_hash_1, p_hash_2, p_hash_3, user_name, created_at, deleted_at, dirty
+SELECT id, url, uploaded_filename, filename, thumbnail_filename, content_type, score, user_level, p_hash_0, p_hash_1, p_hash_2, p_hash_3, user_name, created_at, deleted_at, dirty, width, height
 FROM posts
 WHERE deleted_at IS NULL AND dirty = FALSE AND id > $1 AND user_level <= $2
 ORDER BY id
@@ -153,6 +161,8 @@ func (q *Queries) GetNewerPosts(ctx context.Context, arg GetNewerPostsParams) ([
 			&i.CreatedAt,
 			&i.DeletedAt,
 			&i.Dirty,
+			&i.Width,
+			&i.Height,
 		); err != nil {
 			return nil, err
 		}
@@ -165,7 +175,7 @@ func (q *Queries) GetNewerPosts(ctx context.Context, arg GetNewerPostsParams) ([
 }
 
 const getOlderPosts = `-- name: GetOlderPosts :many
-SELECT id, url, uploaded_filename, filename, thumbnail_filename, content_type, score, user_level, p_hash_0, p_hash_1, p_hash_2, p_hash_3, user_name, created_at, deleted_at, dirty
+SELECT id, url, uploaded_filename, filename, thumbnail_filename, content_type, score, user_level, p_hash_0, p_hash_1, p_hash_2, p_hash_3, user_name, created_at, deleted_at, dirty, width, height
 FROM posts
 WHERE deleted_at IS NULL AND dirty = FALSE AND id < $1 AND user_level <= $2
 ORDER BY id DESC
@@ -204,6 +214,8 @@ func (q *Queries) GetOlderPosts(ctx context.Context, arg GetOlderPostsParams) ([
 			&i.CreatedAt,
 			&i.DeletedAt,
 			&i.Dirty,
+			&i.Width,
+			&i.Height,
 		); err != nil {
 			return nil, err
 		}
@@ -216,8 +228,8 @@ func (q *Queries) GetOlderPosts(ctx context.Context, arg GetOlderPostsParams) ([
 }
 
 const getPossibleDuplicatePosts = `-- name: GetPossibleDuplicatePosts :many
-SELECT id, url, uploaded_filename, filename, thumbnail_filename, content_type, score, user_level, p_hash_0, p_hash_1, p_hash_2, p_hash_3, user_name, created_at, deleted_at, dirty, hamming_distance FROM (
-    SELECT id, url, uploaded_filename, filename, thumbnail_filename, content_type, score, user_level, p_hash_0, p_hash_1, p_hash_2, p_hash_3, user_name, created_at, deleted_at, dirty,
+SELECT id, url, uploaded_filename, filename, thumbnail_filename, content_type, score, user_level, p_hash_0, p_hash_1, p_hash_2, p_hash_3, user_name, created_at, deleted_at, dirty, width, height, hamming_distance FROM (
+    SELECT id, url, uploaded_filename, filename, thumbnail_filename, content_type, score, user_level, p_hash_0, p_hash_1, p_hash_2, p_hash_3, user_name, created_at, deleted_at, dirty, width, height,
         (
             bit_count(($1::bigint)::bit(64) # p_hash_0::bit(64)) +
             bit_count(($2::bigint)::bit(64) # p_hash_1::bit(64)) +
@@ -255,6 +267,8 @@ type GetPossibleDuplicatePostsRow struct {
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	DeletedAt         pgtype.Timestamptz `json:"deleted_at"`
 	Dirty             bool               `json:"dirty"`
+	Width             int32              `json:"width"`
+	Height            int32              `json:"height"`
 	HammingDistance   int32              `json:"hamming_distance"`
 }
 
@@ -289,6 +303,8 @@ func (q *Queries) GetPossibleDuplicatePosts(ctx context.Context, arg GetPossible
 			&i.CreatedAt,
 			&i.DeletedAt,
 			&i.Dirty,
+			&i.Width,
+			&i.Height,
 			&i.HammingDistance,
 		); err != nil {
 			return nil, err
@@ -302,7 +318,7 @@ func (q *Queries) GetPossibleDuplicatePosts(ctx context.Context, arg GetPossible
 }
 
 const getPost = `-- name: GetPost :one
-SELECT id, url, uploaded_filename, filename, thumbnail_filename, content_type, score, user_level, p_hash_0, p_hash_1, p_hash_2, p_hash_3, user_name, created_at, deleted_at, dirty
+SELECT id, url, uploaded_filename, filename, thumbnail_filename, content_type, score, user_level, p_hash_0, p_hash_1, p_hash_2, p_hash_3, user_name, created_at, deleted_at, dirty, width, height
 FROM posts
 WHERE id = $1 AND deleted_at IS NULL AND dirty = FALSE AND user_level <= $2
 `
@@ -332,12 +348,14 @@ func (q *Queries) GetPost(ctx context.Context, arg GetPostParams) (Post, error) 
 		&i.CreatedAt,
 		&i.DeletedAt,
 		&i.Dirty,
+		&i.Width,
+		&i.Height,
 	)
 	return i, err
 }
 
 const getPostAdmin = `-- name: GetPostAdmin :one
-SELECT id, url, uploaded_filename, filename, thumbnail_filename, content_type, score, user_level, p_hash_0, p_hash_1, p_hash_2, p_hash_3, user_name, created_at, deleted_at, dirty FROM posts WHERE id = $1 AND deleted_at IS NULL
+SELECT id, url, uploaded_filename, filename, thumbnail_filename, content_type, score, user_level, p_hash_0, p_hash_1, p_hash_2, p_hash_3, user_name, created_at, deleted_at, dirty, width, height FROM posts WHERE id = $1 AND deleted_at IS NULL
 `
 
 func (q *Queries) GetPostAdmin(ctx context.Context, id int32) (Post, error) {
@@ -360,12 +378,14 @@ func (q *Queries) GetPostAdmin(ctx context.Context, id int32) (Post, error) {
 		&i.CreatedAt,
 		&i.DeletedAt,
 		&i.Dirty,
+		&i.Width,
+		&i.Height,
 	)
 	return i, err
 }
 
 const getPosts = `-- name: GetPosts :many
-SELECT id, url, uploaded_filename, filename, thumbnail_filename, content_type, score, user_level, p_hash_0, p_hash_1, p_hash_2, p_hash_3, user_name, created_at, deleted_at, dirty
+SELECT id, url, uploaded_filename, filename, thumbnail_filename, content_type, score, user_level, p_hash_0, p_hash_1, p_hash_2, p_hash_3, user_name, created_at, deleted_at, dirty, width, height
 FROM posts
 WHERE deleted_at IS NULL AND dirty = FALSE AND user_level <= $1
 ORDER BY id DESC
@@ -404,6 +424,8 @@ func (q *Queries) GetPosts(ctx context.Context, arg GetPostsParams) ([]Post, err
 			&i.CreatedAt,
 			&i.DeletedAt,
 			&i.Dirty,
+			&i.Width,
+			&i.Height,
 		); err != nil {
 			return nil, err
 		}
@@ -416,7 +438,7 @@ func (q *Queries) GetPosts(ctx context.Context, arg GetPostsParams) ([]Post, err
 }
 
 const getPostsByUser = `-- name: GetPostsByUser :many
-SELECT id, url, uploaded_filename, filename, thumbnail_filename, content_type, score, user_level, p_hash_0, p_hash_1, p_hash_2, p_hash_3, user_name, created_at, deleted_at, dirty
+SELECT id, url, uploaded_filename, filename, thumbnail_filename, content_type, score, user_level, p_hash_0, p_hash_1, p_hash_2, p_hash_3, user_name, created_at, deleted_at, dirty, width, height
 FROM posts
 WHERE user_name = $1 AND deleted_at IS NULL AND dirty = FALSE AND user_level <= $2
 ORDER BY id DESC
@@ -453,6 +475,8 @@ func (q *Queries) GetPostsByUser(ctx context.Context, arg GetPostsByUserParams) 
 			&i.CreatedAt,
 			&i.DeletedAt,
 			&i.Dirty,
+			&i.Width,
+			&i.Height,
 		); err != nil {
 			return nil, err
 		}
@@ -465,7 +489,7 @@ func (q *Queries) GetPostsByUser(ctx context.Context, arg GetPostsByUserParams) 
 }
 
 const getVotedPost = `-- name: GetVotedPost :one
-SELECT p.id, p.url, p.uploaded_filename, p.filename, p.thumbnail_filename, p.content_type, p.score, p.user_level, p.p_hash_0, p.p_hash_1, p.p_hash_2, p.p_hash_3, p.user_name, p.created_at, p.deleted_at, p.dirty, COALESCE(pv.vote, 0)::smallint AS vote
+SELECT p.id, p.url, p.uploaded_filename, p.filename, p.thumbnail_filename, p.content_type, p.score, p.user_level, p.p_hash_0, p.p_hash_1, p.p_hash_2, p.p_hash_3, p.user_name, p.created_at, p.deleted_at, p.dirty, p.width, p.height, COALESCE(pv.vote, 0)::smallint AS vote
 FROM posts p
 LEFT JOIN post_votes pv ON pv.post_id = p.id AND pv.user_id = $1
 WHERE p.deleted_at IS NULL AND p.dirty = FALSE AND p.id = $2 AND p.user_level <= $3
@@ -494,6 +518,8 @@ type GetVotedPostRow struct {
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	DeletedAt         pgtype.Timestamptz `json:"deleted_at"`
 	Dirty             bool               `json:"dirty"`
+	Width             int32              `json:"width"`
+	Height            int32              `json:"height"`
 	Vote              int16              `json:"vote"`
 }
 
@@ -517,13 +543,15 @@ func (q *Queries) GetVotedPost(ctx context.Context, arg GetVotedPostParams) (Get
 		&i.CreatedAt,
 		&i.DeletedAt,
 		&i.Dirty,
+		&i.Width,
+		&i.Height,
 		&i.Vote,
 	)
 	return i, err
 }
 
 const getVotedPosts = `-- name: GetVotedPosts :many
-SELECT p.id, p.url, p.uploaded_filename, p.filename, p.thumbnail_filename, p.content_type, p.score, p.user_level, p.p_hash_0, p.p_hash_1, p.p_hash_2, p.p_hash_3, p.user_name, p.created_at, p.deleted_at, p.dirty, COALESCE(pv.vote, 0)::smallint AS vote
+SELECT p.id, p.url, p.uploaded_filename, p.filename, p.thumbnail_filename, p.content_type, p.score, p.user_level, p.p_hash_0, p.p_hash_1, p.p_hash_2, p.p_hash_3, p.user_name, p.created_at, p.deleted_at, p.dirty, p.width, p.height, COALESCE(pv.vote, 0)::smallint AS vote
 FROM posts p
 LEFT JOIN post_votes pv ON pv.post_id = p.id AND pv.user_id = $1
 WHERE p.deleted_at IS NULL AND p.dirty = FALSE AND p.user_level <= $2
@@ -555,6 +583,8 @@ type GetVotedPostsRow struct {
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	DeletedAt         pgtype.Timestamptz `json:"deleted_at"`
 	Dirty             bool               `json:"dirty"`
+	Width             int32              `json:"width"`
+	Height            int32              `json:"height"`
 	Vote              int16              `json:"vote"`
 }
 
@@ -589,6 +619,8 @@ func (q *Queries) GetVotedPosts(ctx context.Context, arg GetVotedPostsParams) ([
 			&i.CreatedAt,
 			&i.DeletedAt,
 			&i.Dirty,
+			&i.Width,
+			&i.Height,
 			&i.Vote,
 		); err != nil {
 			return nil, err
@@ -615,7 +647,7 @@ func (q *Queries) PostURLExists(ctx context.Context, url string) (bool, error) {
 }
 
 const search = `-- name: Search :many
-SELECT DISTINCT p.id, p.url, p.uploaded_filename, p.filename, p.thumbnail_filename, p.content_type, p.score, p.user_level, p.p_hash_0, p.p_hash_1, p.p_hash_2, p.p_hash_3, p.user_name, p.created_at, p.deleted_at, p.dirty
+SELECT DISTINCT p.id, p.url, p.uploaded_filename, p.filename, p.thumbnail_filename, p.content_type, p.score, p.user_level, p.p_hash_0, p.p_hash_1, p.p_hash_2, p.p_hash_3, p.user_name, p.created_at, p.deleted_at, p.dirty, p.width, p.height
 FROM posts p
 JOIN post_tags pt ON pt.post_id = p.id
 JOIN tags t ON t.id = pt.tag_id
@@ -649,6 +681,8 @@ func (q *Queries) Search(ctx context.Context, dollar_1 []string) ([]Post, error)
 			&i.CreatedAt,
 			&i.DeletedAt,
 			&i.Dirty,
+			&i.Width,
+			&i.Height,
 		); err != nil {
 			return nil, err
 		}

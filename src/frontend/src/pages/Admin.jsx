@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import api from "../utils/api.js";
 import { roleName, LEVEL_MEMBER, LEVEL_ADMIN } from "../utils/roles.js";
 
@@ -402,6 +402,213 @@ function ContentSection() {
   );
 }
 
+// ── Maintenance: generic job runner ──────────────────────────────────────────
+
+/**
+ * JobCard — generic UI for one admin maintenance task.
+ *
+ * Props:
+ *   job.id          string  — stable key
+ *   job.label       string  — short title shown as heading
+ *   job.description string  — one-line explanation
+ *   job.run         async (onProgress) => result
+ *                   onProgress: ({ current, total, message }) => void
+ *                   Called zero or more times during execution for tasks that
+ *                   can report incremental progress. For tasks that are a
+ *                   single HTTP round-trip, simply don't call it.
+ *   job.formatResult (result) => string | ReactNode
+ *                   Converts the resolved value of run() into a human-readable
+ *                   summary shown after completion.
+ */
+function JobCard({ job }) {
+  const [state, setState] = useState("idle"); // idle | running | done | error
+  const [progress, setProgress] = useState(null); // { current, total, message }
+  const [result, setResult] = useState(null);
+  const [errorMsg, setErrorMsg] = useState(null);
+  const [finishedAt, setFinishedAt] = useState(null);
+  const abortRef = useRef(false);
+
+  function onProgress(p) {
+    if (!abortRef.current) setProgress(p);
+  }
+
+  async function handleRun() {
+    abortRef.current = false;
+    setState("running");
+    setProgress(null);
+    setResult(null);
+    setErrorMsg(null);
+    setFinishedAt(null);
+    try {
+      const r = await job.run(onProgress);
+      if (!abortRef.current) {
+        setResult(r);
+        setFinishedAt(new Date());
+        setState("done");
+      }
+    } catch (e) {
+      if (!abortRef.current) {
+        setErrorMsg(e.message ?? "Unknown error");
+        setState("error");
+      }
+    }
+  }
+
+  // Percentage helper — only shown when the job reports incremental progress
+  const pct =
+    progress?.total > 0
+      ? Math.round((progress.current / progress.total) * 100)
+      : null;
+
+  return (
+    <div className="rounded-lg border border-(--color-border) bg-(--color-surface) p-5 space-y-3">
+      {/* Header */}
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <h3 className="font-semibold text-(--color-text)">{job.label}</h3>
+          <p className="mt-0.5 text-sm text-(--color-muted)">
+            {job.description}
+          </p>
+        </div>
+
+        {/* Action button */}
+        {state !== "running" && (
+          <button
+            onClick={handleRun}
+            className="shrink-0 rounded bg-(--color-accent) px-3 py-1.5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+          >
+            {state === "done" || state === "error" ? "Run again" : "Run"}
+          </button>
+        )}
+        {state === "running" && (
+          <span className="shrink-0 flex items-center gap-2 text-sm text-(--color-muted)">
+            <svg
+              className="h-4 w-4 animate-spin text-(--color-accent)"
+              viewBox="0 0 24 24"
+              fill="none"
+            >
+              <circle
+                className="opacity-25"
+                cx="12"
+                cy="12"
+                r="10"
+                stroke="currentColor"
+                strokeWidth="4"
+              />
+              <path
+                className="opacity-75"
+                fill="currentColor"
+                d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+              />
+            </svg>
+            running…
+          </span>
+        )}
+      </div>
+
+      {/* Progress bar — only rendered when the job calls onProgress */}
+      {state === "running" && progress !== null && (
+        <div className="space-y-1">
+          {/* Bar */}
+          <div className="h-2 w-full overflow-hidden rounded-full bg-(--color-border)">
+            <div
+              className="h-full rounded-full bg-(--color-accent) transition-all duration-300"
+              style={{ width: `${pct ?? 0}%` }}
+            />
+          </div>
+          <div className="flex justify-between text-xs text-(--color-muted)">
+            <span>{progress.message ?? ""}</span>
+            <span>
+              {progress.current} / {progress.total}
+              {pct !== null ? ` (${pct}%)` : ""}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Running — no incremental progress available */}
+      {state === "running" && progress === null && (
+        <div className="h-1.5 w-full overflow-hidden rounded-full bg-(--color-border)">
+          <div className="h-full w-full rounded-full bg-(--color-accent) origin-left animate-pulse opacity-60" />
+        </div>
+      )}
+
+      {/* Result */}
+      {state === "done" && result !== null && (
+        <div className="rounded bg-(--color-bg) border border-(--color-border) px-3 py-2 text-sm text-(--color-text) space-y-1">
+          <div>{job.formatResult(result)}</div>
+          {finishedAt && (
+            <p className="text-xs text-(--color-muted)">
+              Finished at {finishedAt.toLocaleTimeString()}
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Error */}
+      {state === "error" && (
+        <p className="rounded bg-red-950 border border-red-800 px-3 py-2 text-sm text-red-400">
+          {errorMsg}
+        </p>
+      )}
+    </div>
+  );
+}
+
+// ── Job definitions ───────────────────────────────────────────────────────────
+
+// Each entry is passed directly as the `job` prop to JobCard.
+// To add a new job: define a new object following this shape and append it to
+// the array. If the task can stream progress via SSE, call onProgress inside
+// run(); if it's a single request, simply ignore onProgress.
+const MAINTENANCE_JOBS = [
+  {
+    id: "backfill-dimensions",
+    label: "Backfill post dimensions",
+    description:
+      "Reads the real width & height from every image/video file on disk for " +
+      "posts that were uploaded before dimension tracking was added. " +
+      "Safe to run multiple times — only affects posts where width = 0.",
+    run: async (_onProgress) => {
+      const r = await api.post("/admin/posts/backfill-dimensions");
+      return r.data;
+    },
+    formatResult: (r) => {
+      const remaining = (r.total ?? 0) - (r.updated ?? 0) - (r.failed ?? 0);
+      return (
+        <span>
+          Updated <strong>{r.updated}</strong> of <strong>{r.total}</strong>{" "}
+          posts.
+          {r.failed > 0 && (
+            <span className="text-red-400"> {r.failed} failed.</span>
+          )}
+          {remaining <= 0 ? (
+            <span className="text-green-400"> All posts have dimensions ✓</span>
+          ) : (
+            <span className="text-(--color-muted)">
+              {" "}
+              {remaining} remaining.
+            </span>
+          )}
+        </span>
+      );
+    },
+  },
+];
+
+function MaintenanceSection() {
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-(--color-muted)">
+        One-off administrative tasks. Each job is idempotent and safe to re-run.
+      </p>
+      {MAINTENANCE_JOBS.map((job) => (
+        <JobCard key={job.id} job={job} />
+      ))}
+    </div>
+  );
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function Admin() {
@@ -440,12 +647,19 @@ export default function Admin() {
         >
           content
         </button>
+        <button
+          className={navClass("maintenance")}
+          onClick={() => setSection("maintenance")}
+        >
+          maintenance
+        </button>
       </div>
 
       {/* Section content */}
       {section === "stats" && <StatsSection />}
       {section === "users" && <UsersSection />}
       {section === "content" && <ContentSection />}
+      {section === "maintenance" && <MaintenanceSection />}
     </main>
   );
 }
