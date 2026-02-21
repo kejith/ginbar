@@ -115,6 +115,12 @@ func NewServer(store *db.Store, rdb *redis.Client, sessionSecret string, log *sl
 	user.Post("/logout", srv.requireAuth, srv.Logout)
 	user.Post("/create", srv.CreateUser)
 
+	// Invitations
+	invite := api.Group("/invite")
+	invite.Post("/", srv.requireAuth, srv.CreateInvite)
+	invite.Get("/", srv.requireAuth, srv.ListMyInvites)
+	invite.Get("/:token", srv.ValidateInvite)
+
 	// Posts
 	post := api.Group("/post")
 	post.Get("/search/", srv.GetPosts)

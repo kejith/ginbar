@@ -1,7 +1,8 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import usePostStore from "../stores/postStore.js";
 import useAuthStore from "../stores/authStore.js";
+import useInviteStore from "../stores/inviteStore.js";
 import PostCard from "../components/PostCard.jsx";
 import PostCardSkeleton from "../components/PostCardSkeleton.jsx";
 
@@ -57,12 +58,23 @@ export default function Profile() {
   const { name } = useParams();
   const currentUser = useAuthStore((s) => s.user);
   const { posts, listLoading, listError, fetchPostsByUser } = usePostStore();
+  const {
+    invites,
+    loading: invLoading,
+    createInvite,
+    fetchInvites,
+  } = useInviteStore();
+  const [copiedToken, setCopiedToken] = useState(null);
 
   useEffect(() => {
     fetchPostsByUser(name);
   }, [name]);
 
   const isOwn = currentUser && currentUser.name === name;
+
+  useEffect(() => {
+    if (isOwn) fetchInvites();
+  }, [isOwn]);
   const profileLevel = isOwn ? currentUser.level : null;
 
   const stats = useMemo(() => {
@@ -202,6 +214,114 @@ export default function Profile() {
               ))}
         </div>
       </section>
+
+      {/* ── INVITATIONS (own profile only) ────────────────────────────────── */}
+      {isOwn && (
+        <section className="mt-10">
+          <div
+            className="mb-3 flex items-center justify-between border-b pb-2"
+            style={{ borderColor: "var(--color-border)" }}
+          >
+            <h2
+              className="text-xs font-semibold uppercase tracking-widest"
+              style={{ color: "var(--color-muted)" }}
+            >
+              Invitations
+            </h2>
+            <button
+              onClick={async () => {
+                try {
+                  const token = await createInvite();
+                  const url = `${window.location.origin}/register?invite=${token}`;
+                  await navigator.clipboard.writeText(url);
+                  setCopiedToken(token);
+                  setTimeout(() => setCopiedToken(null), 4000);
+                } catch {
+                  // ignore
+                }
+              }}
+              disabled={invLoading}
+              className="rounded bg-(--color-accent) px-3 py-1 text-xs font-semibold text-white disabled:opacity-50"
+            >
+              {invLoading ? "…" : "Generate invite link"}
+            </button>
+          </div>
+
+          {copiedToken && (
+            <div
+              className="mb-3 flex items-center justify-between gap-3 rounded border px-3 py-2 text-xs"
+              style={{
+                borderColor: "var(--color-border)",
+                background: "var(--color-surface)",
+                color: "var(--color-text)",
+              }}
+            >
+              <span className="truncate font-mono">
+                {window.location.origin}/register?invite={copiedToken}
+              </span>
+              <span
+                className="shrink-0 font-semibold"
+                style={{ color: "var(--color-accent)" }}
+              >
+                copied!
+              </span>
+            </div>
+          )}
+
+          {invites.length === 0 && !invLoading && (
+            <p className="text-sm" style={{ color: "var(--color-muted)" }}>
+              No invitations yet. Generate one to invite someone.
+            </p>
+          )}
+
+          <ul className="flex flex-col gap-1">
+            {invites.map((inv) => (
+              <li
+                key={inv.token}
+                className="flex items-center justify-between gap-4 rounded border px-3 py-2 text-xs"
+                style={{
+                  borderColor: "var(--color-border)",
+                  background: "var(--color-surface)",
+                }}
+              >
+                <span
+                  className="truncate font-mono"
+                  style={{ color: "var(--color-muted)" }}
+                >
+                  {inv.token.slice(0, 8)}…
+                </span>
+                <span
+                  className="shrink-0 font-semibold"
+                  style={{
+                    color:
+                      inv.used_by !== null && inv.used_by !== undefined
+                        ? "var(--color-muted)"
+                        : "var(--color-accent)",
+                  }}
+                >
+                  {inv.used_by !== null && inv.used_by !== undefined
+                    ? "used"
+                    : "available"}
+                </span>
+                {(inv.used_by === null || inv.used_by === undefined) && (
+                  <button
+                    onClick={async () => {
+                      const url = `${window.location.origin}/register?invite=${inv.token}`;
+                      await navigator.clipboard.writeText(url);
+                      setCopiedToken(inv.token);
+                      setTimeout(() => setCopiedToken(null), 4000);
+                    }}
+                    className="shrink-0 underline hover:opacity-80"
+                    style={{ color: "var(--color-accent)" }}
+                  >
+                    copy
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
 
       <Link
         to="/"

@@ -56,10 +56,15 @@ const useAuthStore = create((set) => ({
   },
 
   // ── register ──────────────────────────────────────────────────────────────
-  register: async (name, email, password) => {
+  register: async (name, email, password, inviteToken) => {
     set({ loading: true, error: null });
     try {
-      await api.post("/user/create", { name, email, password });
+      await api.post("/user/create", {
+        name,
+        email,
+        password,
+        invite_token: inviteToken,
+      });
       // Log in immediately after registration
       const { data } = await api.post("/user/login", { name, password });
       set({ user: data, loading: false });

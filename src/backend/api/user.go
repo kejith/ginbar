@@ -1,9 +1,11 @@
 package api
 
 import (
+	"errors"
 	"regexp"
 	"strconv"
 
+	"ginbar/db"
 	dbgen "ginbar/db/gen"
 
 	"github.com/gofiber/fiber/v3"
@@ -18,9 +20,10 @@ type loginForm struct {
 }
 
 type registerForm struct {
-	Name     string `form:"name"     json:"name"`
-	Email    string `form:"email"    json:"email"`
-	Password string `form:"password" json:"password"`
+	Name        string `form:"name"         json:"name"`
+	Email       string `form:"email"        json:"email"`
+	Password    string `form:"password"     json:"password"`
+	InviteToken string `form:"invite_token" json:"invite_token"`
 }
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
@@ -99,6 +102,21 @@ func (s *Server) CreateUser(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusConflict, "already logged in")
 	}
 
+	// Validate invite token — required for all registrations.
+	if form.InviteToken == "" {
+		return fiber.NewError(fiber.StatusForbidden, "an invitation is required to register")
+	}
+	inv, err := s.store.GetInvitation(c.Context(), form.InviteToken)
+	if err != nil {
+		if errors.Is(err, db.ErrInvitationNotFound) {
+			return fiber.NewError(fiber.StatusForbidden, "invalid invitation token")
+		}
+		return err
+	}
+	if inv.UsedBy.Valid {
+		return fiber.NewError(fiber.StatusForbidden, "invitation already used")
+	}
+
 	if len(form.Name) < 4 {
 		return fiber.NewError(fiber.StatusBadRequest, "name too short (min 4 chars)")
 	}
@@ -106,18 +124,24 @@ func (s *Server) CreateUser(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid email address")
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(form.Password), bcrypt.DefaultCost)
-	if err != nil {
-		return err
+	hash, hashErr := bcrypt.GenerateFromPassword([]byte(form.Password), bcrypt.DefaultCost)
+	if hashErr != nil {
+		return hashErr
 	}
 
-	_, err = s.store.CreateUser(c.Context(), dbgen.CreateUserParams{
+	newUser, createErr := s.store.CreateUser(c.Context(), dbgen.CreateUserParams{
 		Name:     form.Name,
 		Email:    form.Email,
 		Password: string(hash),
 	})
-	if err != nil {
-		return err
+	if createErr != nil {
+		return createErr
+	}
+
+	// Mark the invitation as consumed by the newly-created user.
+	if useErr := s.store.UseInvitation(c.Context(), form.InviteToken, newUser.ID); useErr != nil {
+		// Non-fatal: user was already created; log but don't fail the request.
+		s.log.Error("failed to mark invitation used", "token", form.InviteToken, "err", useErr)
 	}
 
 	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"name": form.Name})
