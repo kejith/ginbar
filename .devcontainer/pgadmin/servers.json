@@ -1,0 +1,13 @@
+{
+  "Servers": {
+    "1": {
+      "Name": "ginbar-dev",
+      "Group": "Servers",
+      "Host": "localhost",
+      "Port": 5432,
+      "MaintenanceDB": "ginbar",
+      "Username": "ginbar",
+      "SSLMode": "disable"
+    }
+  }
+}

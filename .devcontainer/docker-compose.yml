@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 services:
   app:
@@ -15,7 +15,7 @@ services:
       - GOMODCACHE=/home/vscode/go/pkg/mod
     depends_on:
       - postgres
-    network_mode: service:postgres   # share network so localhost:5432 just works
+    network_mode: service:postgres # share network so localhost:5432 just works
 
   postgres:
     image: postgres:17-alpine
@@ -28,6 +28,7 @@ services:
       - postgres-data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
+      - "5050:5050"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ginbar"]
       interval: 5s
@@ -37,15 +38,22 @@ services:
   pgadmin:
     image: dpage/pgadmin4:latest
     restart: unless-stopped
+    user: root
     environment:
       PGADMIN_DEFAULT_EMAIL: dev@ginbar.local
       PGADMIN_DEFAULT_PASSWORD: devpassword
       PGADMIN_CONFIG_SERVER_MODE: "False"
       PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
-    ports:
-      - "5050:80"
+      PGADMIN_LISTEN_PORT: 5050
+    # Share postgres's network namespace so localhost:5050 is reachable from
+    # the app container (which also shares that namespace via network_mode).
+    network_mode: service:postgres
     volumes:
       - pgadmin-data:/var/lib/pgadmin
+      # Pre-seed the ginbar-dev server so it appears on first open.
+      - ./pgadmin/servers.json:/pgadmin4/servers.json:ro
+      # Password file — running as root so permissions are not an issue.
+      - ./pgadmin/pgpass:/pgpass
     depends_on:
       - postgres
 
