@@ -41,6 +41,7 @@ services:
 
   # ── Go / Fiber backend ────────────────────────────────────────────────────
   backend:
+    image: ginbar-backend
     build:
       context: .
       target: backend
@@ -74,6 +75,7 @@ services:
 
   # ── goose migrations (run once: docker compose run --rm migrate) ──────────
   migrate:
+    image: ginbar-backend
     build:
       context: .
       target: backend
