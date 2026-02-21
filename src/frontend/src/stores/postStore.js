@@ -57,7 +57,12 @@ const usePostStore = create((set, get) => ({
 
   // ── fetchPost (single) ────────────────────────────────────────────────────
   fetchPost: async (id) => {
-    set({ postLoading: true, postError: null, current: null });
+    // Keep stale `current` visible while the new fetch is in-flight so the
+    // metadata panel (votes, uploader, comments) doesn't flash away during
+    // post-to-post navigation. `current` is replaced once the new response
+    // arrives; `isReady` in InlinePost guards against rendering stale data
+    // because it checks `current.data?.id === postId`.
+    set({ postLoading: true, postError: null });
     try {
       const { data } = await api.get(`/post/${id}`);
       set({ current: data, postLoading: false });

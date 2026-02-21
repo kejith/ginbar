@@ -74,25 +74,6 @@ export default function InlinePost({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [postId]);
 
-  // Eagerly preload the full image as soon as we have a filename from the list
-  // post, which arrives long before the single-post API fetch completes.
-  useEffect(() => {
-    const src = listPost?.filename;
-    if (!src) return;
-    const isVid =
-      listPost?.content_type?.startsWith("video/") ||
-      src.match(/\.(mp4|webm|mov)$/i);
-    if (isVid) return;
-    const img = new window.Image();
-    img.src = `/images/${src}`;
-    img.onload = () => setImgReady(true);
-    return () => {
-      img.onload = null;
-    };
-    // Re-run whenever the post changes so we always preload the right image
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [postId]);
-
   useEffect(() => {
     if (current && current.data?.id === postId) {
       seedComments(postId, current.comments);
@@ -142,6 +123,12 @@ export default function InlinePost({
     listPost?.filename?.match(/\.(mp4|webm|mov)$/i);
   const thumbFilename = listPost?.thumbnail_filename || listPost?.filename;
   const thumbUrl = thumbFilename ? `/images/thumbnails/${thumbFilename}` : null;
+
+  // Full-resolution URL derivable from listPost alone — available the moment
+  // the panel mounts, before the single-post API fetch completes. Null for
+  // video posts (video element still waits for isReady / mediaSrc).
+  const listMediaSrc =
+    !listIsVideo && listPost?.filename ? `/images/${listPost.filename}` : null;
 
   const sortedTags = [...(tags ?? [])].sort((a, b) => b.score - a.score);
   const visibleTags = showAllTags ? sortedTags : sortedTags.slice(0, TOP_TAGS);
@@ -279,22 +266,34 @@ export default function InlinePost({
             }`}
             style={mediaContainerStyle}
           >
-            {/* Blurred thumbnail placeholder — visible until full image ready */}
-            {!imgReady && !listIsVideo && thumbUrl && (
+            {/* Blurred thumbnail placeholder.
+                 - hasKnownDimensions: absolutely positioned, cross-fades out
+                   (opacity-50 → opacity-0 with transition) as the full-res
+                   image fades in. Both layers are inset-0 inside the
+                   aspect-ratio container — zero layout shift.
+                 - Legacy posts: in-flow, hidden via display:none once the
+                   full-res image finishes loading. */}
+            {!listIsVideo && thumbUrl && (
               <img
                 src={thumbUrl}
                 alt=""
                 aria-hidden
-                className={`opacity-50 blur-sm ${
+                className={`blur-sm transition-opacity duration-300 ${
                   hasKnownDimensions
-                    ? "absolute inset-0 w-full h-full object-contain"
-                    : "w-full object-contain"
+                    ? `absolute inset-0 w-full h-full object-contain ${
+                        imgReady
+                          ? "opacity-0 pointer-events-none"
+                          : "opacity-50"
+                      }`
+                    : `w-full object-contain ${
+                        imgReady ? "hidden" : "opacity-50"
+                      }`
                 }`}
               />
             )}
 
-            {/* Fallback spinner when there is no thumbnail at all */}
-            {postLoading && !thumbUrl && (
+            {/* Fallback spinner when there is no thumbnail and no preload URL */}
+            {postLoading && !thumbUrl && !listMediaSrc && (
               <div
                 className={`flex items-center justify-center text-sm text-(--color-muted) animate-pulse ${
                   hasKnownDimensions ? "absolute inset-0" : "h-48"
@@ -304,9 +303,26 @@ export default function InlinePost({
               </div>
             )}
 
-            {/* Full-resolution image — only opacity is toggled so layout
-                 does not shift when the image loads. */}
-            {isReady && !isVideo && mediaSrc && (
+            {/* Full-resolution image (hasKnownDimensions path).
+                 Rendered immediately from listPost — no API round-trip needed.
+                 Starts at opacity-0, fades in once onLoad fires while the
+                 thumbnail simultaneously fades out. */}
+            {hasKnownDimensions && !listIsVideo && listMediaSrc && (
+              <img
+                key={postId}
+                src={listMediaSrc}
+                alt=""
+                onLoad={() => setImgReady(true)}
+                className={`transition-opacity duration-300 ${mediaChildCls} ${
+                  imgReady ? "opacity-100" : "opacity-0"
+                }`}
+              />
+            )}
+
+            {/* Full-resolution image (legacy / no-dimensions path).
+                 Still waits for isReady so we don't disturb the in-flow
+                 layout that determines the container height. */}
+            {!hasKnownDimensions && isReady && !isVideo && mediaSrc && (
               <img
                 key={mediaSrc}
                 src={mediaSrc}
@@ -318,7 +334,7 @@ export default function InlinePost({
               />
             )}
 
-            {/* Video */}
+            {/* Video — always waits for isReady (we have no usable preload src) */}
             {isReady && isVideo && mediaSrc && (
               <video
                 key={mediaSrc}
@@ -329,7 +345,7 @@ export default function InlinePost({
             )}
 
             {/* No media at all */}
-            {isReady && !mediaSrc && (
+            {isReady && !mediaSrc && !listMediaSrc && (
               <div
                 className={`flex items-center justify-center text-sm text-(--color-muted) ${
                   hasKnownDimensions ? "absolute inset-0" : "h-48"
