@@ -1,36 +1,84 @@
-# ================================================
-# | NPM BUILDER - FRONTEND
-# ================================================
+# syntax=docker/dockerfile:1
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 1: build Vite frontend
+# ─────────────────────────────────────────────────────────────────────────────
+FROM node:22-alpine AS frontend-builder
 
-# Use an official Node runtime as a parent image
-FROM node:14 AS npm_builder
+# Enable pnpm via corepack (matches pnpm v10 used in devcontainer)
+RUN corepack enable && corepack prepare pnpm@10 --activate
 
-# Set the working directory to /app
 WORKDIR /app
-# Copy the package.json and package-lock.json file to the container
-COPY ./frontend/package*.json ./
-# Install dependencies
-RUN npm install
-# Copy the rest of the application code to the container
-COPY ./frontend .
-# Build the React app
-RUN npm run build
 
-# ================================================
-# | GO BUILDER - BACKEND
-# ================================================
+# Install deps first (layer-cached)
+COPY src/frontend/package.json src/frontend/pnpm-lock.yaml src/frontend/pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
 
-# Use an official Golang runtime as a parent image
-FROM golang:1.16
+# Build
+COPY src/frontend/ ./
+RUN pnpm build
 
-RUN apt-get update && apt-get install -y libwebp-dev  ffmpeg webp
 
-# Set the working directory to /app
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 2: build Go backend (CGO required by go-libwebp)
+# ─────────────────────────────────────────────────────────────────────────────
+FROM golang:1.23-bookworm AS backend-builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libwebp-dev \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
-# Copy the output of the React build to the Go project
-COPY --from=npm_builder /app/build ./public
-# Copy the rest of the Go application code to the container
-COPY ./backend .
-RUN mkdir -p ./tmp/thumbnails
-# Build the Go project
-RUN go build -o ginbar .
+
+# Cache go modules
+COPY src/backend/go.mod src/backend/go.sum ./
+RUN go mod download
+
+COPY src/backend/ ./
+
+# Build app binary and install goose for migrations
+RUN CGO_ENABLED=1 GOOS=linux go build -o ginbar . \
+ && go install github.com/pressly/goose/v3/cmd/goose@latest
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 3: backend runtime image
+# ─────────────────────────────────────────────────────────────────────────────
+FROM debian:bookworm-slim AS backend
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    libwebp7 \
+    ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=backend-builder /app/ginbar ./ginbar
+COPY --from=backend-builder /go/bin/goose ./goose
+COPY --from=backend-builder /app/db/migrations ./db/migrations
+
+# Media dirs — overridden at runtime by the shared volume mount
+RUN mkdir -p \
+    ./public/images/thumbnails \
+    ./public/videos \
+    ./public/upload \
+    ./tmp/thumbnails
+
+EXPOSE 3000
+CMD ["./ginbar"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 4: nginx — SPA + /api proxy + static media from shared volume
+# ─────────────────────────────────────────────────────────────────────────────
+FROM nginx:1.27-alpine AS frontend
+
+# Bake the compiled frontend into the image
+COPY --from=frontend-builder /app/dist /var/www/html
+
+# Nginx config
+COPY nginx/nginx.conf /etc/nginx/nginx.conf
+
+EXPOSE 80
+

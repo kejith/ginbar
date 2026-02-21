@@ -1,3 +1,22 @@
-backend/data
-frontend/node_modules
-frontend/build
+# devcontainer & tooling
+.devcontainer/
+.git/
+.gitmodules
+_plan/
+_ref/
+*.md
+
+# old reference submodules (not part of the new build)
+backend/
+frontend/
+
+# frontend dev artefacts
+src/frontend/node_modules/
+src/frontend/dist/
+.pnpm-store/
+
+# Go test cache
+src/backend/tmp/
+
+# env files with secrets
+.env

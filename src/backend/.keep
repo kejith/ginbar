@@ -1,0 +1,3 @@
+# ginbar backend (rewrite)
+# Go 1.23 · Fiber v3 · pgx/v5 · sqlc 2
+# — scaffold, filled in during Chunks 1–5 —

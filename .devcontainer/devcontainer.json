@@ -1,0 +1,115 @@
+{
+  "name": "Ginbar Dev",
+  "dockerComposeFile": "docker-compose.yml",
+  "service": "app",
+  "workspaceFolder": "/workspace",
+
+  // ── Devcontainer Features ───────────────────────────────────────────────────
+  // Features run after the Dockerfile build — clean, no conflicts.
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "22",
+      "nodeGypDependencies": false
+    },
+    "ghcr.io/devcontainers-contrib/features/pnpm:2": {}
+  },
+
+  // ── VS Code Extensions ──────────────────────────────────────────────────────
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        // Go
+        "golang.go",
+        "ms-vscode.makefile-tools",
+
+        // JS / TS / React
+        "dbaeumer.vscode-eslint",
+        "esbenp.prettier-vscode",
+        "biomejs.biome",
+        "ms-vscode.vscode-typescript-next",
+        "bradlc.vscode-tailwindcss",
+        "Christian-Kohler.path-intellisense",
+
+        // SQL / PostgreSQL
+        "mtxr.sqltools",
+        "mtxr.sqltools-driver-pg",
+        "cweijan.vscode-postgresql-client2",
+
+        // Docker
+        "ms-azuretools.vscode-docker",
+
+        // Quality of Life
+        "usernamehw.errorlens",
+        "eamodio.gitlens",
+        "streetsidesoftware.code-spell-checker",
+        "aaron-bond.better-comments",
+        "formulahendry.auto-rename-tag",
+        "mikestead.dotenv",
+        "tamasfe.even-better-toml",
+        "editorconfig.editorconfig",
+        "github.vscode-github-actions"
+      ],
+
+      "settings": {
+        // ── Go ──────────────────────────────────────────────────────────────
+        "go.useLanguageServer": true,
+        "go.lintTool": "golangci-lint",
+        "go.lintOnSave": "workspace",
+        "go.formatTool": "goimports",
+        "go.toolsManagement.autoUpdate": true,
+        "[go]": {
+          "editor.formatOnSave": true,
+          "editor.codeActionsOnSave": {
+            "source.organizeImports": "explicit"
+          }
+        },
+
+        // ── JS/TS ────────────────────────────────────────────────────────────
+        "editor.defaultFormatter": "esbenp.prettier-vscode",
+        "[javascript]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+        "[javascriptreact]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+        "[typescript]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+        "[typescriptreact]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+        "eslint.validate": ["javascript", "javascriptreact", "typescript", "typescriptreact"],
+
+        // ── SQL Tools ────────────────────────────────────────────────────────
+        "sqltools.connections": [
+          {
+            "name": "ginbar-dev",
+            "driver": "PostgreSQL",
+            "server": "localhost",
+            "port": 5432,
+            "database": "ginbar",
+            "username": "ginbar",
+            "password": "devpassword",
+            "previewLimit": 50
+          }
+        ],
+
+        // ── Editor ───────────────────────────────────────────────────────────
+        "editor.formatOnSave": true,
+        "editor.rulers": [100],
+        "editor.tabSize": 2,
+        "files.trimTrailingWhitespace": true,
+        "files.insertFinalNewline": true
+      }
+    }
+  },
+
+  // ── Port Forwarding ─────────────────────────────────────────────────────────
+  "forwardPorts": [3000, 5173, 5432, 5050],
+  "portsAttributes": {
+    "3000": { "label": "Backend API", "onAutoForward": "notify" },
+    "5173": { "label": "Frontend (Vite)", "onAutoForward": "openBrowser" },
+    "5432": { "label": "PostgreSQL", "onAutoForward": "silent" },
+    "5050": { "label": "pgAdmin", "onAutoForward": "notify" }
+  },
+
+  // ── Shell / User ─────────────────────────────────────────────────────────────
+  "remoteUser": "vscode",
+  "overrideCommand": false,
+
+  // ── Lifecycle ───────────────────────────────────────────────────────────────
+  "postCreateCommand": "bash .devcontainer/postCreate.sh",
+  "postStartCommand": "bash .devcontainer/postStart.sh"
+}
