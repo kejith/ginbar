@@ -153,6 +153,38 @@ const usePostStore = create((set, get) => ({
     return data;
   },
 
+  // ── importFromPr0gramm ────────────────────────────────────────────────────
+  // Walks pr0gramm pages one-by-one, calling onProgress after each page.
+  //   params   = { tags: string, flags: number, maxPages: number }
+  //   onProgress({ page, totalRead, imported, skipped, done: bool })
+  importFromPr0gramm: async ({ tags, flags = 1, maxPages = 5 }, onProgress) => {
+    let older = 0;
+    let totalRead = 0;
+    let imported = 0;
+    let skipped = 0;
+
+    for (let page = 0; page < maxPages; page++) {
+      const { data } = await api.post("/post/import/pr0gramm", {
+        tags,
+        flags,
+        older,
+      });
+
+      totalRead += data.read ?? 0;
+      imported += data.counts?.imported ?? 0;
+      skipped += data.counts?.skipped ?? 0;
+      older = data.next_older ?? 0;
+
+      const done =
+        data.at_end || page + 1 >= maxPages || (data.read ?? 0) === 0;
+      onProgress?.({ page: page + 1, totalRead, imported, skipped, done });
+
+      if (done) break;
+    }
+
+    return { totalRead, imported, skipped };
+  },
+
   clearListError: () => set({ listError: null }),
   clearPostError: () => set({ postError: null }),
 }));

@@ -14,12 +14,12 @@ import (
 	"ginbar/utils"
 
 	"github.com/gofiber/fiber/v3"
-	"github.com/redis/go-redis/v9"
 	"github.com/gofiber/fiber/v3/middleware/cors"
 	"github.com/gofiber/fiber/v3/middleware/recover"
 	"github.com/gofiber/fiber/v3/middleware/session"
 	"github.com/gofiber/fiber/v3/middleware/static"
 	redisstore "github.com/gofiber/storage/redis/v2"
+	"github.com/redis/go-redis/v9"
 )
 
 // SessionUser is the shape stored in every session — keep stable across
@@ -124,6 +124,7 @@ func NewServer(store *db.Store, rdb *redis.Client, sessionSecret string, log *sl
 	post.Post("/vote", srv.VotePost)
 	post.Post("/create", srv.CreatePost)
 	post.Post("/upload", srv.UploadPost)
+	post.Post("/import/pr0gramm", srv.ImportFromPr0gramm)
 
 	// Comments
 	comment := api.Group("/comment")

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"mime"
 	"os"
 	"path/filepath"
@@ -201,6 +202,13 @@ func (s *Server) UploadPost(c fiber.Ctx) error {
 // It detects the content type, runs the image/video pipeline, deduplicates,
 // and inserts a post row.
 func (s *Server) processAndInsertPost(c fiber.Ctx, srcURL, inputFile, userName string) (*dbgen.Post, error) {
+	return s.processAndInsertPostCtx(c.Context(), srcURL, inputFile, userName)
+}
+
+// processAndInsertPostCtx is the context-aware core of processAndInsertPost.
+// It can be called from any goroutine without a live fiber.Ctx, making it
+// suitable for batch-import workflows.
+func (s *Server) processAndInsertPostCtx(ctx context.Context, srcURL, inputFile, userName string) (*dbgen.Post, error) {
 	mimeType := mime.TypeByExtension(filepath.Ext(inputFile))
 	fileType := strings.SplitN(mimeType, "/", 2)[0]
 
@@ -218,7 +226,7 @@ func (s *Server) processAndInsertPost(c fiber.Ctx, srcURL, inputFile, userName s
 
 		// perceptual-hash duplicate check
 		h := res.PerceptionHash.GetHash()
-		dups, _ := s.store.GetPossibleDuplicatePosts(c.Context(), dbgen.GetPossibleDuplicatePostsParams{
+		dups, _ := s.store.GetPossibleDuplicatePosts(ctx, dbgen.GetPossibleDuplicatePostsParams{
 			Column1: int64(h[0]),
 			Column2: int64(h[1]),
 			Column3: int64(h[2]),
@@ -251,7 +259,7 @@ func (s *Server) processAndInsertPost(c fiber.Ctx, srcURL, inputFile, userName s
 		return nil, fiber.NewError(fiber.StatusUnsupportedMediaType, "unsupported file type: "+mimeType)
 	}
 
-	post, err := s.store.CreatePost(c.Context(), params)
+	post, err := s.store.CreatePost(ctx, params)
 	if err != nil {
 		return nil, err
 	}
