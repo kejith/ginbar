@@ -154,70 +154,9 @@ export default function Profile() {
         </div>
       </div>
 
-      {/* ── POSTS PREVIEW ─────────────────────────────────────────────────── */}
-      <section>
-        <div
-          className="mb-3 flex items-center justify-between border-b pb-2"
-          style={{ borderColor: "var(--color-border)" }}
-        >
-          <h2
-            className="text-xs font-semibold uppercase tracking-widest"
-            style={{ color: "var(--color-muted)" }}
-          >
-            Latest Posts
-          </h2>
-          {!listLoading && posts.length > 0 && (
-            <Link
-              to={`/user/${name}/posts`}
-              className="text-xs hover:opacity-80"
-              style={{ color: "var(--color-accent)" }}
-            >
-              Browse all ↗
-            </Link>
-          )}
-        </div>
-
-        {listError && (
-          <p className="mb-4 rounded border border-red-800 bg-red-950/40 px-4 py-3 text-sm text-red-400">
-            {listError}
-          </p>
-        )}
-
-        {!listLoading && !listError && posts.length === 0 && (
-          <div className="flex flex-col items-center gap-3 py-20 text-center">
-            <span className="text-5xl opacity-20">📭</span>
-            <p className="text-sm" style={{ color: "var(--color-muted)" }}>
-              {isOwn
-                ? "You haven't posted anything yet."
-                : `${name} hasn't posted anything yet.`}
-            </p>
-          </div>
-        )}
-
-        <div
-          className="grid gap-2"
-          style={{
-            gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
-          }}
-        >
-          {listLoading
-            ? skeletons.map((_, i) => <PostCardSkeleton key={i} />)
-            : visiblePosts.map((post) => (
-                <PostCard
-                  key={post.id}
-                  post={post}
-                  onExpand={(id) =>
-                    window.location.assign(`/user/${name}/posts/${id}`)
-                  }
-                  isExpanded={false}
-                />
-              ))}
-        </div>
-      </section>
-
       {/* ── INVITATIONS (own profile only) ────────────────────────────────── */}
       {isOwn && (
-        <section className="mt-10">
+        <section className="mb-10">
           <div
             className="mb-3 flex items-center justify-between border-b pb-2"
             style={{ borderColor: "var(--color-border)" }}
@@ -322,6 +261,67 @@ export default function Profile() {
           </ul>
         </section>
       )}
+
+      {/* ── POSTS PREVIEW ─────────────────────────────────────────────────── */}
+      <section>
+        <div
+          className="mb-3 flex items-center justify-between border-b pb-2"
+          style={{ borderColor: "var(--color-border)" }}
+        >
+          <h2
+            className="text-xs font-semibold uppercase tracking-widest"
+            style={{ color: "var(--color-muted)" }}
+          >
+            Latest Posts
+          </h2>
+          {!listLoading && posts.length > 0 && (
+            <Link
+              to={`/user/${name}/posts`}
+              className="text-xs hover:opacity-80"
+              style={{ color: "var(--color-accent)" }}
+            >
+              Browse all ↗
+            </Link>
+          )}
+        </div>
+
+        {listError && (
+          <p className="mb-4 rounded border border-red-800 bg-red-950/40 px-4 py-3 text-sm text-red-400">
+            {listError}
+          </p>
+        )}
+
+        {!listLoading && !listError && posts.length === 0 && (
+          <div className="flex flex-col items-center gap-3 py-20 text-center">
+            <span className="text-5xl opacity-20">📭</span>
+            <p className="text-sm" style={{ color: "var(--color-muted)" }}>
+              {isOwn
+                ? "You haven't posted anything yet."
+                : `${name} hasn't posted anything yet.`}
+            </p>
+          </div>
+        )}
+
+        <div
+          className="grid gap-2"
+          style={{
+            gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))",
+          }}
+        >
+          {listLoading
+            ? skeletons.map((_, i) => <PostCardSkeleton key={i} />)
+            : visiblePosts.map((post) => (
+                <PostCard
+                  key={post.id}
+                  post={post}
+                  onExpand={(id) =>
+                    window.location.assign(`/user/${name}/posts/${id}`)
+                  }
+                  isExpanded={false}
+                />
+              ))}
+        </div>
+      </section>
 
       <Link
         to="/"
