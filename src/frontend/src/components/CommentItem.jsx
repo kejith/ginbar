@@ -38,7 +38,7 @@ export default function CommentItem({ comment, postId, onDelete, deleting }) {
           </span>{" "}
           · {ts}
         </p>
-        <p className="text-sm break-words whitespace-pre-wrap text-(--color-text)">
+        <p className="text-sm wrap-break-word whitespace-pre-wrap text-(--color-text)">
           {comment.content}
         </p>
       </div>
