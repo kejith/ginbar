@@ -145,7 +145,7 @@ export default function UploadModal({ onClose }) {
         : 0;
 
   return createPortal(
-    <div className="fixed inset-0 z-[100] overflow-y-auto bg-black/60 backdrop-blur-sm">
+    <div className="fixed inset-0 z-100 overflow-y-auto bg-black/60 backdrop-blur-sm">
       <div
         className="flex min-h-full items-center justify-center p-4"
         onClick={handleBackdrop}
