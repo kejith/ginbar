@@ -13,3 +13,8 @@ src/frontend/.env.local
 
 # ── pnpm ──────────────────────────────────────────────────────────────────────
 .pnpm-store/
+
+# ── TLS / Cloudflare Origin Certificate (never commit private keys) ───────────
+nginx/certs/*.crt
+nginx/certs/*.key
+nginx/certs/*.pem

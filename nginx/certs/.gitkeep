@@ -1,0 +1,11 @@
+# Place your Cloudflare Origin Certificate files here (DO NOT COMMIT):
+
+# origin.crt — the certificate issued by Cloudflare (Origin Server tab)
+
+# origin.key — the corresponding private key
+
+#
+
+# Both files are excluded from version control (.gitignore).
+
+# Generate them at: Cloudflare Dashboard → SSL/TLS → Origin Server → Create Certificate

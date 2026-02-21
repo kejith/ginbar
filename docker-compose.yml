@@ -63,10 +63,13 @@ services:
       target: frontend
     restart: unless-stopped
     ports:
-      - "${HTTP_PORT:-80}:80"
+      - "80:80"
+      - "443:443"
     volumes:
       # Read media files written by backend
       - media:/var/www/media:ro
+      # Cloudflare Origin Certificate (place origin.crt + origin.key here)
+      - ./nginx/certs:/etc/nginx/certs:ro
     depends_on:
       backend:
         condition: service_healthy
