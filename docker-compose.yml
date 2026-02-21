@@ -63,13 +63,11 @@ services:
       target: frontend
     restart: unless-stopped
     ports:
-      - "80:80"
-      - "443:443"
+      # Bind only on loopback — host nginx proxies ginbar.kejith.de → here
+      - "127.0.0.1:3000:80"
     volumes:
       # Read media files written by backend
       - media:/var/www/media:ro
-      # Cloudflare Origin Certificate (place origin.crt + origin.key here)
-      - ./nginx/certs:/etc/nginx/certs:ro
     depends_on:
       backend:
         condition: service_healthy
