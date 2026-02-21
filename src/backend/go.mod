@@ -6,7 +6,6 @@ require (
 	github.com/corona10/goimagehash v1.1.0
 	github.com/gofiber/fiber/v3 v3.0.0-beta.3
 	github.com/gofiber/storage/redis/v2 v2.0.3
-	github.com/harukasan/go-libwebp v0.0.0-20220408054828-61eedf90d768
 	github.com/jackc/pgx/v5 v5.6.0
 	github.com/muesli/smartcrop v0.3.0
 	github.com/redis/go-redis/v9 v9.18.0

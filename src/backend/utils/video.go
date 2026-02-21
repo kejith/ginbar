@@ -3,9 +3,6 @@ package utils
 import (
 	"bytes"
 	"fmt"
-	"io"
-	"net/http"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -28,23 +25,6 @@ func ProcessVideo(inputFilePath, format string, dirs Directories) (fileName, thu
 		return "", "", fmt.Errorf("video thumbnail: %w", err)
 	}
 	return dstFileName, thumbnailFilename, nil
-}
-
-// SaveVideoFromURL downloads a video response body to directory.
-func SaveVideoFromURL(response *http.Response, name, format, directory string) (string, error) {
-	fileName := fmt.Sprintf("%s.%s", name, format)
-	filePath := filepath.Join(directory, fileName)
-
-	f, err := os.Create(filePath)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-
-	if _, err = io.Copy(f, response.Body); err != nil {
-		return "", err
-	}
-	return filePath, nil
 }
 
 // CreateVideoThumbnail extracts a frame at 1s with ffmpeg then converts to webp.

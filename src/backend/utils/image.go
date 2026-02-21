@@ -1,22 +1,17 @@
 package utils
 
 import (
-	"bufio"
 	"bytes"
 	"fmt"
 	"image"
 	"image/jpeg"
-	"io"
-	"net/http"
 	"os"
 	"os/exec"
-	"path"
 	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/corona10/goimagehash"
-	"github.com/harukasan/go-libwebp/webp"
 	"github.com/muesli/smartcrop"
 	"github.com/muesli/smartcrop/nfnt"
 )
@@ -57,6 +52,7 @@ func ProcessImage(inputFilePath string, dirs Directories) (*ImageProcessResult, 
 	return &ImageProcessResult{
 		Filename:          filepath.Base(outputFilePath),
 		ThumbnailFilename: filepath.Base(outputThumbnailFilePath),
+		UploadedFilename:  filepath.Base(inputFilePath),
 		PerceptionHash:    hash,
 	}, nil
 }
@@ -133,29 +129,6 @@ func ConvertImageToWebp(inputFilePath, outputFilePath string, quality uint) erro
 	return nil
 }
 
-// SaveImage encodes img as WebP using CGO libwebp.
-func SaveImage(filePath string, img *image.Image, quality uint) (*os.File, error) {
-	f, err := os.Create(filePath)
-	if err != nil {
-		return nil, err
-	}
-
-	w := bufio.NewWriter(f)
-	defer func() {
-		_ = w.Flush()
-		_ = f.Close()
-	}()
-
-	cfg, err := webp.ConfigPreset(webp.PresetPhoto, float32(quality)/100)
-	if err != nil {
-		return nil, err
-	}
-	if err = webp.EncodeRGBA(w, *img, cfg); err != nil {
-		return nil, err
-	}
-	return f, nil
-}
-
 // CropImage uses smartcrop to find the best square crop of w×h.
 func CropImage(imgIn *image.Image, w, h int) (*image.Image, error) {
 	width, height := GetCropDimensions(imgIn, w, h)
@@ -193,31 +166,6 @@ func GetCropDimensions(img *image.Image, width, height int) (int, int) {
 		return y, y
 	}
 	return width, height
-}
-
-// DownloadImage fetches url and saves it as fileName in directory.
-func DownloadImage(url, fileName, directory string) (string, error) {
-	resp, err := httpClient.Get(url)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("download image: status %d", resp.StatusCode)
-	}
-
-	fileName = path.Base(url)
-	filePath := filepath.Join(directory, fileName)
-	f, err := os.Create(filePath)
-	if err != nil {
-		return "", err
-	}
-	defer f.Close()
-
-	if _, err = io.Copy(f, resp.Body); err != nil {
-		return "", err
-	}
-	return filePath, nil
 }
 
 // GenerateFilename generates a nanosecond-timestamped filename with the given

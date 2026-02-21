@@ -51,28 +51,3 @@ func DownloadFile(url string, dir string) (filePath string, err error) {
 
 	return dst, nil
 }
-
-// LoadFileFromURL performs a GET and returns the response + content-type parts.
-func LoadFileFromURL(url string) (resp *http.Response, fileType, fileFormat string, err error) {
-	resp, err = httpClient.Get(url)
-	if err != nil {
-		return nil, "", "", err
-	}
-	if resp.StatusCode != http.StatusOK {
-		resp.Body.Close()
-		return nil, "", "", fmt.Errorf("load: status %d", resp.StatusCode)
-	}
-
-	ct := resp.Header.Get("Content-Type")
-	fileType, fileFormat = splitContentType(ct)
-	return resp, fileType, fileFormat, nil
-}
-
-func splitContentType(ct string) (fileType, fileFormat string) {
-	for i, c := range ct {
-		if c == '/' {
-			return ct[:i], ct[i+1:]
-		}
-	}
-	return ct, ""
-}
