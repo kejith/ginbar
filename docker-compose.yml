@@ -1,6 +1,16 @@
 # docker-compose.yml — ginbar production stack
 # Spin up: docker compose up -d
 # First run:  docker compose run --rm migrate
+#
+# On a real server the host nginx serves the frontend SPA and all static media
+# (images, videos) directly from the filesystem.  Docker only handles the
+# database (postgres), cache (redis) and the Go/Fiber backend API.
+#
+# Required .env variables:
+#   POSTGRES_PASSWORD  – postgres password
+#   SESSION_SECRET     – session signing key
+#   MEDIA_DIR          – host path where the backend writes media
+#                        (default: /opt/ginbar/media)
 
 services:
   # ── Redis 7 ───────────────────────────────────────────────────────────────
@@ -41,8 +51,14 @@ services:
       PORT: 3000
       SESSION_SECRET: ${SESSION_SECRET:?required}
     volumes:
-      # Shared media volume — backend writes, nginx reads
-      - media:/app/public
+      # Bind-mount host media directory so the host nginx can serve files
+      # directly without going through Docker.  MEDIA_DIR must be set in .env
+      # (the install script writes it automatically).
+      - ${MEDIA_DIR:-/opt/ginbar/media}:/app/public
+    ports:
+      # Expose the API only on loopback so the host nginx can reach it.
+      # Nothing else should talk to the backend directly.
+      - "127.0.0.1:3001:3000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -55,22 +71,6 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
-
-  # ── nginx: SPA + media + API proxy ───────────────────────────────────────
-  nginx:
-    build:
-      context: .
-      target: frontend
-    restart: unless-stopped
-    ports:
-      # Bind only on loopback — host nginx proxies ginbar.kejith.de → here
-      - "127.0.0.1:3000:80"
-    volumes:
-      # Read media files written by backend
-      - media:/var/www/media:ro
-    depends_on:
-      backend:
-        condition: service_healthy
 
   # ── goose migrations (run once: docker compose run --rm migrate) ──────────
   migrate:
@@ -91,4 +91,3 @@ services:
 
 volumes:
   pgdata:
-  media:

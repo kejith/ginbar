@@ -17,6 +17,11 @@ INSTALL_DIR="${GINBAR_DIR:-/opt/ginbar}"
 [[ -d "$INSTALL_DIR" ]] || error "Install directory not found: $INSTALL_DIR (set \$GINBAR_DIR to override)"
 cd "$INSTALL_DIR"
 
+# Source .env so MEDIA_DIR and FRONTEND_DIR are available
+[[ -f "$INSTALL_DIR/.env" ]] && { set -a; source "$INSTALL_DIR/.env"; set +a; }
+MEDIA_DIR="${MEDIA_DIR:-${INSTALL_DIR}/media}"
+FRONTEND_DIR="${FRONTEND_DIR:-${INSTALL_DIR}/frontend}"
+
 echo -e "\n${BOLD}${CYAN}══ ginbar update ══${RESET}\n"
 
 # ── 1. Pull latest code ───────────────────────────────────────────────────────
@@ -37,53 +42,66 @@ fi
 info "Building images (only rebuilds layers that changed)…"
 docker compose build
 
+# ── 2a. Re-extract frontend assets from the fresh build ──────────────────────
+info "Updating frontend assets in ${FRONTEND_DIR}…"
+mkdir -p "$FRONTEND_DIR"
+FE_CONTAINER="ginbar_fe_update_$$"
+docker build --target frontend-builder -t ginbar/fe-build:update "$INSTALL_DIR" -q
+docker create --name "$FE_CONTAINER" ginbar/fe-build:update /bin/true >/dev/null
+rm -rf "${FRONTEND_DIR:?}"/*
+docker cp "${FE_CONTAINER}:/app/dist/." "$FRONTEND_DIR/"
+docker rm "$FE_CONTAINER" >/dev/null
+docker rmi ginbar/fe-build:update >/dev/null
+success "Frontend assets updated at $FRONTEND_DIR"
+
 # ── 3. Run any new migrations ────────────────────────────────────────────────
 info "Running database migrations…"
 docker compose run --rm migrate
 
-# ── 4. Restart the stack with new images ─────────────────────────────────────
-info "Restarting stack…"
-docker compose up -d --remove-orphans
-
-# ── 5. Reload systemd unit if the service file changed ───────────────────────
+# ── 4. Always overwrite the systemd service file and reload ──────────────────
 SERVICE_DEST="/etc/systemd/system/ginbar.service"
-if ! diff -q "$INSTALL_DIR/ginbar.service" "$SERVICE_DEST" &>/dev/null; then
-  info "ginbar.service changed — reloading systemd…"
-  sed "s|WorkingDirectory=.*|WorkingDirectory=${INSTALL_DIR}|" \
-    "$INSTALL_DIR/ginbar.service" > "$SERVICE_DEST"
-  systemctl daemon-reload
-  success "systemd unit reloaded"
-fi
+info "Installing systemd service unit…"
+sed "s|WorkingDirectory=.*|WorkingDirectory=${INSTALL_DIR}|" \
+  "$INSTALL_DIR/ginbar.service" > "$SERVICE_DEST"
+chmod 644 "$SERVICE_DEST"
+systemctl daemon-reload
+success "ginbar.service installed and daemon reloaded"
 
-# ── 6. Reload host nginx vhost if it changed ─────────────────────────────────
+# ── 5. Always overwrite the host nginx vhost and reload ──────────────────────
+DOMAIN=""
 VHOST_DEST=$(ls /etc/nginx/sites-available/ginbar* 2>/dev/null | head -1 || true)
 if [[ -n "$VHOST_DEST" ]]; then
   DOMAIN=$(grep -oP 'server_name \K[^;]+' "$VHOST_DEST" | head -1 | xargs)
+  CERT_DIR_VHOST="/etc/nginx/certs/${DOMAIN}"
   VHOST_SRC="${INSTALL_DIR}/nginx/ginbar.vhost.conf"
-  TMP_VHOST=$(mktemp)
+  info "Installing nginx vhost for ${DOMAIN}…"
   sed \
     -e "s|ginbar\.kejith\.de|${DOMAIN}|g" \
-    -e "s|/etc/nginx/certs/ginbar|/etc/nginx/certs/${DOMAIN}|g" \
-    "$VHOST_SRC" > "$TMP_VHOST"
-  if ! diff -q "$TMP_VHOST" "$VHOST_DEST" &>/dev/null; then
-    info "Nginx vhost changed — reloading…"
-    cp "$TMP_VHOST" "$VHOST_DEST"
-    nginx -t && systemctl reload nginx
-    success "Host nginx reloaded"
-  fi
-  rm -f "$TMP_VHOST"
+    -e "s|/etc/nginx/certs/ginbar|${CERT_DIR_VHOST}|g" \
+    -e "s|/opt/ginbar/media|${MEDIA_DIR}|g" \
+    -e "s|/opt/ginbar/frontend|${FRONTEND_DIR}|g" \
+    "$VHOST_SRC" > "$VHOST_DEST"
+  nginx -t && systemctl reload nginx
+  success "Host nginx vhost updated and reloaded"
+else
+  info "No nginx vhost found in /etc/nginx/sites-available — skipping"
 fi
 
+# ── 6. Start / restart the service via systemd ───────────────────────────────
+info "Restarting ginbar service…"
+if systemctl is-active --quiet ginbar.service; then
+  systemctl restart ginbar.service
+else
+  systemctl start ginbar.service
+fi
+success "ginbar.service started"
+
 # ── 7. Health check ───────────────────────────────────────────────────────────
-sleep 3
+sleep 5
 info "Container status:"
 docker compose ps
 
 echo ""
-DOMAIN="${DOMAIN:-}"
-if [[ -z "$DOMAIN" && -f /etc/nginx/sites-enabled/* ]]; then
-  DOMAIN=$(grep -oP 'server_name \K[^;]+' /etc/nginx/sites-enabled/* 2>/dev/null | head -1 | xargs || true)
-fi
 
 if [[ -n "$DOMAIN" ]]; then
   HTTP_CODE=$(curl -sk -o /dev/null -w "%{http_code}" "https://${DOMAIN}/api/check/me" || true)

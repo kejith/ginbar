@@ -210,9 +210,15 @@ if [[ "${generate_env:-false}" == "true" ]]; then
   echo ""
   [[ -z "$SESSION_SECRET" ]] && SESSION_SECRET="$(openssl rand -hex 32)" && info "Generated SESSION_SECRET"
 
+  MEDIA_DIR="${INSTALL_DIR}/media"
+  FRONTEND_DIR="${INSTALL_DIR}/frontend"
+
   cat > "$ENV_FILE" <<EOF
 POSTGRES_PASSWORD=${PG_PASS}
 SESSION_SECRET=${SESSION_SECRET}
+# Paths used by docker-compose and host nginx
+MEDIA_DIR=${MEDIA_DIR}
+FRONTEND_DIR=${FRONTEND_DIR}
 # Optional overrides:
 # POSTGRES_DB=ginbar
 # POSTGRES_USER=ginbar
@@ -228,10 +234,17 @@ VHOST_SRC="${INSTALL_DIR}/nginx/ginbar.vhost.conf"
 VHOST_DEST="/etc/nginx/sites-available/${DOMAIN}"
 VHOST_LINK="/etc/nginx/sites-enabled/${DOMAIN}"
 
-# Patch domain and cert paths into vhost template
+# Read paths from .env (or fall back to INSTALL_DIR defaults)
+[[ -f "$ENV_FILE" ]] && { set -a; source "$ENV_FILE"; set +a; }
+MEDIA_DIR="${MEDIA_DIR:-${INSTALL_DIR}/media}"
+FRONTEND_DIR="${FRONTEND_DIR:-${INSTALL_DIR}/frontend}"
+
+# Patch domain, cert paths, media dir, and frontend dir into vhost template
 sed \
   -e "s|ginbar\.kejith\.de|${DOMAIN}|g" \
   -e "s|/etc/nginx/certs/ginbar|${CERT_DIR}|g" \
+  -e "s|/opt/ginbar/media|${MEDIA_DIR}|g" \
+  -e "s|/opt/ginbar/frontend|${FRONTEND_DIR}|g" \
   "$VHOST_SRC" > "$VHOST_DEST"
 
 ln -sf "$VHOST_DEST" "$VHOST_LINK"
@@ -248,6 +261,27 @@ cd "$INSTALL_DIR"
 
 info "Building Docker images (this may take a few minutes)…"
 docker compose build
+
+# ── Extract compiled frontend from the build image ────────────────────────
+info "Extracting frontend assets to ${FRONTEND_DIR}…"
+mkdir -p "$FRONTEND_DIR"
+FE_CONTAINER="ginbar_fe_extract_$$"
+docker build --target frontend-builder -t ginbar/fe-build:extract "$INSTALL_DIR" -q
+docker create --name "$FE_CONTAINER" ginbar/fe-build:extract /bin/true >/dev/null
+docker cp "${FE_CONTAINER}:/app/dist/." "$FRONTEND_DIR/"
+docker rm "$FE_CONTAINER" >/dev/null
+docker rmi ginbar/fe-build:extract >/dev/null
+success "Frontend assets extracted to $FRONTEND_DIR"
+
+# ── Create media directories and ensure nginx can read them ───────────────
+info "Creating media directories at ${MEDIA_DIR}…"
+mkdir -p \
+  "${MEDIA_DIR}/images/thumbnails" \
+  "${MEDIA_DIR}/videos" \
+  "${MEDIA_DIR}/upload"
+# Allow the Docker backend user (uid 0 in debian:slim) and nginx (www-data) to read
+chmod -R 755 "$MEDIA_DIR"
+success "Media directories ready at $MEDIA_DIR"
 
 info "Running database migrations…"
 docker compose run --rm migrate
