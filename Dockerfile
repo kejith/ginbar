@@ -34,11 +34,13 @@ WORKDIR /app
 COPY src/backend/go.mod src/backend/go.sum ./
 RUN go mod download
 
+# Install goose in its own layer so it isn't re-fetched on every code change
+RUN go install github.com/pressly/goose/v3/cmd/goose@latest
+
 COPY src/backend/ ./
 
-# Build app binary and install goose for migrations
-RUN CGO_ENABLED=1 GOOS=linux go build -o ginbar . \
- && go install github.com/pressly/goose/v3/cmd/goose@latest
+# Build app binary
+RUN CGO_ENABLED=1 GOOS=linux go build -o ginbar .
 
 
 # ─────────────────────────────────────────────────────────────────────────────
