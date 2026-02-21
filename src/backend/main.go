@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"ginbar/api"
+	"ginbar/cache"
 	"ginbar/db"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -20,29 +21,51 @@ func main() {
 
 	// ── Config from environment ───────────────────────────────────────────────
 	dbURL := getenv("DB_URL", "postgres://ginbar:devpassword@localhost:5432/ginbar?sslmode=disable")
+	redisURL := getenv("REDIS_URL", "redis://localhost:6379")
 	port := getenv("PORT", "3000")
 	sessionSecret := getenv("SESSION_SECRET", "change-me-in-prod")
 
 	// ── Database pool ─────────────────────────────────────────────────────────
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	initCtx, initCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer initCancel()
 
-	pool, err := pgxpool.New(ctx, dbURL)
+	pool, err := pgxpool.New(initCtx, dbURL)
 	if err != nil {
 		log.Error("cannot create pgx pool", "err", err)
 		os.Exit(1)
 	}
 	defer pool.Close()
 
-	if err = pool.Ping(ctx); err != nil {
+	if err = pool.Ping(initCtx); err != nil {
 		log.Error("cannot reach postgres", "err", err)
 		os.Exit(1)
 	}
 	log.Info("connected to postgres", "url", dbURL)
 
+	// ── Redis client ──────────────────────────────────────────────────────────
+	rdb, err := cache.NewClient(initCtx, redisURL)
+	if err != nil {
+		log.Error("cannot connect to redis", "err", err)
+		os.Exit(1)
+	}
+	defer rdb.Close()
+	log.Info("connected to redis", "url", redisURL)
+
+	// Seed score cache from current DB aggregates so the first requests see
+	// correct scores without a DB round-trip.
+	if err = cache.PreloadScores(initCtx, rdb, pool, log); err != nil {
+		log.Error("failed to preload vote scores", "err", err)
+		// Non-fatal: live score reads will fall back to the DB value.
+	}
+
 	// ── Store + server ────────────────────────────────────────────────────────
 	store := db.NewStore(pool)
-	srv := api.NewServer(store, sessionSecret, log)
+	srv := api.NewServer(store, rdb, sessionSecret, log)
+
+	// ── Flush worker ──────────────────────────────────────────────────────────
+	// workerCtx is cancelled during graceful shutdown, triggering a final flush.
+	workerCtx, workerCancel := context.WithCancel(context.Background())
+	flushDone := cache.StartFlushWorker(workerCtx, rdb, pool, 3*time.Second, log)
 
 	// ── Graceful shutdown ─────────────────────────────────────────────────────
 	quit := make(chan os.Signal, 1)
@@ -58,9 +81,16 @@ func main() {
 
 	<-quit
 	log.Info("shutting down")
+
+	// Stop accepting new requests first.
 	if err = srv.App.Shutdown(); err != nil {
 		log.Error("shutdown error", "err", err)
 	}
+
+	// Then drain the vote buffer into Postgres.
+	workerCancel()
+	<-flushDone
+	log.Info("vote buffer flushed — bye")
 }
 
 func getenv(key, fallback string) string {
@@ -69,3 +99,4 @@ func getenv(key, fallback string) string {
 	}
 	return fallback
 }
+

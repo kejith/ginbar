@@ -4,19 +4,22 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"ginbar/db"
 	"ginbar/utils"
 
 	"github.com/gofiber/fiber/v3"
+	"github.com/redis/go-redis/v9"
 	"github.com/gofiber/fiber/v3/middleware/cors"
 	"github.com/gofiber/fiber/v3/middleware/recover"
 	"github.com/gofiber/fiber/v3/middleware/session"
 	"github.com/gofiber/fiber/v3/middleware/static"
-	pgstore "github.com/gofiber/storage/postgres"
+	redisstore "github.com/gofiber/storage/redis/v2"
 )
 
 // SessionUser is the shape stored in every session — keep stable across
@@ -27,17 +30,18 @@ type SessionUser struct {
 	Level int32  `json:"level"`
 }
 
-// Server holds the Fiber app, DB store, and session store.
+// Server holds the Fiber app, DB store, session store, and Redis client.
 type Server struct {
 	App      *fiber.App
 	store    *db.Store
+	rdb      *redis.Client
 	sessions *session.Store
 	log      *slog.Logger
 	dirs     utils.Directories
 }
 
 // NewServer wires up the Fiber v3 application.
-func NewServer(store *db.Store, sessionSecret string, log *slog.Logger) *Server {
+func NewServer(store *db.Store, rdb *redis.Client, sessionSecret string, log *slog.Logger) *Server {
 	app := fiber.New(fiber.Config{
 		// Structured JSON error responses.
 		ErrorHandler: func(c fiber.Ctx, err error) error {
@@ -50,17 +54,20 @@ func NewServer(store *db.Store, sessionSecret string, log *slog.Logger) *Server 
 		},
 	})
 
-	// ── Session store (postgres-backed) ──────────────────────────────────────
-	pgSt := pgstore.New(pgstore.Config{
-		// Re-use the same PG connection string from env.  The storage package
-		// uses database/sql internally so it manages its own small pool.
-		ConnectionURI: getDBURL(),
-		Table:         "sessions",
-		Reset:         false,
-		GCInterval:    10 * time.Minute,
+	// ── Session store (redis-backed) ─────────────────────────────────────────
+	// Reuse the same Redis connection parameters as the vote-buffer client.
+	opts := rdb.Options()
+	host, port, _ := net.SplitHostPort(opts.Addr)
+	redisPort, _ := strconv.Atoi(port)
+	sessionSt := redisstore.New(redisstore.Config{
+		Host:      host,
+		Port:      redisPort,
+		Password:  opts.Password,
+		Database:  opts.DB,
+		Reset:     false,
 	})
 	sessions := session.New(session.Config{
-		Storage:    pgSt,
+		Storage:    sessionSt,
 		Expiration: 7 * 24 * time.Hour,
 		KeyLookup:  "cookie:session_id",
 	})
@@ -79,6 +86,7 @@ func NewServer(store *db.Store, sessionSecret string, log *slog.Logger) *Server 
 	srv := &Server{
 		App:      app,
 		store:    store,
+		rdb:      rdb,
 		sessions: sessions,
 		log:      log,
 		dirs:     dirs,
@@ -168,13 +176,4 @@ func slogMiddleware(log *slog.Logger) fiber.Handler {
 		)
 		return err
 	}
-}
-
-// ── Env helper (mirrors main.go) ──────────────────────────────────────────────
-
-func getDBURL() string {
-	if v := os.Getenv("DB_URL"); v != "" {
-		return v
-	}
-	return "postgres://ginbar:devpassword@localhost:5432/ginbar?sslmode=disable"
 }

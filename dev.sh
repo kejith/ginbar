@@ -41,6 +41,27 @@ for i in $(seq 1 30); do
 done
 ok "PostgreSQL is ready"
 
+# ── start redis ───────────────────────────────────────────────────────────────
+if command -v redis-server &>/dev/null; then
+  if ! redis-cli ping &>/dev/null 2>&1; then
+    log "Starting Redis..."
+    redis-server --daemonize yes --logfile /tmp/redis-dev.log --loglevel warning
+    for i in $(seq 1 15); do
+      redis-cli ping &>/dev/null 2>&1 && break
+      [[ $i -eq 15 ]] && die "Redis did not become ready in time"
+      sleep 0.5
+    done
+    ok "Redis is ready"
+    REDIS_STARTED=1
+  else
+    ok "Redis already running"
+    REDIS_STARTED=0
+  fi
+else
+  warn "redis-server not found — run: sudo apt-get install -y redis-server"
+  die "Redis is required for the vote buffer"
+fi
+
 # ── migrations ───────────────────────────────────────────────────────────────
 log "Running migrations..."
 goose -dir "$BACKEND_DIR/db/migrations" postgres "$PG_URL" up
@@ -84,6 +105,10 @@ cleanup() {
   kill "$FRONTEND_PID" 2>/dev/null || true
   wait "$BACKEND_PID"  2>/dev/null || true
   wait "$FRONTEND_PID" 2>/dev/null || true
+  if [[ "${REDIS_STARTED:-0}" == "1" ]]; then
+    redis-cli shutdown nosave 2>/dev/null || true
+    log "Redis stopped"
+  fi
   ok "All processes stopped."
 }
 trap cleanup SIGINT SIGTERM

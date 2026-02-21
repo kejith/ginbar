@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"ginbar/cache"
 	dbgen "ginbar/db/gen"
 	"ginbar/utils"
 
@@ -137,20 +138,8 @@ func (s *Server) VotePost(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusUnauthorized, "not logged in")
 	}
 
-	if form.VoteState != 0 {
-		err = s.store.UpsertPostVote(c.Context(), dbgen.UpsertPostVoteParams{
-			PostID: form.PostID,
-			UserID: u.ID,
-			Vote:   form.VoteState,
-		})
-	} else {
-		err = s.store.DeletePostVote(c.Context(), dbgen.DeletePostVoteParams{
-			PostID: form.PostID,
-			UserID: u.ID,
-		})
-	}
-	if err != nil {
-		return err
+	if _, castErr := cache.CastVote(c.Context(), s.rdb, cache.EntityPost, form.PostID, u.ID, form.VoteState); castErr != nil {
+		return castErr
 	}
 	return c.SendStatus(fiber.StatusOK)
 }

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"ginbar/cache"
 	dbgen "ginbar/db/gen"
 
 	"github.com/gofiber/fiber/v3"
@@ -59,20 +60,8 @@ func (s *Server) VoteComment(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusUnauthorized, "not logged in")
 	}
 
-	if form.VoteState != 0 {
-		err = s.store.UpsertCommentVote(c.Context(), dbgen.UpsertCommentVoteParams{
-			CommentID: form.CommentID,
-			UserID:    u.ID,
-			Vote:      form.VoteState,
-		})
-	} else {
-		err = s.store.DeleteCommentVote(c.Context(), dbgen.DeleteCommentVoteParams{
-			CommentID: form.CommentID,
-			UserID:    u.ID,
-		})
-	}
-	if err != nil {
-		return err
+	if _, castErr := cache.CastVote(c.Context(), s.rdb, cache.EntityComment, form.CommentID, u.ID, form.VoteState); castErr != nil {
+		return castErr
 	}
 	return c.SendStatus(fiber.StatusOK)
 }

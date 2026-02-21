@@ -16,6 +16,7 @@ RUN rm -f /etc/apt/sources.list.d/yarn.list \
     curl \
     unzip \
     procps \
+    redis-server \
  && rm -rf /var/lib/apt/lists/*
 
 # ── sqlc (latest) ─────────────────────────────────────────────────────────────
