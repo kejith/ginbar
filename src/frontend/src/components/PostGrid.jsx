@@ -247,6 +247,7 @@ export default function PostGrid({
               {row.type === "expanded" && (
                 <InlinePost
                   postId={row.postId}
+                  listPost={posts.find((p) => p.id === row.postId) ?? null}
                   onClose={handleClose}
                   onNewer={handleNewer}
                   onOlder={handleOlder}
