@@ -8,7 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
+	"strconv"
 	"time"
 
 	"github.com/corona10/goimagehash"
@@ -26,17 +26,42 @@ type ImageProcessResult struct {
 	Height            int
 }
 
-// ProcessImage converts inputFilePath → webp, computes perceptual hash, and
-// creates a square thumbnail.
+// ProcessImage converts inputFilePath → avif (high quality), computes
+// perceptual hash, and creates a square AVIF thumbnail.
 func ProcessImage(inputFilePath string, dirs Directories) (*ImageProcessResult, error) {
 	fileName := filepath.Base(inputFilePath)
-	outputFilePath := filepath.Join(dirs.Image, fileName+".webp")
+	outputFilePath := filepath.Join(dirs.Image, fileName+".avif")
 
-	if err := ConvertImageToWebp(inputFilePath, outputFilePath, 75); err != nil {
-		return nil, fmt.Errorf("convert to webp: %w", err)
+	// Run the AVIF encode and JPEG normalisation concurrently — both only
+	// read inputFilePath and write to independent outputs.
+	type avifRes struct{ err error }
+	type jpegRes struct {
+		path string
+		err  error
 	}
+	avifCh := make(chan avifRes, 1)
+	jpegCh := make(chan jpegRes, 1)
 
-	img, err := LoadImageFile(inputFilePath)
+	go func() {
+		// CRF 18 / preset 8 — visually lossless at ~2× the speed of preset 4.
+		avifCh <- avifRes{ConvertImageToAvif(inputFilePath, outputFilePath, 18, 8)}
+	}()
+	go func() {
+		p, err := NormalizeImageToJPEG(inputFilePath, filepath.Join(dirs.Tmp, "thumbnails"))
+		jpegCh <- jpegRes{p, err}
+	}()
+
+	if r := <-avifCh; r.err != nil {
+		return nil, fmt.Errorf("convert to avif: %w", r.err)
+	}
+	jr := <-jpegCh
+	if jr.err != nil {
+		return nil, fmt.Errorf("normalize to jpeg: %w", jr.err)
+	}
+	jpegPath := jr.path
+	defer os.Remove(jpegPath)
+
+	img, err := LoadImageFile(jpegPath)
 	if err != nil {
 		return nil, fmt.Errorf("load image: %w", err)
 	}
@@ -46,7 +71,7 @@ func ProcessImage(inputFilePath string, dirs Directories) (*ImageProcessResult, 
 		return nil, fmt.Errorf("perceptual hash: %w", err)
 	}
 
-	outputThumbnailFilePath := filepath.Join(dirs.Thumbnail, fileName)
+	outputThumbnailFilePath := filepath.Join(dirs.Thumbnail, fileName+".avif")
 	if err := CreateThumbnailFromImage(img, outputThumbnailFilePath, dirs); err != nil {
 		return nil, fmt.Errorf("thumbnail: %w", err)
 	}
@@ -102,7 +127,7 @@ func CreateThumbnailFromFile(inputFilePath, dstFilePath string, dirs Directories
 	return CreateThumbnailFromImage(img, dstFilePath, dirs)
 }
 
-// CreateThumbnailFromImage crops to 150×150 via smartcrop then saves as webp.
+// CreateThumbnailFromImage crops to 150×150 via smartcrop then saves as AVIF.
 func CreateThumbnailFromImage(img *image.Image, dstFilePath string, dirs Directories) error {
 	cropped, err := CropImage(img, 150, 150)
 	if err != nil {
@@ -113,25 +138,68 @@ func CreateThumbnailFromImage(img *image.Image, dstFilePath string, dirs Directo
 	if err != nil {
 		return fmt.Errorf("save tmp jpeg: %w", err)
 	}
+	defer os.Remove(tmpPath)
 
-	if err = ConvertImageToWebp(tmpPath, dstFilePath, 75); err != nil {
-		return fmt.Errorf("convert thumbnail to webp: %w", err)
+	// CRF 30 / preset 6: great quality for 150 px, fast encode.
+	if err = ConvertImageToAvif(tmpPath, dstFilePath, 30, 6); err != nil {
+		return fmt.Errorf("convert thumbnail to avif: %w", err)
 	}
 	return nil
 }
 
-// ConvertImageToWebp calls cwebp to convert inputFilePath → outputFilePath.
-func ConvertImageToWebp(inputFilePath, outputFilePath string, quality uint) error {
-	args := fmt.Sprintf("%s -q %d -preset picture -m 6 -mt -o %s",
-		inputFilePath, quality, outputFilePath)
-	cmd := exec.Command("cwebp", strings.Split(args, " ")...)
-	var out, errb bytes.Buffer
-	cmd.Stdout = &out
+// ConvertImageToAvif uses ffmpeg + libsvtav1 (SVT-AV1) to encode
+// inputFilePath as an AVIF still image.
+//
+//   crf     quality: 0 = lossless, 63 = worst; 18 ≈ visually lossless,
+//                     30 = excellent quality for small sizes.
+//   preset  speed: 0 = slowest/best, 13 = fastest; 4 = high quality,
+//                  6 = fast with great quality for thumbnails.
+//
+// SVT-AV1 is 5-10× faster than libaom-av1 at identical CRF/quality.
+// The crop filter ensures even dimensions, which YUV 4:2:0 requires.
+func ConvertImageToAvif(inputFilePath, outputFilePath string, crf, preset int) error {
+	args := []string{
+		"-y",
+		"-i", inputFilePath,
+		"-frames:v", "1",
+		// Crop to even w×h (SVT-AV1 requires even dimensions for yuv420p).
+		// trunc(iw/2)*2 = largest even number ≤ iw; at most 1px trimmed per axis.
+		"-vf", "crop=trunc(iw/2)*2:trunc(ih/2)*2",
+		"-c:v", "libsvtav1",
+		"-crf", strconv.Itoa(crf),
+		"-preset", strconv.Itoa(preset),
+		"-g", "1", // single keyframe = still picture
+		"-pix_fmt", "yuv420p",
+		outputFilePath,
+	}
+	cmd := exec.Command("ffmpeg", args...)
+	var errb bytes.Buffer
 	cmd.Stderr = &errb
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("cwebp: %w — stderr: %s", err, errb.String())
+		return fmt.Errorf("ffmpeg avif: %w — stderr: %s", err, errb.String())
 	}
 	return nil
+}
+
+// NormalizeImageToJPEG uses ffmpeg to decode any image format (avif, jxl,
+// webp, gif, …) to a temporary JPEG in dir that Go's image decoder can read.
+// The caller is responsible for removing the returned path when done.
+func NormalizeImageToJPEG(inputFilePath, dir string) (string, error) {
+	dst := filepath.Join(dir, GenerateFilename(".jpg"))
+	args := []string{
+		"-y",
+		"-i", inputFilePath,
+		"-frames:v", "1",
+		"-q:v", "2",
+		dst,
+	}
+	cmd := exec.Command("ffmpeg", args...)
+	var errb bytes.Buffer
+	cmd.Stderr = &errb
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("ffmpeg normalize: %w — stderr: %s", err, errb.String())
+	}
+	return dst, nil
 }
 
 // CropImage uses smartcrop to find the best square crop of w×h.

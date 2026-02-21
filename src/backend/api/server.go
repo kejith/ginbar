@@ -149,6 +149,7 @@ func NewServer(store *db.Store, rdb *redis.Client, sessionSecret string, log *sl
 	admin.Delete("/comments/:id", srv.AdminDeleteComment)
 	admin.Delete("/tags/:id", srv.AdminDeleteTag)
 	admin.Post("/posts/backfill-dimensions", srv.BackfillPostDimensions)
+	admin.Post("/posts/regenerate-images", srv.RegenerateImages)
 
 	// Static — SPA fallback (frontend served separately in dev via Vite proxy)
 	app.Use("/", static.New("./public", static.Config{Browse: false}))

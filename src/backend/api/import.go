@@ -253,7 +253,7 @@ continue
 }
 ext := strings.ToLower(filepath.Ext(item.Image))
 switch ext {
-case ".jpg", ".jpeg", ".png", ".gif", ".webp":
+case ".jxl", ".avif", ".webp", ".jpg", ".gif":
 // supported
 default:
 continue
@@ -463,7 +463,7 @@ return nil, "empty image path"
 
 ext := strings.ToLower(filepath.Ext(item.Image))
 switch ext {
-case ".jpg", ".jpeg", ".png", ".gif", ".webp":
+case ".jxl", ".avif", ".webp", ".jpg", ".gif":
 // supported static image
 default:
 return nil, fmt.Sprintf("skipped non-image media (%s)", ext)

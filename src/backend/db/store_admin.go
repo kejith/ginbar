@@ -113,3 +113,47 @@ func (s *Store) UpdatePostDimensions(ctx context.Context, id, width, height int3
 	)
 	return err
 }
+
+// GetAllImagePosts returns all non-deleted, non-dirty posts whose content_type
+// is 'image', ordered by id.  Used by the image-regeneration maintenance job.
+func (s *Store) GetAllImagePosts(ctx context.Context) ([]gen.Post, error) {
+	const q = `
+SELECT id, url, uploaded_filename, filename, thumbnail_filename, content_type,
+       score, user_level, p_hash_0, p_hash_1, p_hash_2, p_hash_3,
+       user_name, created_at, deleted_at, dirty, width, height
+FROM posts
+WHERE content_type = 'image' AND deleted_at IS NULL AND dirty = FALSE
+ORDER BY id
+`
+	rows, err := s.Pool.Query(ctx, q)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []gen.Post
+	for rows.Next() {
+		var p gen.Post
+		if err := rows.Scan(
+			&p.ID, &p.Url, &p.UploadedFilename, &p.Filename, &p.ThumbnailFilename,
+			&p.ContentType, &p.Score, &p.UserLevel,
+			&p.PHash0, &p.PHash1, &p.PHash2, &p.PHash3,
+			&p.UserName, &p.CreatedAt, &p.DeletedAt, &p.Dirty,
+			&p.Width, &p.Height,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, p)
+	}
+	return items, rows.Err()
+}
+
+// UpdatePostFiles sets filename, thumbnail_filename, width, and height for a
+// single post.  Used after re-encoding a stored image.
+func (s *Store) UpdatePostFiles(ctx context.Context, id int32, filename, thumbnailFilename string, width, height int32) error {
+	_, err := s.Pool.Exec(ctx,
+		`UPDATE posts SET filename=$1, thumbnail_filename=$2, width=$3, height=$4 WHERE id=$5`,
+		filename, thumbnailFilename, width, height, id,
+	)
+	return err
+}

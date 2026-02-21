@@ -3,6 +3,7 @@ package utils
 import (
 	"bytes"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strconv"
@@ -75,10 +76,10 @@ func GetVideoDimensions(filePath string) (width, height int, err error) {
 	return width, height, nil
 }
 
-// CreateVideoThumbnail extracts a frame at 1s with ffmpeg then converts to webp.
+// CreateVideoThumbnail extracts a frame at 1s with ffmpeg then converts to avif.
 func CreateVideoThumbnail(inputFilePath, name string, dirs Directories) (string, error) {
 	jpgFilename := name + ".jpg"
-	webpFilename := name + ".webp"
+	avifFilename := name + ".avif"
 	tmpPath := filepath.Join(dirs.Tmp, jpgFilename)
 
 	args := fmt.Sprintf("-i %s -ss 00:00:01.000 -vframes 1 %s -hide_banner -loglevel panic",
@@ -91,10 +92,11 @@ func CreateVideoThumbnail(inputFilePath, name string, dirs Directories) (string,
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("ffmpeg thumbnail: %w — %s", err, errb.String())
 	}
+	defer os.Remove(tmpPath)
 
-	dstPath := filepath.Join(dirs.Thumbnail, webpFilename)
+	dstPath := filepath.Join(dirs.Thumbnail, avifFilename)
 	if err := CreateThumbnailFromFile(tmpPath, dstPath, dirs); err != nil {
 		return "", fmt.Errorf("convert video thumbnail: %w", err)
 	}
-	return webpFilename, nil
+	return avifFilename, nil
 }

@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from "react";
-import api from "../utils/api.js";
+import api, { ssePost } from "../utils/api.js";
 import { roleName, LEVEL_MEMBER, LEVEL_ADMIN } from "../utils/roles.js";
 
 // ── tiny helpers ─────────────────────────────────────────────────────────────
@@ -593,6 +593,45 @@ const MAINTENANCE_JOBS = [
         </span>
       );
     },
+  },
+  {
+    id: "regenerate-images",
+    label: "Regenerate images as AVIF",
+    description:
+      "Re-encodes every stored image as a high-quality AVIF (CRF 18 for " +
+      "full-res, CRF 30 for thumbnails) and replaces old files on disk. " +
+      "Safe to re-run. Large libraries will take a while.",
+    run: async (onProgress) => {
+      return ssePost("/admin/posts/regenerate-images", {}, (event) => {
+        if (event.phase === "start") {
+          onProgress({ current: 0, total: event.total, message: "Starting…" });
+        } else if (event.phase === "progress") {
+          onProgress({
+            current: event.current,
+            total: event.total,
+            message: `updated ${event.updated} · failed ${event.failed} · skipped ${event.skipped}`,
+          });
+        }
+      });
+    },
+    formatResult: (r) => (
+      <span>
+        Re-encoded <strong>{r.updated}</strong> of <strong>{r.total}</strong>{" "}
+        images.
+        {r.failed > 0 && (
+          <span className="text-red-400"> {r.failed} failed.</span>
+        )}
+        {r.skipped > 0 && (
+          <span className="text-(--color-muted)">
+            {" "}
+            {r.skipped} skipped (file not found).
+          </span>
+        )}
+        {r.failed === 0 && r.skipped === 0 && r.updated === r.total && (
+          <span className="text-green-400"> All images regenerated ✓</span>
+        )}
+      </span>
+    ),
   },
 ];
 
