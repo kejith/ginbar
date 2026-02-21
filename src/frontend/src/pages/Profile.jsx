@@ -47,7 +47,7 @@ export default function Profile() {
 
       <div
         className="grid gap-3"
-        style={{ gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))" }}
+        style={{ gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))" }}
       >
         {posts.map((post) => (
           <PostCard key={post.id} post={post} />

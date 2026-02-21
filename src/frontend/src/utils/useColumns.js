@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 
-// Target cell width ≈ 192 px + 4 px gap (gap-1)
-const CELL = 196;
+// Target cell width ≈ 150 px + 4 px gap (gap-1)
+const CELL = 154;
 
 function getColumns() {
   return Math.max(2, Math.floor(window.innerWidth / CELL));
