@@ -87,26 +87,43 @@ export default function PostGrid({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expandedId]); // intentionally omit rows/virtualizer — only trigger on id change
 
-  // ── Initial expanded post from URL (on mount) ─────────────────────────────
+  // ── Chase-fetch pages until initialExpanded post appears in the list ──────
   useEffect(() => {
-    if (initialExpanded && !initialScrollDone.current) {
+    if (!initialExpanded || initialScrollDone.current) return;
+    const found = posts.some((p) => p.id === initialExpanded);
+    if (!found && hasMore && !listLoading) {
+      fetchPosts({ page: page + 1, tag, reset: false });
+    }
+  }, [initialExpanded, posts, hasMore, listLoading, page, tag, fetchPosts]);
+
+  // ── Open expanded panel once the target post is loaded ────────────────────
+  useEffect(() => {
+    if (!initialExpanded || initialScrollDone.current) return;
+    const found = posts.some((p) => p.id === initialExpanded);
+    if (found) {
       initialScrollDone.current = true;
       setExpandedId(initialExpanded);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialExpanded]);
+  }, [initialExpanded, posts]);
 
-  // ── Preload full-size image as soon as a post is expanded ──────────────────
+  // ── Preload full-size images for the expanded post + 2 neighbours each side
   useEffect(() => {
     if (expandedId == null) return;
-    const post = posts.find((p) => p.id === expandedId);
-    if (!post || !post.filename) return;
-    const isVideo =
-      post.content_type?.startsWith("video/") ||
-      post.filename.match(/\.(mp4|webm|mov)$/i);
-    if (!isVideo) {
-      const img = new window.Image();
-      img.src = `/images/${post.filename}`;
+    const idx = posts.findIndex((p) => p.id === expandedId);
+    if (idx === -1) return;
+    const start = Math.max(0, idx - 2);
+    const end = Math.min(posts.length - 1, idx + 2);
+    for (let i = start; i <= end; i++) {
+      const p = posts[i];
+      if (!p?.filename) continue;
+      const isVideo =
+        p.content_type?.startsWith("video/") ||
+        p.filename.match(/\.(mp4|webm|mov)$/i);
+      if (!isVideo) {
+        const img = new window.Image();
+        img.src = `/images/${p.filename}`;
+      }
     }
   }, [expandedId, posts]);
 
