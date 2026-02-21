@@ -49,6 +49,7 @@ FROM debian:bookworm-slim AS backend
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     libwebp7 \
+    webp \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
