@@ -4,12 +4,12 @@ A custom-made imageboard. Go/Fiber backend, React frontend.
 
 ## Stack
 
-| Layer | Tech |
-|-------|------|
-| Backend | Go · Fiber v3 · sqlc · goose |
+| Layer    | Tech                                        |
+| -------- | ------------------------------------------- |
+| Backend  | Go · Fiber v3 · sqlc · goose                |
 | Frontend | React 19 · Vite · Zustand · Tailwind CSS v4 |
-| Data | PostgreSQL 17 · Redis 7 |
-| Prod | Docker Compose · host nginx |
+| Data     | PostgreSQL 17 · Redis 7                     |
+| Prod     | Docker Compose · host nginx                 |
 
 ## Development
 
@@ -37,7 +37,7 @@ make psql           # open psql shell
 
 ### Architecture
 
-On a real server, Docker runs only the three backend services.  
+On a real server, Docker runs only the three backend services.
 The **host nginx** handles everything user-facing directly from the filesystem — no Docker networking overhead for static content.
 
 ```
@@ -57,6 +57,7 @@ sudo bash scripts/install.sh
 ```
 
 The script will:
+
 1. Check/install prerequisites (git, nginx, docker)
 2. Set the install directory (default `/opt/ginbar`)
 3. Configure the domain and Cloudflare Origin Certificate
@@ -85,14 +86,14 @@ sudo bash scripts/clean.sh
 
 ### Environment variables
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `POSTGRES_PASSWORD` | yes | — | PostgreSQL password |
-| `SESSION_SECRET` | yes | — | Session signing key |
-| `MEDIA_DIR` | no | `<install_dir>/media` | Host path where backend writes uploaded files; host nginx reads from here |
-| `FRONTEND_DIR` | no | `<install_dir>/frontend` | Host path where the compiled Vite SPA is extracted; host nginx serves from here |
-| `POSTGRES_DB` | no | `ginbar` | Database name |
-| `POSTGRES_USER` | no | `ginbar` | Database user |
+| Variable            | Required | Default                  | Description                                                                     |
+| ------------------- | -------- | ------------------------ | ------------------------------------------------------------------------------- |
+| `POSTGRES_PASSWORD` | yes      | —                        | PostgreSQL password                                                             |
+| `SESSION_SECRET`    | yes      | —                        | Session signing key                                                             |
+| `MEDIA_DIR`         | no       | `<install_dir>/media`    | Host path where backend writes uploaded files; host nginx reads from here       |
+| `FRONTEND_DIR`      | no       | `<install_dir>/frontend` | Host path where the compiled Vite SPA is extracted; host nginx serves from here |
+| `POSTGRES_DB`       | no       | `ginbar`                 | Database name                                                                   |
+| `POSTGRES_USER`     | no       | `ginbar`                 | Database user                                                                   |
 
 ### Manual Docker commands
 
