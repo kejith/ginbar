@@ -78,9 +78,9 @@ success "Upload staging cleared"
 # Restore permissions
 chmod -R 755 "$MEDIA_DIR"
 
-# ── 3. Start fresh stack ──────────────────────────────────────────────────────
-info "Starting stack with a fresh database…"
-docker compose up -d --remove-orphans
+# ── 3. Start only postgres + redis so migrations can run before the backend ───
+info "Starting postgres and redis…"
+docker compose up -d --remove-orphans postgres redis
 
 # Wait for postgres to become healthy before running migrations
 info "Waiting for PostgreSQL to be ready…"
@@ -94,6 +94,10 @@ done
 # ── 4. Run migrations on the fresh database ───────────────────────────────────
 info "Running database migrations…"
 docker compose run --rm migrate
+
+# ── 5. Start the rest of the stack (backend needs tables to exist for seeding) ─
+info "Starting remaining services…"
+docker compose up -d --remove-orphans
 
 # ── 5. Summary ────────────────────────────────────────────────────────────────
 echo ""
