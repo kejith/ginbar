@@ -12,7 +12,7 @@
       "version": "22",
       "nodeGypDependencies": false
     },
-    "ghcr.io/devcontainers-contrib/features/pnpm:2": {}
+    "ghcr.io/devcontainers-extra/features/pnpm:2": {}
   },
 
   // ── VS Code Extensions ──────────────────────────────────────────────────────
