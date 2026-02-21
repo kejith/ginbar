@@ -254,7 +254,7 @@ export default function InlinePost({
       )}
 
       {!postError && (
-        <div className="mx-auto max-w-3xl px-3 py-4 space-y-3">
+        <div className="mx-auto max-w-[920px] pb-4 space-y-3">
           {/* ── Media ── Always rendered so the thumbnail can show immediately
                and the full image can be preloaded before the fetch completes.
                When dimensions are known the aspect-ratio style reserves the
