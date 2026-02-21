@@ -11,6 +11,9 @@ src/frontend/dist/
 src/frontend/.env.local
 .env
 
+# ── Redis snapshot (created in cwd by the Redis server) ──────────────────────
+dump.rdb
+
 # ── pnpm ──────────────────────────────────────────────────────────────────────
 .pnpm-store/
 
