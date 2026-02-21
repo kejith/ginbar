@@ -182,14 +182,14 @@ export default function InlinePost({
                   key={mediaSrc}
                   src={mediaSrc}
                   controls
-                  className="mx-auto max-h-[70vh] w-full object-contain"
+                  className="mx-auto w-full object-contain"
                 />
               ) : (
                 <img
                   key={mediaSrc}
                   src={mediaSrc}
                   alt=""
-                  className="mx-auto max-h-[70vh] w-full object-contain"
+                  className="mx-auto w-full object-contain"
                 />
               )
             ) : (
