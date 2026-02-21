@@ -46,6 +46,14 @@ JOIN tags t ON t.id = pt.tag_id
 WHERE t.name = ANY($1::text[]) AND p.deleted_at IS NULL AND p.dirty = FALSE
 ORDER BY p.id DESC;
 
+-- name: SearchByUser :many
+SELECT DISTINCT p.*
+FROM posts p
+JOIN post_tags pt ON pt.post_id = p.id
+JOIN tags t ON t.id = pt.tag_id
+WHERE t.name = ANY(sqlc.arg(tags)::text[]) AND p.user_name = sqlc.arg(user_name) AND p.deleted_at IS NULL AND p.dirty = FALSE
+ORDER BY p.id DESC;
+
 -- name: GetPostsByUser :many
 SELECT *
 FROM posts

@@ -44,11 +44,13 @@ const usePostStore = create((set, get) => ({
 
   // ── search ────────────────────────────────────────────────────────────────
   // Tags are space-separated; pass as a plain string — the store handles encoding.
-  search: async (query) => {
+  // Optional username filters results on the backend.
+  search: async (query, username) => {
     set({ listLoading: true, listError: null });
     try {
       const encoded = encodeURIComponent(query.trim()).replace(/%20/g, "%20");
-      const { data } = await api.get(`/post/search/${encoded}`);
+      const params = username ? { user: username } : undefined;
+      const { data } = await api.get(`/post/search/${encoded}`, { params });
       set({ posts: data.posts ?? [], listLoading: false, hasMore: false });
     } catch (err) {
       set({ listLoading: false, listError: err.message });

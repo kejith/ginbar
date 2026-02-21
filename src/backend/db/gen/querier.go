@@ -53,6 +53,7 @@ type Querier interface {
 	PostURLExists(ctx context.Context, url string) (bool, error)
 	RemoveTagFromPost(ctx context.Context, arg RemoveTagFromPostParams) error
 	Search(ctx context.Context, dollar_1 []string) ([]Post, error)
+	SearchByUser(ctx context.Context, arg SearchByUserParams) ([]Post, error)
 	UpdatePostFiles(ctx context.Context, arg UpdatePostFilesParams) error
 	UpdatePostHashes(ctx context.Context, arg UpdatePostHashesParams) error
 	UpdateUserEmail(ctx context.Context, arg UpdateUserEmailParams) error

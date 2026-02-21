@@ -79,6 +79,19 @@ func (s *Server) GetPosts(c fiber.Ctx) error {
 func (s *Server) Search(c fiber.Ctx) error {
 	query := c.Params("query")
 	tags := strings.Split(query, "%20")
+	username := c.Query("user")
+
+	if username != "" {
+		posts, err := s.store.SearchByUser(c.Context(), dbgen.SearchByUserParams{
+			Tags:     tags,
+			UserName: username,
+		})
+		if err != nil {
+			return err
+		}
+		return c.JSON(fiber.Map{"posts": posts})
+	}
+
 	posts, err := s.store.Search(c.Context(), tags)
 	if err != nil {
 		return err

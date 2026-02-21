@@ -1,14 +1,17 @@
 import { useEffect, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 import PostGrid from "../components/PostGrid.jsx";
 import usePostStore from "../stores/postStore.js";
 
 export default function Home() {
+  // postIdParam is only set when mounting directly via /post/:postId
+  // (shared link / bookmark). Within the running app we use replaceState so
+  // the component never unmounts and the grid keeps its scroll position.
+  const { postId: postIdParam } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const query = searchParams.get("q") || "";
   const tag = searchParams.get("tag") || "";
-  const postParam = searchParams.get("post");
-  const initialExpanded = postParam ? Number(postParam) : null;
+  const initialExpanded = postIdParam ? Number(postIdParam) : null;
 
   const [expandedId, setExpandedId] = useState(initialExpanded);
 
@@ -26,26 +29,36 @@ export default function Home() {
 
   function handlePostOpen(id) {
     setExpandedId(id);
-    setSearchParams(
-      (prev) => {
-        const next = new URLSearchParams(prev);
-        next.set("post", id);
-        return next;
-      },
-      { replace: true },
-    );
+    // Silently update the address bar without a React Router navigation so the
+    // grid component stays mounted and keeps its virtualised scroll state.
+    if (!query && !tag) {
+      window.history.replaceState(null, "", `/post/${id}`);
+    } else {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.set("post", id);
+          return next;
+        },
+        { replace: true },
+      );
+    }
   }
 
   function handlePostClose() {
     setExpandedId(null);
-    setSearchParams(
-      (prev) => {
-        const next = new URLSearchParams(prev);
-        next.delete("post");
-        return next;
-      },
-      { replace: true },
-    );
+    if (!query && !tag) {
+      window.history.replaceState(null, "", "/");
+    } else {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.delete("post");
+          return next;
+        },
+        { replace: true },
+      );
+    }
   }
 
   return (

@@ -194,7 +194,7 @@ export default function InlinePost({
   }
 
   function handleShare() {
-    const url = `${window.location.origin}/?post=${postId}`;
+    const url = `${window.location.origin}/post/${postId}`;
     navigator.clipboard.writeText(url).then(() => {
       setCopied(true);
       setTimeout(() => setCopied(false), 1500);
@@ -465,7 +465,7 @@ export default function InlinePost({
                     </a>
                   )}
                   <Link
-                    to={`/?post=${post.id}`}
+                    to={`/post/${post.id}`}
                     className="hover:text-(--color-text)"
                   >
                     permalink

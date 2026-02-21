@@ -6,9 +6,9 @@ import RequireAdmin from "./components/RequireAdmin.jsx";
 
 // Lazy-load every page so only the current route's JS is parsed on FCP
 const Home = lazy(() => import("./pages/Home.jsx"));
-const Post = lazy(() => import("./pages/Post.jsx"));
 const Login = lazy(() => import("./pages/Login.jsx"));
 const Profile = lazy(() => import("./pages/Profile.jsx"));
+const UserGrid = lazy(() => import("./pages/UserGrid.jsx"));
 const NotFound = lazy(() => import("./pages/NotFound.jsx"));
 const Admin = lazy(() => import("./pages/Admin.jsx"));
 
@@ -22,9 +22,12 @@ export default function App() {
       <Nav />
       <Routes>
         <Route path="/" element={<Home />} />
-        <Route path="/post/:id" element={<Post />} />
+        <Route path="/post/:postId" element={<Home />} />
         <Route path="/login" element={<Login />} />
         <Route path="/user/:name" element={<Profile />} />
+        <Route path="/user/:name/posts" element={<UserGrid />} />
+        <Route path="/user/:name/posts/:segment" element={<UserGrid />} />
+        <Route path="/user/:name/posts/:tags/:postId" element={<UserGrid />} />
         <Route
           path="/admin/*"
           element={

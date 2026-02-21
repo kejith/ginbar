@@ -1,5 +1,10 @@
-import { useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useRef, useState, useEffect } from "react";
+import {
+  Link,
+  useNavigate,
+  useSearchParams,
+  useLocation,
+} from "react-router-dom";
 import useAuthStore from "../stores/authStore.js";
 import UploadModal from "./UploadModal.jsx";
 import { isAdmin } from "../utils/roles.js";
@@ -10,11 +15,59 @@ export default function Nav() {
   const inputRef = useRef(null);
   const navigate = useNavigate();
   const [showUpload, setShowUpload] = useState(false);
+  const [searchParams] = useSearchParams();
+  const location = useLocation();
+
+  // Keep the search input in sync with the current URL.
+  useEffect(() => {
+    // Check if we're on a /user/:name[/:tags[/:postId]] route.
+    // /user/:name/posts[/:tags[/:postId]]
+    const userPostsMatch = location.pathname.match(
+      /^\/user\/([^/]+)\/posts(?:\/([^/]+?))?(?:\/\d+)?\/?$/,
+    );
+    const profileOnlyMatch =
+      !userPostsMatch && location.pathname.match(/^\/user\/([^/]+)\/?$/);
+
+    if (userPostsMatch) {
+      const uName = userPostsMatch[1];
+      const seg = userPostsMatch[2];
+      const tags = seg && !/^\d+$/.test(seg) ? seg : "";
+      if (inputRef.current)
+        inputRef.current.value = tags
+          ? `user:${uName} ${tags}`
+          : `user:${uName}`;
+    } else if (profileOnlyMatch) {
+      const uName = profileOnlyMatch[1];
+      if (inputRef.current) inputRef.current.value = `user:${uName}`;
+    } else {
+      const q = searchParams.get("q") || "";
+      if (inputRef.current) inputRef.current.value = q;
+    }
+  }, [location.pathname, searchParams]);
 
   function handleSearch(e) {
     e.preventDefault();
-    const q = inputRef.current?.value.trim();
-    if (q) navigate(`/?q=${encodeURIComponent(q)}`);
+    const raw = inputRef.current?.value.trim();
+    if (!raw) {
+      navigate("/");
+      return;
+    }
+    // Extract "user:name" token from anywhere in the input.
+    // Everything else is treated as tag keywords.
+    const userMatch = raw.match(/(?:^|\s)user:(\S+)/i);
+    const uName = userMatch ? userMatch[1] : null;
+    const tags = raw.replace(/(?:^|\s)user:\S+/gi, " ").trim();
+
+    if (uName) {
+      // Produce clean path: /user/:name/posts[/:tags]
+      navigate(
+        tags
+          ? `/user/${uName}/posts/${encodeURIComponent(tags)}`
+          : `/user/${uName}/posts`,
+      );
+    } else {
+      navigate(`/?q=${encodeURIComponent(tags)}`);
+    }
   }
 
   return (
@@ -32,7 +85,7 @@ export default function Nav() {
         <input
           ref={inputRef}
           type="search"
-          placeholder="search tags…"
+          placeholder="tags… or user:name…"
           className="h-8 w-full min-w-0 rounded bg-(--color-bg) px-3 text-sm text-(--color-text) placeholder:text-(--color-muted) outline-none ring-1 ring-(--color-border) focus:ring-(--color-accent)"
         />
         <button

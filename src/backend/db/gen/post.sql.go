@@ -694,6 +694,59 @@ func (q *Queries) Search(ctx context.Context, dollar_1 []string) ([]Post, error)
 	return items, nil
 }
 
+const searchByUser = `-- name: SearchByUser :many
+SELECT DISTINCT p.id, p.url, p.uploaded_filename, p.filename, p.thumbnail_filename, p.content_type, p.score, p.user_level, p.p_hash_0, p.p_hash_1, p.p_hash_2, p.p_hash_3, p.user_name, p.created_at, p.deleted_at, p.dirty, p.width, p.height
+FROM posts p
+JOIN post_tags pt ON pt.post_id = p.id
+JOIN tags t ON t.id = pt.tag_id
+WHERE t.name = ANY($1::text[]) AND p.user_name = $2 AND p.deleted_at IS NULL AND p.dirty = FALSE
+ORDER BY p.id DESC
+`
+
+type SearchByUserParams struct {
+	Tags     []string `json:"tags"`
+	UserName string   `json:"user_name"`
+}
+
+func (q *Queries) SearchByUser(ctx context.Context, arg SearchByUserParams) ([]Post, error) {
+	rows, err := q.db.Query(ctx, searchByUser, arg.Tags, arg.UserName)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Post{}
+	for rows.Next() {
+		var i Post
+		if err := rows.Scan(
+			&i.ID,
+			&i.Url,
+			&i.UploadedFilename,
+			&i.Filename,
+			&i.ThumbnailFilename,
+			&i.ContentType,
+			&i.Score,
+			&i.UserLevel,
+			&i.PHash0,
+			&i.PHash1,
+			&i.PHash2,
+			&i.PHash3,
+			&i.UserName,
+			&i.CreatedAt,
+			&i.DeletedAt,
+			&i.Dirty,
+			&i.Width,
+			&i.Height,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const updatePostFiles = `-- name: UpdatePostFiles :exec
 UPDATE posts
 SET filename = $1, thumbnail_filename = $2
