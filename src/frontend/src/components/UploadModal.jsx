@@ -1,6 +1,8 @@
 import { useState, useRef } from "react";
 import { createPortal } from "react-dom";
 import usePostStore from "../stores/postStore.js";
+import useAuthStore from "../stores/authStore.js";
+import { isAdmin } from "../utils/roles.js";
 
 const TABS = [
   { id: "url", label: "From URL" },
@@ -43,9 +45,14 @@ export default function UploadModal({ onClose }) {
   const [prProgress, setPrProgress] = useState(null);
   const [prError, setPrError] = useState(null);
 
+  const user = useAuthStore((s) => s.user);
+  const admin = isAdmin(user);
+
   const createPost = usePostStore((s) => s.createPost);
   const uploadPost = usePostStore((s) => s.uploadPost);
   const importFromPr0gramm = usePostStore((s) => s.importFromPr0gramm);
+
+  const visibleTabs = admin ? TABS : TABS.filter((t) => t.id !== "pr0gramm");
 
   // ── url / file submit ──────────────────────────────────────────────────────
   async function handleSubmit(e) {
@@ -168,7 +175,7 @@ export default function UploadModal({ onClose }) {
             className="mb-5 flex gap-1 rounded-lg p-1"
             style={{ background: "var(--color-bg)" }}
           >
-            {TABS.map((t) => (
+            {visibleTabs.map((t) => (
               <button
                 key={t.id}
                 onClick={() => {
