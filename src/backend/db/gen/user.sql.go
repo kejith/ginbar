@@ -11,6 +11,19 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countUsers = `-- name: CountUsers :one
+SELECT COUNT(*)::int AS count
+FROM users
+WHERE deleted_at IS NULL
+`
+
+func (q *Queries) CountUsers(ctx context.Context) (int32, error) {
+	row := q.db.QueryRow(ctx, countUsers)
+	var count int32
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createUser = `-- name: CreateUser :one
 INSERT INTO users (name, email, password)
 VALUES ($1, $2, $3)
@@ -47,6 +60,47 @@ WHERE id = $1
 func (q *Queries) DeleteUser(ctx context.Context, id int32) error {
 	_, err := q.db.Exec(ctx, deleteUser, id)
 	return err
+}
+
+const getAllUsersAdmin = `-- name: GetAllUsersAdmin :many
+SELECT id, name, email, level, created_at
+FROM users
+WHERE deleted_at IS NULL
+ORDER BY id
+`
+
+type GetAllUsersAdminRow struct {
+	ID        int32              `json:"id"`
+	Name      string             `json:"name"`
+	Email     string             `json:"email"`
+	Level     int32              `json:"level"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+func (q *Queries) GetAllUsersAdmin(ctx context.Context) ([]GetAllUsersAdminRow, error) {
+	rows, err := q.db.Query(ctx, getAllUsersAdmin)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GetAllUsersAdminRow{}
+	for rows.Next() {
+		var i GetAllUsersAdminRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Email,
+			&i.Level,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getUser = `-- name: GetUser :one
@@ -148,4 +202,31 @@ type UpdateUserEmailParams struct {
 func (q *Queries) UpdateUserEmail(ctx context.Context, arg UpdateUserEmailParams) error {
 	_, err := q.db.Exec(ctx, updateUserEmail, arg.Email, arg.ID)
 	return err
+}
+
+const updateUserLevel = `-- name: UpdateUserLevel :one
+UPDATE users
+SET level = $1
+WHERE id = $2 AND deleted_at IS NULL
+RETURNING id, name, email, password, level, created_at, deleted_at
+`
+
+type UpdateUserLevelParams struct {
+	Level int32 `json:"level"`
+	ID    int32 `json:"id"`
+}
+
+func (q *Queries) UpdateUserLevel(ctx context.Context, arg UpdateUserLevelParams) (User, error) {
+	row := q.db.QueryRow(ctx, updateUserLevel, arg.Level, arg.ID)
+	var i User
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Email,
+		&i.Password,
+		&i.Level,
+		&i.CreatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
 }

@@ -10,6 +10,11 @@ import (
 
 type Querier interface {
 	AddTagToPost(ctx context.Context, arg AddTagToPostParams) (PostTag, error)
+	CountComments(ctx context.Context) (int32, error)
+	CountDirtyPosts(ctx context.Context) (int32, error)
+	CountPosts(ctx context.Context) (int32, error)
+	CountTags(ctx context.Context) (int32, error)
+	CountUsers(ctx context.Context) (int32, error)
 	CreateComment(ctx context.Context, arg CreateCommentParams) (Comment, error)
 	CreatePost(ctx context.Context, arg CreatePostParams) (Post, error)
 	CreateTag(ctx context.Context, name string) (Tag, error)
@@ -22,6 +27,7 @@ type Querier interface {
 	DeleteTag(ctx context.Context, id int32) error
 	DeleteTagByName(ctx context.Context, name string) error
 	DeleteUser(ctx context.Context, id int32) error
+	GetAllUsersAdmin(ctx context.Context) ([]GetAllUsersAdminRow, error)
 	GetComment(ctx context.Context, id int32) (Comment, error)
 	GetComments(ctx context.Context) ([]Comment, error)
 	GetCommentsByPost(ctx context.Context, postID int32) ([]Comment, error)
@@ -29,6 +35,7 @@ type Querier interface {
 	GetOlderPosts(ctx context.Context, arg GetOlderPostsParams) ([]Post, error)
 	GetPossibleDuplicatePosts(ctx context.Context, arg GetPossibleDuplicatePostsParams) ([]GetPossibleDuplicatePostsRow, error)
 	GetPost(ctx context.Context, arg GetPostParams) (Post, error)
+	GetPostAdmin(ctx context.Context, id int32) (Post, error)
 	GetPostTag(ctx context.Context, id int32) (PostTag, error)
 	GetPosts(ctx context.Context, arg GetPostsParams) ([]Post, error)
 	GetPostsByUser(ctx context.Context, arg GetPostsByUserParams) ([]Post, error)
@@ -49,6 +56,7 @@ type Querier interface {
 	UpdatePostFiles(ctx context.Context, arg UpdatePostFilesParams) error
 	UpdatePostHashes(ctx context.Context, arg UpdatePostHashesParams) error
 	UpdateUserEmail(ctx context.Context, arg UpdateUserEmailParams) error
+	UpdateUserLevel(ctx context.Context, arg UpdateUserLevelParams) (User, error)
 	UpsertCommentVote(ctx context.Context, arg UpsertCommentVoteParams) error
 	UpsertPostTagVote(ctx context.Context, arg UpsertPostTagVoteParams) error
 	UpsertPostVote(ctx context.Context, arg UpsertPostVoteParams) error

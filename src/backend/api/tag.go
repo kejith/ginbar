@@ -21,6 +21,15 @@ type postTagVoteForm struct {
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
+// GetTags returns all tags (used by the admin panel tag browser).
+func (s *Server) GetTags(c fiber.Ctx) error {
+	tags, err := s.store.GetTags(c.Context())
+	if err != nil {
+		return err
+	}
+	return c.JSON(fiber.Map{"tags": tags})
+}
+
 func (s *Server) CreatePostTag(c fiber.Ctx) error {
 	form := new(createPostTagForm)
 	if err := c.Bind().Body(form); err != nil {

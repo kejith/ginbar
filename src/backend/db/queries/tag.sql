@@ -18,3 +18,7 @@ DELETE FROM tags WHERE id = $1;
 
 -- name: DeleteTagByName :exec
 DELETE FROM tags WHERE name = $1;
+
+-- name: CountTags :one
+SELECT COUNT(*)::int AS count
+FROM tags;

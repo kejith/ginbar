@@ -3,12 +3,15 @@ import { useNavigate } from "react-router-dom";
 /**
  * TagChip — clickable tag that navigates to /?q=name.
  * Optionally shows a vote widget if onVote is provided.
+ * Optionally shows a delete button if onDelete is provided (admin only).
  *
  * Props:
- *   tag     { id, name, score, vote }
- *   onVote  fn(tagId, voteState)  optional
+ *   tag       { id, name, score, vote }
+ *   onVote    fn(tagId, voteState)  optional
+ *   onDelete  fn(tagId)             optional — admin only
+ *   deleting  bool                  disables delete button while in flight
  */
-export default function TagChip({ tag, onVote }) {
+export default function TagChip({ tag, onVote, onDelete, deleting }) {
   const navigate = useNavigate();
   const name = typeof tag.name === "object" ? tag.name.String : tag.name;
 
@@ -39,6 +42,16 @@ export default function TagChip({ tag, onVote }) {
             −
           </button>
         </span>
+      )}
+      {onDelete && (
+        <button
+          disabled={deleting}
+          onClick={() => onDelete(tag.id)}
+          className="text-red-500 hover:text-red-400 disabled:opacity-40 text-[10px] leading-none"
+          title="delete tag"
+        >
+          ×
+        </button>
       )}
     </span>
   );

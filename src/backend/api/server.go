@@ -124,7 +124,8 @@ func NewServer(store *db.Store, rdb *redis.Client, sessionSecret string, log *sl
 	post.Post("/vote", srv.VotePost)
 	post.Post("/create", srv.CreatePost)
 	post.Post("/upload", srv.UploadPost)
-	post.Post("/import/pr0gramm", srv.ImportFromPr0gramm)
+	// Import is restricted to admins.
+	post.Post("/import/pr0gramm", srv.requireAdmin, srv.ImportFromPr0gramm)
 
 	// Comments
 	comment := api.Group("/comment")
@@ -133,8 +134,20 @@ func NewServer(store *db.Store, rdb *redis.Client, sessionSecret string, log *sl
 
 	// Tags
 	tag := api.Group("/tag")
+	tag.Get("/", srv.GetTags)
 	tag.Post("/create", srv.CreatePostTag)
 	tag.Post("/vote", srv.VotePostTag)
+
+	// ── Admin routes (all require level >= LevelAdmin) ────────────────────────
+	admin := api.Group("/admin", srv.requireAdmin)
+	admin.Get("/stats", srv.GetAdminStats)
+	admin.Get("/users", srv.ListUsers)
+	admin.Get("/comments", srv.AdminListComments)
+	admin.Patch("/users/:id/level", srv.AdminUpdateUserLevel)
+	admin.Delete("/users/:id", srv.AdminDeleteUser)
+	admin.Delete("/posts/:id", srv.AdminDeletePost)
+	admin.Delete("/comments/:id", srv.AdminDeleteComment)
+	admin.Delete("/tags/:id", srv.AdminDeleteTag)
 
 	// Static — SPA fallback (frontend served separately in dev via Vite proxy)
 	app.Use("/", static.New("./public", static.Config{Browse: false}))

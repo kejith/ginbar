@@ -83,6 +83,19 @@ UPDATE posts
 SET deleted_at = NOW()
 WHERE id = $1;
 
+-- name: CountPosts :one
+SELECT COUNT(*)::int AS count
+FROM posts
+WHERE deleted_at IS NULL AND dirty = FALSE;
+
+-- name: CountDirtyPosts :one
+SELECT COUNT(*)::int AS count
+FROM posts
+WHERE deleted_at IS NULL AND dirty = TRUE;
+
+-- name: GetPostAdmin :one
+SELECT * FROM posts WHERE id = $1 AND deleted_at IS NULL;
+
 -- name: PostURLExists :one
 SELECT EXISTS(
     SELECT 1 FROM posts WHERE url = $1 AND deleted_at IS NULL

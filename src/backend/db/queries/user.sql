@@ -28,3 +28,20 @@ WHERE id = $2;
 UPDATE users
 SET deleted_at = NOW()
 WHERE id = $1;
+
+-- name: CountUsers :one
+SELECT COUNT(*)::int AS count
+FROM users
+WHERE deleted_at IS NULL;
+
+-- name: GetAllUsersAdmin :many
+SELECT id, name, email, level, created_at
+FROM users
+WHERE deleted_at IS NULL
+ORDER BY id;
+
+-- name: UpdateUserLevel :one
+UPDATE users
+SET level = $1
+WHERE id = $2 AND deleted_at IS NULL
+RETURNING *;

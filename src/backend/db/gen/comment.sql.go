@@ -11,6 +11,19 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const countComments = `-- name: CountComments :one
+SELECT COUNT(*)::int AS count
+FROM comments
+WHERE deleted_at IS NULL
+`
+
+func (q *Queries) CountComments(ctx context.Context) (int32, error) {
+	row := q.db.QueryRow(ctx, countComments)
+	var count int32
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createComment = `-- name: CreateComment :one
 INSERT INTO comments (content, user_name, post_id)
 VALUES ($1, $2, $3)

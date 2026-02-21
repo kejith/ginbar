@@ -60,6 +60,15 @@ func main() {
 
 	// ── Store + server ────────────────────────────────────────────────────────
 	store := db.NewStore(pool)
+
+	// Ensure the default admin user exists (creates it if absent, promotes if
+	// level was downgraded).  This is idempotent and runs after every startup.
+	adminPassword := getenv("ADMIN_PASSWORD", "admin")
+	if seedErr := store.EnsureAdminUser(initCtx, adminPassword, log); seedErr != nil {
+		log.Error("failed to seed admin user", "err", seedErr)
+		// Non-fatal: the application still runs without admin seeding.
+	}
+
 	srv := api.NewServer(store, rdb, sessionSecret, log)
 
 	// ── Flush worker ──────────────────────────────────────────────────────────

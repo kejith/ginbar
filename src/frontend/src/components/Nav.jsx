@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import useAuthStore from "../stores/authStore.js";
 import UploadModal from "./UploadModal.jsx";
+import { isAdmin } from "../utils/roles.js";
 
 export default function Nav() {
   const user = useAuthStore((s) => s.user);
@@ -53,6 +54,15 @@ export default function Nav() {
             >
               + post
             </button>
+            {isAdmin(user) && (
+              <Link
+                to="/admin"
+                className="rounded bg-amber-600 px-2.5 py-1 text-xs font-semibold text-white"
+                title="Admin panel"
+              >
+                admin
+              </Link>
+            )}
             <Link
               to={`/user/${user.name}`}
               className="text-(--color-text) hover:text-(--color-accent)"

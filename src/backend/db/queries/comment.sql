@@ -25,6 +25,11 @@ UPDATE comments
 SET deleted_at = NOW()
 WHERE id = $1;
 
+-- name: CountComments :one
+SELECT COUNT(*)::int AS count
+FROM comments
+WHERE deleted_at IS NULL;
+
 -- name: GetVotedComments :many
 SELECT c.*, COALESCE(cv.vote, 0)::smallint AS vote
 FROM comments c

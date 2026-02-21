@@ -9,6 +9,18 @@ import (
 	"context"
 )
 
+const countTags = `-- name: CountTags :one
+SELECT COUNT(*)::int AS count
+FROM tags
+`
+
+func (q *Queries) CountTags(ctx context.Context) (int32, error) {
+	row := q.db.QueryRow(ctx, countTags)
+	var count int32
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createTag = `-- name: CreateTag :one
 INSERT INTO tags (name)
 VALUES ($1)

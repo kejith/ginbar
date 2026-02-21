@@ -8,8 +8,10 @@ import useCommentStore from "../stores/commentStore.js";
  * Props:
  *   comment   comment object (Comment or GetVotedCommentsRow)
  *   postId    number   needed so the store can find the right list
+ *   onDelete  fn()     optional — shown only for admins
+ *   deleting  bool     disables button while in flight
  */
-export default function CommentItem({ comment, postId }) {
+export default function CommentItem({ comment, postId, onDelete, deleting }) {
   const user = useAuthStore((s) => s.user);
   const voteComment = useCommentStore((s) => s.voteComment);
 
@@ -40,6 +42,16 @@ export default function CommentItem({ comment, postId }) {
           {comment.content}
         </p>
       </div>
+      {onDelete && (
+        <button
+          disabled={deleting}
+          onClick={onDelete}
+          className="self-start mt-1 shrink-0 rounded bg-red-700 px-2 py-0.5 text-xs text-white disabled:opacity-50"
+          title="delete comment"
+        >
+          {deleting ? "…" : "del"}
+        </button>
+      )}
     </div>
   );
 }
