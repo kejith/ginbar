@@ -154,35 +154,79 @@ const usePostStore = create((set, get) => ({
   },
 
   // ── importFromPr0gramm ────────────────────────────────────────────────────
-  // Walks pr0gramm pages one-by-one, calling onProgress after each page.
-  //   params   = { tags: string, flags: number, maxPages: number }
-  //   onProgress({ page, totalRead, imported, skipped, done: bool })
+  // Streams the multi-phase pr0gramm import over SSE.
+  //
+  //   params     = { tags: string, flags: number, maxPages: number }
+  //   onProgress = (event) => void
+  //     event shapes (keyed by `phase`):
+  //       { phase: 'fetching',    page, max_pages, total_read, at_end }
+  //       { phase: 'inserted',    total, skipped_dedup }
+  //       { phase: 'processing',  total, processed, imported, failed }
+  //       { phase: 'done',        total, imported, failed }
+  //       { phase: 'error',       message }
+  //
+  // Resolves with the final `done` event when the stream closes.
+  // Rejects with an Error on network failure or if an `error` SSE event arrives.
   importFromPr0gramm: async ({ tags, flags = 1, maxPages = 5 }, onProgress) => {
-    let older = 0;
-    let totalRead = 0;
-    let imported = 0;
-    let skipped = 0;
+    const resp = await fetch("/api/post/import/pr0gramm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ tags, flags, maxPages }),
+    });
 
-    for (let page = 0; page < maxPages; page++) {
-      const { data } = await api.post("/post/import/pr0gramm", {
-        tags,
-        flags,
-        older,
-      });
-
-      totalRead += data.read ?? 0;
-      imported += data.counts?.imported ?? 0;
-      skipped += data.counts?.skipped ?? 0;
-      older = data.next_older ?? 0;
-
-      const done =
-        data.at_end || page + 1 >= maxPages || (data.read ?? 0) === 0;
-      onProgress?.({ page: page + 1, totalRead, imported, skipped, done });
-
-      if (done) break;
+    if (!resp.ok) {
+      let msg = `HTTP ${resp.status}`;
+      try {
+        const body = await resp.json();
+        msg = body.error ?? body.message ?? msg;
+      } catch (_) {}
+      throw new Error(msg);
     }
 
-    return { totalRead, imported, skipped };
+    // Parse the SSE stream line-by-line.
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf = "";
+    let finalEvent = null;
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+
+      buf += decoder.decode(value, { stream: true });
+
+      // SSE events are separated by double newlines.
+      const parts = buf.split("\n\n");
+      // Keep the last (possibly incomplete) chunk in buf.
+      buf = parts.pop() ?? "";
+
+      for (const part of parts) {
+        const dataLine = part.split("\n").find((l) => l.startsWith("data: "));
+        if (!dataLine) continue;
+
+        let event;
+        try {
+          event = JSON.parse(dataLine.slice(6)); // strip "data: "
+        } catch (_) {
+          continue;
+        }
+
+        onProgress?.(event);
+
+        if (event.phase === "error") {
+          throw new Error(event.message ?? "Import failed");
+        }
+        if (event.phase === "done") {
+          finalEvent = event;
+        }
+      }
+    }
+
+    // After stream closes, refresh the post list.
+    await get().fetchPosts({ reset: true });
+
+    return finalEvent ?? { imported: 0, failed: 0, total: 0 };
   },
 
   clearListError: () => set({ listError: null }),

@@ -35,7 +35,12 @@ export default function UploadModal({ onClose }) {
   const [prTags, setPrTags] = useState("");
   const [prFlags, setPrFlags] = useState(1);
   const [prMaxPages, setPrMaxPages] = useState(5);
-  const [prProgress, setPrProgress] = useState(null); // null | { page, totalRead, imported, skipped, done }
+  // prProgress holds the latest SSE event — shape varies by `phase`:
+  //   { phase:'fetching',    page, max_pages, total_read, at_end }
+  //   { phase:'inserted',    total, skipped_dedup }
+  //   { phase:'processing',  total, processed, imported, failed }
+  //   { phase:'done',        total, imported, failed }
+  const [prProgress, setPrProgress] = useState(null);
   const [prError, setPrError] = useState(null);
 
   const createPost = usePostStore((s) => s.createPost);
@@ -73,21 +78,21 @@ export default function UploadModal({ onClose }) {
     }
     setPrError(null);
     setPrProgress({
+      phase: "fetching",
       page: 0,
-      totalRead: 0,
-      imported: 0,
-      skipped: 0,
-      done: false,
+      max_pages: prMaxPages,
+      total_read: 0,
     });
 
     try {
       await importFromPr0gramm(
         { tags: prTags.trim(), flags: prFlags, maxPages: prMaxPages },
-        (progress) => setPrProgress(progress),
+        (event) => setPrProgress(event),
       );
     } catch (err) {
       setPrError(err.message ?? "Import failed");
-      setPrProgress((p) => (p ? { ...p, done: true } : p));
+      // Mark as done so user can reset
+      setPrProgress((p) => (p ? { ...p, phase: "done" } : p));
     }
   }
 
@@ -98,8 +103,39 @@ export default function UploadModal({ onClose }) {
     onClose();
   }
 
-  const isImporting = prProgress !== null && !prProgress.done;
-  const pct = prProgress ? Math.round((prProgress.page / prMaxPages) * 100) : 0;
+  const isImporting =
+    prProgress !== null && prProgress.phase !== "done" && !prError;
+
+  // Phase 1: fetching JSON pages
+  const isFetchingPhase =
+    prProgress?.phase === "fetching" || prProgress?.phase === "inserted";
+  const fetchPct = prProgress
+    ? Math.min(
+        100,
+        Math.round(
+          ((prProgress.page ?? prProgress.max_pages ?? prMaxPages) /
+            (prProgress.max_pages ?? prMaxPages)) *
+            100,
+        ),
+      )
+    : 0;
+
+  // Phase 2: processing posts
+  const isProcessingPhase =
+    prProgress?.phase === "processing" || prProgress?.phase === "done";
+  const processPct =
+    prProgress?.total > 0
+      ? Math.min(
+          100,
+          Math.round(
+            ((prProgress.processed ?? prProgress.total ?? 0) /
+              prProgress.total) *
+              100,
+          ),
+        )
+      : prProgress?.phase === "done"
+        ? 100
+        : 0;
 
   return createPortal(
     <div className="fixed inset-0 z-[100] overflow-y-auto bg-black/60 backdrop-blur-sm">
@@ -295,50 +331,103 @@ export default function UploadModal({ onClose }) {
                 </div>
               </div>
 
-              {/* Progress section — shown after first page is requested */}
+              {/* Progress section — shown once import starts */}
               {prProgress !== null && (
                 <div
-                  className="flex flex-col gap-2 rounded-lg p-3"
+                  className="flex flex-col gap-3 rounded-lg p-3"
                   style={{ background: "var(--color-bg)" }}
                 >
-                  {/* Bar track */}
-                  <div
-                    className="h-2 w-full overflow-hidden rounded-full"
-                    style={{ background: "var(--color-border)" }}
-                  >
+                  {/* ── Phase 1: fetching pages ───────────────────────────── */}
+                  <div className="flex flex-col gap-1">
+                    <div className="flex justify-between text-xs text-(--color-muted)">
+                      <span className="font-medium">
+                        Phase 1 — Fetching pages
+                      </span>
+                      <span>
+                        {prProgress.page ?? prProgress.max_pages ?? prMaxPages}{" "}
+                        / {prProgress.max_pages ?? prMaxPages}
+                      </span>
+                    </div>
                     <div
-                      className="h-full rounded-full transition-all duration-500 ease-out"
-                      style={{
-                        width: `${prProgress.done ? 100 : pct}%`,
-                        background: prError
-                          ? "#f87171"
-                          : prProgress.done
-                            ? "#4ade80"
-                            : "var(--color-accent)",
-                      }}
-                    />
+                      className="h-1.5 w-full overflow-hidden rounded-full"
+                      style={{ background: "var(--color-border)" }}
+                    >
+                      <div
+                        className="h-full rounded-full transition-all duration-300 ease-out"
+                        style={{
+                          width: `${
+                            isProcessingPhase || prProgress.phase === "done"
+                              ? 100
+                              : fetchPct
+                          }%`,
+                          background:
+                            isProcessingPhase || prProgress.phase === "done"
+                              ? "#4ade80"
+                              : prError
+                                ? "#f87171"
+                                : "var(--color-accent)",
+                        }}
+                      />
+                    </div>
+                    {isFetchingPhase && (
+                      <span className="text-xs text-(--color-muted)">
+                        {prProgress.total_read ?? 0} items read
+                      </span>
+                    )}
+                    {prProgress.phase === "inserted" && (
+                      <span
+                        className="text-xs"
+                        style={{ color: "var(--color-accent)" }}
+                      >
+                        {prProgress.total} new posts registered
+                        {prProgress.skipped_dedup > 0
+                          ? `, ${prProgress.skipped_dedup} already exist`
+                          : ""}
+                      </span>
+                    )}
                   </div>
 
-                  {/* Stats row */}
-                  <div className="flex justify-between text-xs text-(--color-muted)">
-                    <span>
-                      Page {prProgress.page} / {prMaxPages}
-                    </span>
-                    <span>{prProgress.totalRead} read</span>
-                  </div>
-
-                  {/* Imported / skipped counters */}
-                  <div className="flex gap-4 text-sm">
-                    <span style={{ color: "var(--color-accent)" }}>
-                      ✓ {prProgress.imported} imported
-                    </span>
-                    <span className="text-(--color-muted)">
-                      ↷ {prProgress.skipped} skipped
-                    </span>
-                  </div>
+                  {/* ── Phase 2: processing images ────────────────────────── */}
+                  {isProcessingPhase && (
+                    <div className="flex flex-col gap-1">
+                      <div className="flex justify-between text-xs text-(--color-muted)">
+                        <span className="font-medium">
+                          Phase 2 — Downloading &amp; processing
+                        </span>
+                        <span>
+                          {prProgress.processed ?? prProgress.total ?? 0} /{" "}
+                          {prProgress.total ?? 0}
+                        </span>
+                      </div>
+                      <div
+                        className="h-1.5 w-full overflow-hidden rounded-full"
+                        style={{ background: "var(--color-border)" }}
+                      >
+                        <div
+                          className="h-full rounded-full transition-all duration-300 ease-out"
+                          style={{
+                            width: `${processPct}%`,
+                            background: prError
+                              ? "#f87171"
+                              : prProgress.phase === "done"
+                                ? "#4ade80"
+                                : "var(--color-accent)",
+                          }}
+                        />
+                      </div>
+                      <div className="flex gap-4 text-sm">
+                        <span style={{ color: "var(--color-accent)" }}>
+                          ✓ {prProgress.imported ?? 0} imported
+                        </span>
+                        <span className="text-(--color-muted)">
+                          ✗ {prProgress.failed ?? 0} failed
+                        </span>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Done message */}
-                  {prProgress.done && !prError && (
+                  {prProgress.phase === "done" && !prError && (
                     <p
                       className="text-xs font-medium"
                       style={{ color: "#4ade80" }}
@@ -363,18 +452,22 @@ export default function UploadModal({ onClose }) {
               <div className="flex gap-2">
                 <button
                   type="submit"
-                  disabled={isImporting || prProgress?.done}
+                  disabled={isImporting || prProgress?.phase === "done"}
                   className="flex-1 rounded-lg py-2 text-sm font-semibold disabled:opacity-50"
                   style={{ background: "var(--color-accent)", color: "#fff" }}
                 >
                   {isImporting
-                    ? `Importing… (page ${prProgress.page})`
-                    : prProgress?.done
+                    ? prProgress?.phase === "fetching"
+                      ? `Fetching page ${prProgress.page}…`
+                      : prProgress?.phase === "inserted"
+                        ? `Starting downloads…`
+                        : `Processing… (${prProgress?.processed ?? 0}/${prProgress?.total ?? 0})`
+                    : prProgress?.phase === "done"
                       ? "Done"
                       : "Start import"}
                 </button>
 
-                {prProgress?.done && (
+                {prProgress?.phase === "done" && (
                   <button
                     type="button"
                     onClick={() => {

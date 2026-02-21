@@ -89,7 +89,7 @@ func (q *Queries) DeletePost(ctx context.Context, id int32) error {
 const getNewerPosts = `-- name: GetNewerPosts :many
 SELECT id, url, uploaded_filename, filename, thumbnail_filename, content_type, score, user_level, p_hash_0, p_hash_1, p_hash_2, p_hash_3, user_name, created_at, deleted_at
 FROM posts
-WHERE deleted_at IS NULL AND id > $1 AND user_level <= $2
+WHERE deleted_at IS NULL AND dirty = FALSE AND id > $1 AND user_level <= $2
 ORDER BY id
 LIMIT $3
 `
@@ -139,7 +139,7 @@ func (q *Queries) GetNewerPosts(ctx context.Context, arg GetNewerPostsParams) ([
 const getOlderPosts = `-- name: GetOlderPosts :many
 SELECT id, url, uploaded_filename, filename, thumbnail_filename, content_type, score, user_level, p_hash_0, p_hash_1, p_hash_2, p_hash_3, user_name, created_at, deleted_at
 FROM posts
-WHERE deleted_at IS NULL AND id < $1 AND user_level <= $2
+WHERE deleted_at IS NULL AND dirty = FALSE AND id < $1 AND user_level <= $2
 ORDER BY id DESC
 LIMIT $3
 `
@@ -273,7 +273,7 @@ func (q *Queries) GetPossibleDuplicatePosts(ctx context.Context, arg GetPossible
 const getPost = `-- name: GetPost :one
 SELECT id, url, uploaded_filename, filename, thumbnail_filename, content_type, score, user_level, p_hash_0, p_hash_1, p_hash_2, p_hash_3, user_name, created_at, deleted_at
 FROM posts
-WHERE id = $1 AND deleted_at IS NULL AND user_level <= $2
+WHERE id = $1 AND deleted_at IS NULL AND dirty = FALSE AND user_level <= $2
 `
 
 type GetPostParams struct {
@@ -307,7 +307,7 @@ func (q *Queries) GetPost(ctx context.Context, arg GetPostParams) (Post, error) 
 const getPosts = `-- name: GetPosts :many
 SELECT id, url, uploaded_filename, filename, thumbnail_filename, content_type, score, user_level, p_hash_0, p_hash_1, p_hash_2, p_hash_3, user_name, created_at, deleted_at
 FROM posts
-WHERE deleted_at IS NULL AND user_level <= $1
+WHERE deleted_at IS NULL AND dirty = FALSE AND user_level <= $1
 ORDER BY id DESC
 LIMIT $2 OFFSET $3
 `
@@ -357,7 +357,7 @@ func (q *Queries) GetPosts(ctx context.Context, arg GetPostsParams) ([]Post, err
 const getPostsByUser = `-- name: GetPostsByUser :many
 SELECT id, url, uploaded_filename, filename, thumbnail_filename, content_type, score, user_level, p_hash_0, p_hash_1, p_hash_2, p_hash_3, user_name, created_at, deleted_at
 FROM posts
-WHERE user_name = $1 AND deleted_at IS NULL AND user_level <= $2
+WHERE user_name = $1 AND deleted_at IS NULL AND dirty = FALSE AND user_level <= $2
 ORDER BY id DESC
 `
 
@@ -406,7 +406,7 @@ const getVotedPost = `-- name: GetVotedPost :one
 SELECT p.id, p.url, p.uploaded_filename, p.filename, p.thumbnail_filename, p.content_type, p.score, p.user_level, p.p_hash_0, p.p_hash_1, p.p_hash_2, p.p_hash_3, p.user_name, p.created_at, p.deleted_at, COALESCE(pv.vote, 0)::smallint AS vote
 FROM posts p
 LEFT JOIN post_votes pv ON pv.post_id = p.id AND pv.user_id = $1
-WHERE p.deleted_at IS NULL AND p.id = $2 AND p.user_level <= $3
+WHERE p.deleted_at IS NULL AND p.dirty = FALSE AND p.id = $2 AND p.user_level <= $3
 `
 
 type GetVotedPostParams struct {
@@ -462,7 +462,7 @@ const getVotedPosts = `-- name: GetVotedPosts :many
 SELECT p.id, p.url, p.uploaded_filename, p.filename, p.thumbnail_filename, p.content_type, p.score, p.user_level, p.p_hash_0, p.p_hash_1, p.p_hash_2, p.p_hash_3, p.user_name, p.created_at, p.deleted_at, COALESCE(pv.vote, 0)::smallint AS vote
 FROM posts p
 LEFT JOIN post_votes pv ON pv.post_id = p.id AND pv.user_id = $1
-WHERE p.deleted_at IS NULL AND p.user_level <= $2
+WHERE p.deleted_at IS NULL AND p.dirty = FALSE AND p.user_level <= $2
 ORDER BY p.id DESC
 LIMIT $3 OFFSET $4
 `
@@ -553,7 +553,7 @@ SELECT DISTINCT p.id, p.url, p.uploaded_filename, p.filename, p.thumbnail_filena
 FROM posts p
 JOIN post_tags pt ON pt.post_id = p.id
 JOIN tags t ON t.id = pt.tag_id
-WHERE t.name = ANY($1::text[]) AND p.deleted_at IS NULL
+WHERE t.name = ANY($1::text[]) AND p.deleted_at IS NULL AND p.dirty = FALSE
 ORDER BY p.id DESC
 `
 

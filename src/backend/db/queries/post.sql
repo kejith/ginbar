@@ -1,34 +1,34 @@
 -- name: GetPosts :many
 SELECT *
 FROM posts
-WHERE deleted_at IS NULL AND user_level <= $1
+WHERE deleted_at IS NULL AND dirty = FALSE AND user_level <= $1
 ORDER BY id DESC
 LIMIT $2 OFFSET $3;
 
 -- name: GetOlderPosts :many
 SELECT *
 FROM posts
-WHERE deleted_at IS NULL AND id < $1 AND user_level <= $2
+WHERE deleted_at IS NULL AND dirty = FALSE AND id < $1 AND user_level <= $2
 ORDER BY id DESC
 LIMIT $3;
 
 -- name: GetNewerPosts :many
 SELECT *
 FROM posts
-WHERE deleted_at IS NULL AND id > $1 AND user_level <= $2
+WHERE deleted_at IS NULL AND dirty = FALSE AND id > $1 AND user_level <= $2
 ORDER BY id
 LIMIT $3;
 
 -- name: GetPost :one
 SELECT *
 FROM posts
-WHERE id = $1 AND deleted_at IS NULL AND user_level <= $2;
+WHERE id = $1 AND deleted_at IS NULL AND dirty = FALSE AND user_level <= $2;
 
 -- name: GetVotedPosts :many
 SELECT p.*, COALESCE(pv.vote, 0)::smallint AS vote
 FROM posts p
 LEFT JOIN post_votes pv ON pv.post_id = p.id AND pv.user_id = $1
-WHERE p.deleted_at IS NULL AND p.user_level <= $2
+WHERE p.deleted_at IS NULL AND p.dirty = FALSE AND p.user_level <= $2
 ORDER BY p.id DESC
 LIMIT $3 OFFSET $4;
 
@@ -36,20 +36,20 @@ LIMIT $3 OFFSET $4;
 SELECT p.*, COALESCE(pv.vote, 0)::smallint AS vote
 FROM posts p
 LEFT JOIN post_votes pv ON pv.post_id = p.id AND pv.user_id = $1
-WHERE p.deleted_at IS NULL AND p.id = $2 AND p.user_level <= $3;
+WHERE p.deleted_at IS NULL AND p.dirty = FALSE AND p.id = $2 AND p.user_level <= $3;
 
 -- name: Search :many
 SELECT DISTINCT p.*
 FROM posts p
 JOIN post_tags pt ON pt.post_id = p.id
 JOIN tags t ON t.id = pt.tag_id
-WHERE t.name = ANY($1::text[]) AND p.deleted_at IS NULL
+WHERE t.name = ANY($1::text[]) AND p.deleted_at IS NULL AND p.dirty = FALSE
 ORDER BY p.id DESC;
 
 -- name: GetPostsByUser :many
 SELECT *
 FROM posts
-WHERE user_name = $1 AND deleted_at IS NULL AND user_level <= $2
+WHERE user_name = $1 AND deleted_at IS NULL AND dirty = FALSE AND user_level <= $2
 ORDER BY id DESC;
 
 -- name: CreatePost :one

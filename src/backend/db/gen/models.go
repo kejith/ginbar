@@ -40,6 +40,7 @@ type Post struct {
 	UserName          string             `json:"user_name"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	DeletedAt         pgtype.Timestamptz `json:"deleted_at"`
+	Dirty             bool               `json:"dirty"`
 }
 
 type PostTag struct {

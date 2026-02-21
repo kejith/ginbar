@@ -1,18 +1,24 @@
 package api
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"ginbar/db"
+	"ginbar/utils"
 
 	"github.com/gofiber/fiber/v3"
 )
@@ -21,323 +27,569 @@ import (
 
 // These are vars (not consts) so tests can redirect them to a local mock server.
 var (
-	pr0grammAPIBase = "https://pr0gramm.com/api/items/get"
-	pr0grammImgBase = "https://img.pr0gramm.com/"
+pr0grammAPIBase = "https://pr0gramm.com/api/items/get"
+pr0grammImgBase = "https://img.pr0gramm.com/"
 )
 
 var pr0grammClient = &http.Client{
-	Timeout: 60 * time.Second,
+Timeout: 60 * time.Second,
 }
 
 type pr0grammItem struct {
-	ID       int64  `json:"id"`
-	Promoted int64  `json:"promoted"`
-	Image    string `json:"image"`
-	Thumb    string `json:"thumb"`
-	Fullsize string `json:"fullsize"`
-	Audio    bool   `json:"audio"`
-	Mark     int    `json:"mark"`
-	User     string `json:"user"`
+ID       int64  `json:"id"`
+Promoted int64  `json:"promoted"`
+Image    string `json:"image"`
+Thumb    string `json:"thumb"`
+Fullsize string `json:"fullsize"`
+Audio    bool   `json:"audio"`
+Mark     int    `json:"mark"`
+User     string `json:"user"`
 }
 
 type pr0grammResponse struct {
-	Items   []pr0grammItem `json:"items"`
-	AtEnd   bool           `json:"atEnd"`
-	AtStart bool           `json:"atStart"`
+Items   []pr0grammItem `json:"items"`
+AtEnd   bool           `json:"atEnd"`
+AtStart bool           `json:"atStart"`
 }
 
 // ── Import request form ───────────────────────────────────────────────────────
 
 type importPr0grammForm struct {
-	// tags is passed directly to the pr0gramm search API.
-	Tags string `json:"tags" form:"tags"`
-	// flags controls content filtering: 1=SFW, 2=NSFW, 4=NSFL (bitwise OR).
-	// Defaults to 1 (SFW only).
-	Flags int `json:"flags" form:"flags"`
-	// older is the pagination cursor — the minimum `promoted` value from the
-	// previous response. Set to 0 (or omit) for the first request.
-	Older int64 `json:"older" form:"older"`
+// Tags is passed directly to the pr0gramm search API.
+Tags string `json:"tags" form:"tags"`
+// Flags controls content filtering: 1=SFW, 2=NSFW, 4=NSFL (bitwise OR).
+Flags int `json:"flags" form:"flags"`
+// MaxPages caps the number of pr0gramm pages to fetch.  Defaults to 5.
+MaxPages int `json:"maxPages" form:"maxPages"`
 }
 
-// ── Import results ────────────────────────────────────────────────────────────
+// ── Import results (kept for test / legacy compatibility) ─────────────────────
 
 type pr0grammImportResult struct {
-	SourceID int64  `json:"source_id"`
-	PostID   int32  `json:"post_id"`
-	Image    string `json:"image"`
+SourceID int64  `json:"source_id"`
+PostID   int32  `json:"post_id"`
+Image    string `json:"image"`
 }
 
 type pr0grammImportError struct {
-	SourceID int64  `json:"source_id"`
-	Image    string `json:"image"`
-	Error    string `json:"error"`
+SourceID int64  `json:"source_id"`
+Image    string `json:"image"`
+Error    string `json:"error"`
+}
+
+// importConcurrency caps simultaneous download+process goroutines.
+// Must match the constant referenced in import_test.go.
+const importConcurrency = 16
+
+// ── SSE event shapes ──────────────────────────────────────────────────────────
+
+type ssePhase string
+
+const (
+phFetching   ssePhase = "fetching"
+phInserted   ssePhase = "inserted"
+phProcessing ssePhase = "processing"
+phDone       ssePhase = "done"
+phError      ssePhase = "error"
+)
+
+type sseFetchingEvent struct {
+Phase     ssePhase `json:"phase"`
+Page      int      `json:"page"`
+MaxPages  int      `json:"max_pages"`
+TotalRead int      `json:"total_read"`
+AtEnd     bool     `json:"at_end"`
+}
+
+type sseInsertedEvent struct {
+Phase        ssePhase `json:"phase"`
+Total        int      `json:"total"`
+SkippedDedup int      `json:"skipped_dedup"`
+}
+
+type sseProcessingEvent struct {
+Phase     ssePhase `json:"phase"`
+Total     int      `json:"total"`
+Processed int      `json:"processed"`
+Imported  int      `json:"imported"`
+Failed    int      `json:"failed"`
+}
+
+type sseDoneEvent struct {
+Phase    ssePhase `json:"phase"`
+Total    int      `json:"total"`
+Imported int      `json:"imported"`
+Failed   int      `json:"failed"`
+}
+
+type sseErrorEvent struct {
+Phase   ssePhase `json:"phase"`
+Message string   `json:"message"`
+}
+
+// ── SSE wire helper ───────────────────────────────────────────────────────────
+
+// writeSSE marshals v as a JSON SSE data frame and flushes immediately.
+func writeSSE(w *bufio.Writer, v any) {
+b, _ := json.Marshal(v)
+fmt.Fprintf(w, "data: %s\n\n", b)
+w.Flush()
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
 
-// ImportFromPr0gramm fetches ONE page of pr0gramm items and imports them.
+// ImportFromPr0gramm runs a multi-phase, SSE-streamed pr0gramm import.
 //
-//	POST /api/post/import/pr0gramm
-//	Content-Type: application/json
-//	Body: { "tags": "...", "flags": 1, "older": 0 }
+// Phases
+//  1. Fetch all JSON pages from pr0gramm (up to maxPages)  → "fetching" events per page.
+//  2. Batch-dedup; insert dirty placeholder rows           → one "inserted" event.
+//  3. Download + process each row concurrently             → "processing" event per item.
+//  4. Emit "done".
 //
-// The response includes `next_older` (cursor for the next call) and `at_end`
-// so the client can loop page by page while showing a progress bar.
+//POST /api/post/import/pr0gramm
+//Content-Type: application/json
+//Body: { "tags": "...", "flags": 1, "maxPages": 5 }
+//Response: text/event-stream  (SSE)
 func (s *Server) ImportFromPr0gramm(c fiber.Ctx) error {
-	u, err := s.sessionUser(c)
-	if err != nil || u == nil || u.ID == 0 {
-		return fiber.NewError(fiber.StatusUnauthorized, "not logged in")
-	}
-
-	form := new(importPr0grammForm)
-	if err := c.Bind().Body(form); err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, err.Error())
-	}
-
-	if strings.TrimSpace(form.Tags) == "" {
-		return fiber.NewError(fiber.StatusBadRequest, "tags field is required")
-	}
-
-	flags := form.Flags
-	if flags <= 0 {
-		flags = 1
-	}
-
-	ctx := context.Background()
-	importStart := time.Now()
-
-	// ── Phase 1: fetch page index from pr0gramm ───────────────────────────────
-	fetchStart := time.Now()
-	resp, err := fetchPr0grammPage(form.Tags, flags, form.Older)
-	if err != nil {
-		return fiber.NewError(fiber.StatusBadGateway, "pr0gramm API error: "+err.Error())
-	}
-	fetchDur := time.Since(fetchStart)
-	s.log.InfoContext(ctx, "pr0gramm page fetched",
-		slog.String("tags", form.Tags),
-		slog.Int("item_count", len(resp.Items)),
-		slog.Duration("fetch_dur", fetchDur),
-	)
-
-	// ── Phase 2: download + process each item concurrently ───────────────────
-	// importConcurrency caps how many items are downloaded + processed at once.
-	// High enough to hide per-item network latency; low enough to avoid
-	// saturating the CDN connection or the DB connection pool.
-	const importConcurrency = 16
-
-	results := make([]struct {
-		result     *pr0grammImportResult
-		skipReason string
-		item       pr0grammItem
-		dur        time.Duration
-	}, len(resp.Items))
-
-	sem := make(chan struct{}, importConcurrency)
-	var wg sync.WaitGroup
-
-	for i, item := range resp.Items {
-		wg.Add(1)
-		i, item := i, item // capture loop vars
-		sem <- struct{}{}  // acquire slot (blocks when all workers are busy)
-		go func() {
-			defer wg.Done()
-			defer func() { <-sem }() // release slot
-			start := time.Now()
-			res, reason := s.importPr0grammItem(ctx, item, u.Name)
-			results[i] = struct {
-				result     *pr0grammImportResult
-				skipReason string
-				item       pr0grammItem
-				dur        time.Duration
-			}{res, reason, item, time.Since(start)}
-		}()
-	}
-	wg.Wait()
-
-	var (
-		imported []pr0grammImportResult
-		skipped  []pr0grammImportError
-	)
-	for i, r := range results {
-		if r.skipReason != "" {
-			s.log.DebugContext(ctx, "pr0gramm item skipped",
-				slog.Int("index", i),
-				slog.Int64("source_id", r.item.ID),
-				slog.String("reason", r.skipReason),
-				slog.Duration("dur", r.dur),
-			)
-			skipped = append(skipped, pr0grammImportError{
-				SourceID: r.item.ID,
-				Image:    r.item.Image,
-				Error:    r.skipReason,
-			})
-			continue
-		}
-		s.log.DebugContext(ctx, "pr0gramm item imported",
-			slog.Int("index", i),
-			slog.Int64("source_id", r.item.ID),
-			slog.Duration("dur", r.dur),
-		)
-		imported = append(imported, *r.result)
-	}
-
-	totalDur := time.Since(importStart)
-	s.log.InfoContext(ctx, "pr0gramm import complete",
-		slog.Int("imported", len(imported)),
-		slog.Int("skipped", len(skipped)),
-		slog.Duration("total_dur", totalDur),
-	)
-
-	nextOlder := minPromoted(resp.Items)
-	atEnd := resp.AtEnd || len(resp.Items) == 0
-
-	return c.Status(fiber.StatusOK).JSON(fiber.Map{
-		"imported":   imported,
-		"skipped":    skipped,
-		"read":       len(resp.Items),
-		"at_end":     atEnd,
-		"next_older": nextOlder,
-		"counts": fiber.Map{
-			"imported": len(imported),
-			"skipped":  len(skipped),
-		},
-	})
+u, err := s.sessionUser(c)
+if err != nil || u == nil || u.ID == 0 {
+return fiber.NewError(fiber.StatusUnauthorized, "not logged in")
 }
 
-// importPr0grammItem downloads a single pr0gramm item and inserts it.
-// Returns (result, "") on success or (nil, reason) when skipped/failed.
+form := new(importPr0grammForm)
+if err := c.Bind().Body(form); err != nil {
+return fiber.NewError(fiber.StatusBadRequest, err.Error())
+}
+if strings.TrimSpace(form.Tags) == "" {
+return fiber.NewError(fiber.StatusBadRequest, "tags field is required")
+}
+
+flags := form.Flags
+if flags <= 0 {
+flags = 1
+}
+maxPages := form.MaxPages
+if maxPages <= 0 {
+maxPages = 5
+}
+if maxPages > 50 {
+maxPages = 50
+}
+
+tags := strings.TrimSpace(form.Tags)
+userName := u.Name
+
+// SSE headers must be set before SendStreamWriter.
+c.Set("Content-Type", "text/event-stream")
+c.Set("Cache-Control", "no-cache")
+c.Set("Connection", "keep-alive")
+c.Set("X-Accel-Buffering", "no")
+
+c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
+ctx := context.Background()
+
+s.log.InfoContext(ctx, "pr0gramm import started",
+slog.String("tags", tags),
+slog.Int("flags", flags),
+slog.Int("max_pages", maxPages),
+slog.String("user", userName),
+)
+
+// ── Phase 1: Fetch all pr0gramm JSON pages ────────────────────────────
+var allItems []pr0grammItem
+older := int64(0)
+
+for page := 1; page <= maxPages; page++ {
+resp, fetchErr := fetchPr0grammPage(tags, flags, older)
+if fetchErr != nil {
+s.log.ErrorContext(ctx, "pr0gramm page fetch failed",
+slog.Int("page", page), slog.Any("err", fetchErr))
+writeSSE(w, sseErrorEvent{
+Phase:   phError,
+Message: "pr0gramm API error: " + fetchErr.Error(),
+})
+return
+}
+
+allItems = append(allItems, resp.Items...)
+older = minPromoted(resp.Items)
+atEnd := resp.AtEnd || len(resp.Items) == 0
+
+writeSSE(w, sseFetchingEvent{
+Phase:     phFetching,
+Page:      page,
+MaxPages:  maxPages,
+TotalRead: len(allItems),
+AtEnd:     atEnd,
+})
+
+s.log.InfoContext(ctx, "pr0gramm page fetched",
+slog.Int("page", page),
+slog.Int("items_this_page", len(resp.Items)),
+slog.Int("total_so_far", len(allItems)),
+slog.Bool("api_at_end", resp.AtEnd),
+slog.Bool("at_end", atEnd),
+)
+
+if atEnd {
+s.log.InfoContext(ctx, "pr0gramm fetch stopped",
+slog.Int("page", page),
+slog.String("reason", func() string {
+if resp.AtEnd {
+return "pr0gramm API returned atEnd=true"
+}
+return "empty page"
+}()),
+)
+break
+}
+}
+
+// ── Phase 2: Filter, batch dedup, insert dirty rows ───────────────────
+type candidate struct {
+item     pr0grammItem
+imageURL string
+}
+
+// Drop non-image extensions immediately.
+var candidates []candidate
+for _, item := range allItems {
+if item.Image == "" {
+continue
+}
+ext := strings.ToLower(filepath.Ext(item.Image))
+switch ext {
+case ".jpg", ".jpeg", ".png", ".gif", ".webp":
+// supported
+default:
+continue
+}
+candidates = append(candidates, candidate{
+item:     item,
+imageURL: pr0grammImgBase + item.Image,
+})
+}
+
+allURLs := make([]string, len(candidates))
+for i, c := range candidates {
+allURLs[i] = c.imageURL
+}
+
+skippedDedup := 0
+var toProcess []candidate
+
+if s.store != nil {
+existing, dedupErr := s.store.FilterExistingURLs(ctx, allURLs)
+if dedupErr != nil {
+s.log.WarnContext(ctx, "batch URL dedup failed, proceeding without dedup",
+slog.Any("err", dedupErr))
+toProcess = candidates
+} else {
+for _, c := range candidates {
+if existing[c.imageURL] {
+skippedDedup++
+} else {
+toProcess = append(toProcess, c)
+}
+}
+}
+} else {
+toProcess = candidates
+}
+
+// Insert placeholder dirty rows (one per new URL).
+type dirtyEntry struct {
+postID   int32
+item     pr0grammItem
+imageURL string
+}
+
+var dirtyPosts []dirtyEntry
+for _, cand := range toProcess {
+if s.store == nil {
+break
+}
+post, insertErr := s.store.CreateDirtyPost(ctx, cand.imageURL, userName)
+if insertErr != nil {
+s.log.WarnContext(ctx, "failed to insert dirty post",
+slog.String("url", cand.imageURL),
+slog.Any("err", insertErr))
+skippedDedup++
+continue
+}
+dirtyPosts = append(dirtyPosts, dirtyEntry{
+postID:   post.ID,
+item:     cand.item,
+imageURL: cand.imageURL,
+})
+}
+
+total := len(dirtyPosts)
+writeSSE(w, sseInsertedEvent{
+Phase:        phInserted,
+Total:        total,
+SkippedDedup: skippedDedup,
+})
+
+s.log.InfoContext(ctx, "pr0gramm dirty posts inserted",
+slog.Int("total", total),
+slog.Int("skipped_dedup", skippedDedup),
+)
+
+// ── Phase 3: Download + process concurrently ──────────────────────────
+var (
+processed atomic.Int32
+imported  atomic.Int32
+failed    atomic.Int32
+)
+
+sem := make(chan struct{}, importConcurrency)
+var wg sync.WaitGroup
+var mu sync.Mutex
+
+for _, dp := range dirtyPosts {
+wg.Add(1)
+dp := dp
+sem <- struct{}{}
+go func() {
+defer wg.Done()
+defer func() { <-sem }()
+
+finalizeErr := s.processAndFinalizeDirtyPost(ctx, dp.postID, dp.imageURL)
+proc := int(processed.Add(1))
+if finalizeErr != nil {
+failed.Add(1)
+s.log.DebugContext(ctx, "failed to finalize dirty post",
+slog.Int("post_id", int(dp.postID)),
+slog.Any("err", finalizeErr),
+)
+} else {
+imported.Add(1)
+s.log.DebugContext(ctx, "dirty post finalized",
+slog.Int("post_id", int(dp.postID)),
+)
+}
+
+mu.Lock()
+writeSSE(w, sseProcessingEvent{
+Phase:     phProcessing,
+Total:     total,
+Processed: proc,
+Imported:  int(imported.Load()),
+Failed:    int(failed.Load()),
+})
+mu.Unlock()
+}()
+}
+wg.Wait()
+
+finalImported := int(imported.Load())
+finalFailed := int(failed.Load())
+
+writeSSE(w, sseDoneEvent{
+Phase:    phDone,
+Total:    total,
+Imported: finalImported,
+Failed:   finalFailed,
+})
+
+s.log.InfoContext(ctx, "pr0gramm import complete",
+slog.Int("total", total),
+slog.Int("imported", finalImported),
+slog.Int("failed", finalFailed),
+slog.Int("skipped_dedup", skippedDedup),
+)
+})
+	return nil
+}
+
+// processAndFinalizeDirtyPost downloads the image at imageURL, runs the image
+// pipeline, and calls FinalizePost to make the dirty row visible.
+// On any failure the placeholder row is deleted to free the URL for future imports.
+func (s *Server) processAndFinalizeDirtyPost(ctx context.Context, postID int32, imageURL string) error {
+tmpPath, err := downloadPr0grammFile(imageURL, s.dirs.Tmp)
+if err != nil {
+if s.store != nil {
+_ = s.store.DeleteDirtyPost(ctx, postID)
+}
+return fmt.Errorf("download failed: %w", err)
+}
+defer os.Remove(tmpPath)
+
+mimeType := mime.TypeByExtension(filepath.Ext(tmpPath))
+fileType := strings.SplitN(mimeType, "/", 2)[0]
+if fileType != "image" {
+if s.store != nil {
+_ = s.store.DeleteDirtyPost(ctx, postID)
+}
+return fmt.Errorf("unsupported file type: %s", mimeType)
+}
+
+res, err := utils.ProcessImage(tmpPath, s.dirs)
+if err != nil {
+if s.store != nil {
+_ = s.store.DeleteDirtyPost(ctx, postID)
+}
+return fmt.Errorf("image processing failed: %w", err)
+}
+
+h := res.PerceptionHash.GetHash()
+
+if s.store != nil {
+if err := s.store.FinalizePost(ctx, db.FinalizePostParams{
+ID:                postID,
+Filename:          res.Filename,
+ThumbnailFilename: res.ThumbnailFilename,
+UploadedFilename:  res.UploadedFilename,
+ContentType:       "image",
+PHash0:            int64(h[0]),
+PHash1:            int64(h[1]),
+PHash2:            int64(h[2]),
+PHash3:            int64(h[3]),
+}); err != nil {
+_ = s.store.DeleteDirtyPost(ctx, postID)
+return fmt.Errorf("finalize post: %w", err)
+}
+}
+
+return nil
+}
+
+// ── Legacy helper (kept for unit / benchmark test compatibility) ──────────────
+
+// importPr0grammItem validates and inserts a single pr0gramm item as a regular
+// (non-dirty) post.  Production imports now use the phased SSE handler above;
+// this function is preserved because import_test.go exercises it directly.
 func (s *Server) importPr0grammItem(ctx context.Context, item pr0grammItem, userName string) (*pr0grammImportResult, string) {
-	if item.Image == "" {
-		return nil, "empty image path"
-	}
+if item.Image == "" {
+return nil, "empty image path"
+}
 
-	ext := strings.ToLower(filepath.Ext(item.Image))
-	switch ext {
-	case ".jpg", ".jpeg", ".png", ".gif", ".webp":
-		// supported static image
-	default:
-		return nil, fmt.Sprintf("skipped non-image media (%s)", ext)
-	}
+ext := strings.ToLower(filepath.Ext(item.Image))
+switch ext {
+case ".jpg", ".jpeg", ".png", ".gif", ".webp":
+// supported static image
+default:
+return nil, fmt.Sprintf("skipped non-image media (%s)", ext)
+}
 
-	imageURL := pr0grammImgBase + item.Image
+imageURL := pr0grammImgBase + item.Image
 
-	// Pre-check: if we already have a post with this exact source URL, skip the
-	// download entirely.  This is a fast indexed DB query vs a full CDN fetch.
-	if s.store != nil {
-		exists, err := s.store.PostURLExists(ctx, imageURL)
-		if err == nil && exists {
-			return nil, "already imported (url exists)"
-		}
-	}
+if s.store != nil {
+exists, err := s.store.PostURLExists(ctx, imageURL)
+if err == nil && exists {
+return nil, "already imported (url exists)"
+}
+}
 
-	tmpPath, err := downloadPr0grammFile(imageURL, s.dirs.Tmp)
-	if err != nil {
-		return nil, "download failed: " + err.Error()
-	}
-	defer os.Remove(tmpPath)
+tmpPath, err := downloadPr0grammFile(imageURL, s.dirs.Tmp)
+if err != nil {
+return nil, "download failed: " + err.Error()
+}
+defer os.Remove(tmpPath)
 
-	post, err := s.processAndInsertPostCtx(ctx, imageURL, tmpPath, userName)
-	if err != nil {
-		return nil, err.Error()
-	}
+post, err := s.processAndInsertPostCtx(ctx, imageURL, tmpPath, userName)
+if err != nil {
+return nil, err.Error()
+}
 
-	return &pr0grammImportResult{
-		SourceID: item.ID,
-		PostID:   post.ID,
-		Image:    item.Image,
-	}, ""
+return &pr0grammImportResult{
+SourceID: item.ID,
+PostID:   post.ID,
+Image:    item.Image,
+}, ""
 }
 
 // ── Pr0gramm API helpers ──────────────────────────────────────────────────────
 
-// fetchPr0grammPage calls the pr0gramm items API. When older > 0 the `older`
-// cursor is included so that the API returns items older than that promoted ID.
+// fetchPr0grammPage calls the pr0gramm items API.  When older > 0 the cursor
+// is included so the API returns items older than that promoted ID.
 func fetchPr0grammPage(tags string, flags int, older int64) (*pr0grammResponse, error) {
-	params := url.Values{}
-	params.Set("tags", tags)
-	params.Set("flags", fmt.Sprintf("%d", flags))
-	params.Set("promoted", "1")
-	params.Set("show_junk", "0")
-	if older > 0 {
-		params.Set("older", fmt.Sprintf("%d", older))
-	}
+params := url.Values{}
+params.Set("tags", tags)
+params.Set("flags", fmt.Sprintf("%d", flags))
+params.Set("promoted", "1")
+params.Set("show_junk", "0")
+if older > 0 {
+params.Set("older", fmt.Sprintf("%d", older))
+}
 
-	apiURL := pr0grammAPIBase + "?" + params.Encode()
+apiURL := pr0grammAPIBase + "?" + params.Encode()
 
-	req, err := http.NewRequest(http.MethodGet, apiURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; ginbar-importer/1.0)")
-	req.Header.Set("Accept", "application/json")
+req, err := http.NewRequest(http.MethodGet, apiURL, nil)
+if err != nil {
+return nil, err
+}
+req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; ginbar-importer/1.0)")
+req.Header.Set("Accept", "application/json")
 
-	resp, err := pr0grammClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("GET %s: %w", apiURL, err)
-	}
-	defer resp.Body.Close()
+resp, err := pr0grammClient.Do(req)
+if err != nil {
+return nil, fmt.Errorf("GET %s: %w", apiURL, err)
+}
+defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-		return nil, fmt.Errorf("pr0gramm API returned HTTP %d: %s", resp.StatusCode, body)
-	}
+if resp.StatusCode != http.StatusOK {
+body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+return nil, fmt.Errorf("pr0gramm API returned HTTP %d: %s", resp.StatusCode, body)
+}
 
-	var result pr0grammResponse
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
-	}
-	return &result, nil
+var result pr0grammResponse
+if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+return nil, fmt.Errorf("decode response: %w", err)
+}
+return &result, nil
 }
 
 // downloadPr0grammFile downloads a file from the pr0gramm image CDN into dir.
 func downloadPr0grammFile(imageURL, dir string) (string, error) {
-	req, err := http.NewRequest(http.MethodGet, imageURL, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; ginbar-importer/1.0)")
-	req.Header.Set("Referer", "https://pr0gramm.com/")
+req, err := http.NewRequest(http.MethodGet, imageURL, nil)
+if err != nil {
+return "", err
+}
+req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; ginbar-importer/1.0)")
+req.Header.Set("Referer", "https://pr0gramm.com/")
 
-	resp, err := pr0grammClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("GET %s: %w", imageURL, err)
-	}
-	defer resp.Body.Close()
+resp, err := pr0grammClient.Do(req)
+if err != nil {
+return "", fmt.Errorf("GET %s: %w", imageURL, err)
+}
+defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("unexpected status %d for %s", resp.StatusCode, imageURL)
-	}
+if resp.StatusCode != http.StatusOK {
+return "", fmt.Errorf("unexpected status %d for %s", resp.StatusCode, imageURL)
+}
 
-	filename := filepath.Base(imageURL)
-	if filename == "" || filename == "." {
-		filename = fmt.Sprintf("pr0gramm_%d", time.Now().UnixNano())
-	}
-	dst := filepath.Join(dir, filename)
+filename := filepath.Base(imageURL)
+if filename == "" || filename == "." {
+filename = fmt.Sprintf("pr0gramm_%d", time.Now().UnixNano())
+}
+dst := filepath.Join(dir, filename)
 
-	f, err := os.Create(dst)
-	if err != nil {
-		return "", fmt.Errorf("create %s: %w", dst, err)
-	}
-	defer f.Close()
+f, err := os.Create(dst)
+if err != nil {
+return "", fmt.Errorf("create %s: %w", dst, err)
+}
+defer f.Close()
 
-	if _, err = io.Copy(f, resp.Body); err != nil {
-		_ = os.Remove(dst)
-		return "", fmt.Errorf("write %s: %w", dst, err)
-	}
+if _, err = io.Copy(f, resp.Body); err != nil {
+_ = os.Remove(dst)
+return "", fmt.Errorf("write %s: %w", dst, err)
+}
 
-	return dst, nil
+return dst, nil
 }
 
 // minPromoted returns the minimum promoted timestamp from a slice of items.
 func minPromoted(items []pr0grammItem) int64 {
-	if len(items) == 0 {
-		return 0
-	}
-	m := items[0].Promoted
-	for _, item := range items[1:] {
-		if item.Promoted < m {
-			m = item.Promoted
-		}
-	}
-	return m
+if len(items) == 0 {
+return 0
+}
+m := items[0].Promoted
+for _, item := range items[1:] {
+if item.Promoted < m {
+m = item.Promoted
+}
+}
+return m
 }
