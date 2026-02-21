@@ -147,31 +147,61 @@ func CreateThumbnailFromImage(img *image.Image, dstFilePath string, dirs Directo
 	return nil
 }
 
-// ConvertImageToAvif uses ffmpeg + libsvtav1 (SVT-AV1) to encode
-// inputFilePath as an AVIF still image.
+// svtMaxWidth and svtMaxHeight are the hard per-frame limits of libsvtav1.
+// Images that exceed either dimension fall back to libaom-av1.
+const (
+	svtMaxWidth  = 8192
+	svtMaxHeight = 8704
+)
+
+// ConvertImageToAvif encodes inputFilePath as an AVIF still image using
+// ffmpeg.  SVT-AV1 (libsvtav1) is used when the source fits within its
+// 8192×8704 px limit; oversized images fall back to libaom-av1.
 //
-//   crf     quality: 0 = lossless, 63 = worst; 18 ≈ visually lossless,
-//                     30 = excellent quality for small sizes.
-//   preset  speed: 0 = slowest/best, 13 = fastest; 4 = high quality,
-//                  6 = fast with great quality for thumbnails.
+//   crf    quality: 0 = lossless, 63 = worst; 18 ≈ visually lossless,
+//                   30 = excellent for small thumbnails.
+//   preset SVT-AV1 speed knob (0 = slowest, 13 = fastest).  Ignored when
+//          falling back to libaom-av1 (a fixed cpu-used=4 is used instead).
 //
-// SVT-AV1 is 5-10× faster than libaom-av1 at identical CRF/quality.
-// The crop filter ensures even dimensions, which YUV 4:2:0 requires.
+// The crop filter ensures even dimensions required by YUV 4:2:0.
 func ConvertImageToAvif(inputFilePath, outputFilePath string, crf, preset int) error {
-	args := []string{
-		"-y",
-		"-i", inputFilePath,
-		"-frames:v", "1",
-		// Crop to even w×h (SVT-AV1 requires even dimensions for yuv420p).
-		// trunc(iw/2)*2 = largest even number ≤ iw; at most 1px trimmed per axis.
-		"-vf", "crop=trunc(iw/2)*2:trunc(ih/2)*2",
-		"-c:v", "libsvtav1",
-		"-crf", strconv.Itoa(crf),
-		"-preset", strconv.Itoa(preset),
-		"-g", "1", // single keyframe = still picture
-		"-pix_fmt", "yuv420p",
-		outputFilePath,
+	// Probe dimensions to decide which encoder to use.
+	w, h, _ := GetVideoDimensions(inputFilePath)
+	useSVT := (w == 0 && h == 0) || (w <= svtMaxWidth && h <= svtMaxHeight)
+
+	var args []string
+	if useSVT {
+		args = []string{
+			"-y",
+			"-i", inputFilePath,
+			"-frames:v", "1",
+			// Crop to even w×h; at most 1 px trimmed per axis.
+			"-vf", "crop=trunc(iw/2)*2:trunc(ih/2)*2",
+			"-c:v", "libsvtav1",
+			"-crf", strconv.Itoa(crf),
+			"-preset", strconv.Itoa(preset),
+			"-g", "1", // single keyframe = still picture
+			"-pix_fmt", "yuv420p",
+			outputFilePath,
+		}
+	} else {
+		// libaom-av1 fallback for images taller/wider than SVT-AV1 supports.
+		// -b:v 0 enables constant-quality mode; cpu-used 4 is a good balance.
+		args = []string{
+			"-y",
+			"-i", inputFilePath,
+			"-frames:v", "1",
+			"-vf", "crop=trunc(iw/2)*2:trunc(ih/2)*2",
+			"-c:v", "libaom-av1",
+			"-crf", strconv.Itoa(crf),
+			"-b:v", "0",
+			"-cpu-used", "4",
+			"-g", "1",
+			"-pix_fmt", "yuv420p",
+			outputFilePath,
+		}
 	}
+
 	cmd := exec.Command("ffmpeg", args...)
 	var errb bytes.Buffer
 	cmd.Stderr = &errb
