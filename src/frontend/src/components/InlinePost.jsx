@@ -223,30 +223,6 @@ export default function InlinePost({
       ref={panelRef}
       className="w-full border-t border-b border-(--color-border) bg-(--color-surface)"
     >
-      {/* Nav bar */}
-      <div className="flex items-center justify-between border-b border-(--color-border) px-3 py-1">
-        <button
-          onClick={onNewer}
-          disabled={!canGoNewer}
-          className="rounded px-2 py-1 text-sm text-(--color-muted) hover:text-(--color-text) disabled:opacity-30 disabled:cursor-not-allowed"
-        >
-          ← newer
-        </button>
-        <button
-          onClick={onClose}
-          className="rounded px-3 py-1 text-sm text-(--color-muted) hover:text-(--color-text)"
-        >
-          ✕
-        </button>
-        <button
-          onClick={onOlder}
-          disabled={!canGoOlder}
-          className="rounded px-2 py-1 text-sm text-(--color-muted) hover:text-(--color-text) disabled:opacity-30 disabled:cursor-not-allowed"
-        >
-          older →
-        </button>
-      </div>
-
       {postError && (
         <div className="flex h-32 items-center justify-center text-sm text-red-400">
           {postError}
@@ -254,7 +230,46 @@ export default function InlinePost({
       )}
 
       {!postError && (
-        <div className="mx-auto max-w-[920px] pb-4 space-y-3">
+        <div className="relative mx-auto max-w-[920px] pb-4 space-y-3">
+          {/* ── Overlay nav arrows ── */}
+          <button
+            onClick={onNewer}
+            disabled={!canGoNewer}
+            className="absolute left-2 top-[200px] z-10 flex h-10 w-10 items-center justify-center rounded-full bg-black/50 text-white transition-opacity hover:bg-black/70 disabled:opacity-0 disabled:pointer-events-none"
+            aria-label="Newer"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="h-5 w-5"
+            >
+              <polyline points="15 18 9 12 15 6" />
+            </svg>
+          </button>
+          <button
+            onClick={onOlder}
+            disabled={!canGoOlder}
+            className="absolute right-2 top-[200px] z-10 flex h-10 w-10 items-center justify-center rounded-full bg-black/50 text-white transition-opacity hover:bg-black/70 disabled:opacity-0 disabled:pointer-events-none"
+            aria-label="Older"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="h-5 w-5"
+            >
+              <polyline points="9 18 15 12 9 6" />
+            </svg>
+          </button>
           {/* ── Media ── Always rendered so the thumbnail can show immediately
                and the full image can be preloaded before the fetch completes.
                When dimensions are known the aspect-ratio style reserves the
@@ -312,8 +327,9 @@ export default function InlinePost({
                 key={postId}
                 src={listMediaSrc}
                 alt=""
+                onClick={onClose}
                 onLoad={() => setImgReady(true)}
-                className={`transition-opacity duration-300 ${mediaChildCls} ${
+                className={`cursor-pointer transition-opacity duration-300 ${mediaChildCls} ${
                   imgReady ? "opacity-100" : "opacity-0"
                 }`}
               />
@@ -327,8 +343,9 @@ export default function InlinePost({
                 key={mediaSrc}
                 src={mediaSrc}
                 alt=""
+                onClick={onClose}
                 onLoad={() => setImgReady(true)}
-                className={`transition-opacity duration-300 ${mediaChildCls} ${
+                className={`cursor-pointer transition-opacity duration-300 ${mediaChildCls} ${
                   imgReady ? "opacity-100" : "opacity-0"
                 }`}
               />
