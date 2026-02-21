@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gofiber/fiber/v3"
@@ -17,7 +19,8 @@ import (
 
 // ── Pr0gramm API constants & types ────────────────────────────────────────────
 
-const (
+// These are vars (not consts) so tests can redirect them to a local mock server.
+var (
 	pr0grammAPIBase = "https://pr0gramm.com/api/items/get"
 	pr0grammImgBase = "https://img.pr0gramm.com/"
 )
@@ -101,29 +104,89 @@ func (s *Server) ImportFromPr0gramm(c fiber.Ctx) error {
 	}
 
 	ctx := context.Background()
+	importStart := time.Now()
 
+	// ── Phase 1: fetch page index from pr0gramm ───────────────────────────────
+	fetchStart := time.Now()
 	resp, err := fetchPr0grammPage(form.Tags, flags, form.Older)
 	if err != nil {
 		return fiber.NewError(fiber.StatusBadGateway, "pr0gramm API error: "+err.Error())
 	}
+	fetchDur := time.Since(fetchStart)
+	s.log.InfoContext(ctx, "pr0gramm page fetched",
+		slog.String("tags", form.Tags),
+		slog.Int("item_count", len(resp.Items)),
+		slog.Duration("fetch_dur", fetchDur),
+	)
+
+	// ── Phase 2: download + process each item concurrently ───────────────────
+	// importConcurrency caps how many items are downloaded + processed at once.
+	// High enough to hide per-item network latency; low enough to avoid
+	// saturating the CDN connection or the DB connection pool.
+	const importConcurrency = 16
+
+	results := make([]struct {
+		result     *pr0grammImportResult
+		skipReason string
+		item       pr0grammItem
+		dur        time.Duration
+	}, len(resp.Items))
+
+	sem := make(chan struct{}, importConcurrency)
+	var wg sync.WaitGroup
+
+	for i, item := range resp.Items {
+		wg.Add(1)
+		i, item := i, item // capture loop vars
+		sem <- struct{}{}  // acquire slot (blocks when all workers are busy)
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }() // release slot
+			start := time.Now()
+			res, reason := s.importPr0grammItem(ctx, item, u.Name)
+			results[i] = struct {
+				result     *pr0grammImportResult
+				skipReason string
+				item       pr0grammItem
+				dur        time.Duration
+			}{res, reason, item, time.Since(start)}
+		}()
+	}
+	wg.Wait()
 
 	var (
 		imported []pr0grammImportResult
 		skipped  []pr0grammImportError
 	)
-
-	for _, item := range resp.Items {
-		result, skipReason := s.importPr0grammItem(ctx, item, u.Name)
-		if skipReason != "" {
+	for i, r := range results {
+		if r.skipReason != "" {
+			s.log.DebugContext(ctx, "pr0gramm item skipped",
+				slog.Int("index", i),
+				slog.Int64("source_id", r.item.ID),
+				slog.String("reason", r.skipReason),
+				slog.Duration("dur", r.dur),
+			)
 			skipped = append(skipped, pr0grammImportError{
-				SourceID: item.ID,
-				Image:    item.Image,
-				Error:    skipReason,
+				SourceID: r.item.ID,
+				Image:    r.item.Image,
+				Error:    r.skipReason,
 			})
 			continue
 		}
-		imported = append(imported, *result)
+		s.log.DebugContext(ctx, "pr0gramm item imported",
+			slog.Int("index", i),
+			slog.Int64("source_id", r.item.ID),
+			slog.Duration("dur", r.dur),
+		)
+		imported = append(imported, *r.result)
 	}
+
+	totalDur := time.Since(importStart)
+	s.log.InfoContext(ctx, "pr0gramm import complete",
+		slog.Int("imported", len(imported)),
+		slog.Int("skipped", len(skipped)),
+		slog.Duration("total_dur", totalDur),
+	)
 
 	nextOlder := minPromoted(resp.Items)
 	atEnd := resp.AtEnd || len(resp.Items) == 0
@@ -157,6 +220,15 @@ func (s *Server) importPr0grammItem(ctx context.Context, item pr0grammItem, user
 	}
 
 	imageURL := pr0grammImgBase + item.Image
+
+	// Pre-check: if we already have a post with this exact source URL, skip the
+	// download entirely.  This is a fast indexed DB query vs a full CDN fetch.
+	if s.store != nil {
+		exists, err := s.store.PostURLExists(ctx, imageURL)
+		if err == nil && exists {
+			return nil, "already imported (url exists)"
+		}
+	}
 
 	tmpPath, err := downloadPr0grammFile(imageURL, s.dirs.Tmp)
 	if err != nil {

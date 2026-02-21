@@ -2,7 +2,7 @@
 # Targets delegate into src/ sub-projects.
 # Run from repo root inside devcontainer.
 
-.PHONY: dev dev-backend dev-frontend migrate sqlc lint build up down logs migrate-prod
+.PHONY: dev dev-backend dev-frontend migrate sqlc lint build up down logs migrate-prod dev-clean
 
 # ── Dev ───────────────────────────────────────────────────────────────────────
 
@@ -56,5 +56,10 @@ migrate-prod:
 	docker compose run --rm migrate
 
 # ── Convenience ───────────────────────────────────────────────────────────────
+
+## dev-clean: wipe dev database, media files, and tmp — then re-run migrations
+dev-clean:
+	@bash scripts/dev-clean.sh
+
 psql:
 	PGPASSWORD=devpassword psql -h localhost -U ginbar ginbar

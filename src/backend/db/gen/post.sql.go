@@ -535,6 +535,19 @@ func (q *Queries) GetVotedPosts(ctx context.Context, arg GetVotedPostsParams) ([
 	return items, nil
 }
 
+const postURLExists = `-- name: PostURLExists :one
+SELECT EXISTS(
+    SELECT 1 FROM posts WHERE url = $1 AND deleted_at IS NULL
+) AS exists
+`
+
+func (q *Queries) PostURLExists(ctx context.Context, url string) (bool, error) {
+	row := q.db.QueryRow(ctx, postURLExists, url)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const search = `-- name: Search :many
 SELECT DISTINCT p.id, p.url, p.uploaded_filename, p.filename, p.thumbnail_filename, p.content_type, p.score, p.user_level, p.p_hash_0, p.p_hash_1, p.p_hash_2, p.p_hash_3, p.user_name, p.created_at, p.deleted_at
 FROM posts p

@@ -43,6 +43,7 @@ type Querier interface {
 	GetVotedComments(ctx context.Context, arg GetVotedCommentsParams) ([]GetVotedCommentsRow, error)
 	GetVotedPost(ctx context.Context, arg GetVotedPostParams) (GetVotedPostRow, error)
 	GetVotedPosts(ctx context.Context, arg GetVotedPostsParams) ([]GetVotedPostsRow, error)
+	PostURLExists(ctx context.Context, url string) (bool, error)
 	RemoveTagFromPost(ctx context.Context, arg RemoveTagFromPostParams) error
 	Search(ctx context.Context, dollar_1 []string) ([]Post, error)
 	UpdatePostFiles(ctx context.Context, arg UpdatePostFilesParams) error

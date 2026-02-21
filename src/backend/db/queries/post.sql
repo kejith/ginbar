@@ -83,6 +83,11 @@ UPDATE posts
 SET deleted_at = NOW()
 WHERE id = $1;
 
+-- name: PostURLExists :one
+SELECT EXISTS(
+    SELECT 1 FROM posts WHERE url = $1 AND deleted_at IS NULL
+) AS exists;
+
 -- name: GetPossibleDuplicatePosts :many
 SELECT * FROM (
     SELECT *,
