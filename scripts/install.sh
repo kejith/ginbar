@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# ginbar installer
+# wallium installer
 # Walks through deploying the full stack on a fresh server.
 # Run as root or with sudo.
 # =============================================================================
@@ -38,7 +38,7 @@ echo -e "${RESET}"
 echo -e " ${CYAN}Production Installer${RESET}"
 echo " ─────────────────────────────────────────────"
 echo " This script will guide you through deploying"
-echo " ginbar on your server behind Cloudflare."
+echo " wallium on your server behind Cloudflare."
 echo ""
 pause
 
@@ -79,7 +79,7 @@ success "docker compose plugin available"
 # ── Step 2: Installation directory ───────────────────────────────────────────
 step "2 / 8  Installation directory"
 
-DEFAULT_INSTALL_DIR="/opt/ginbar"
+DEFAULT_INSTALL_DIR="/opt/wallium"
 read -rp "Install directory [${DEFAULT_INSTALL_DIR}]: " INSTALL_DIR
 INSTALL_DIR="${INSTALL_DIR:-$DEFAULT_INSTALL_DIR}"
 
@@ -110,7 +110,7 @@ cd "$INSTALL_DIR"
 # ── Step 3: Domain ───────────────────────────────────────────────────────────
 step "3 / 8  Domain configuration"
 
-DEFAULT_DOMAIN="ginbar.kejith.de"
+DEFAULT_DOMAIN="wallium.kejith.de"
 read -rp "Domain name [${DEFAULT_DOMAIN}]: " DOMAIN
 DOMAIN="${DOMAIN:-$DEFAULT_DOMAIN}"
 success "Domain: $DOMAIN"
@@ -220,8 +220,8 @@ SESSION_SECRET=${SESSION_SECRET}
 MEDIA_DIR=${MEDIA_DIR}
 FRONTEND_DIR=${FRONTEND_DIR}
 # Optional overrides:
-# POSTGRES_DB=ginbar
-# POSTGRES_USER=ginbar
+# POSTGRES_DB=wallium
+# POSTGRES_USER=wallium
 EOF
   chmod 600 "$ENV_FILE"
   success ".env written to $ENV_FILE"
@@ -230,7 +230,7 @@ fi
 # ── Step 6: Host nginx vhost ──────────────────────────────────────────────────
 step "6 / 8  Host nginx vhost"
 
-VHOST_SRC="${INSTALL_DIR}/nginx/ginbar.vhost.conf"
+VHOST_SRC="${INSTALL_DIR}/nginx/wallium.vhost.conf"
 VHOST_DEST="/etc/nginx/sites-available/${DOMAIN}"
 VHOST_LINK="/etc/nginx/sites-enabled/${DOMAIN}"
 
@@ -241,10 +241,10 @@ FRONTEND_DIR="${FRONTEND_DIR:-${INSTALL_DIR}/frontend}"
 
 # Patch domain, cert paths, media dir, and frontend dir into vhost template
 sed \
-  -e "s|ginbar\.kejith\.de|${DOMAIN}|g" \
-  -e "s|/etc/nginx/certs/ginbar|${CERT_DIR}|g" \
-  -e "s|/opt/ginbar/media|${MEDIA_DIR}|g" \
-  -e "s|/opt/ginbar/frontend|${FRONTEND_DIR}|g" \
+  -e "s|wallium\.kejith\.de|${DOMAIN}|g" \
+  -e "s|/etc/nginx/certs/wallium|${CERT_DIR}|g" \
+  -e "s|/opt/wallium/media|${MEDIA_DIR}|g" \
+  -e "s|/opt/wallium/frontend|${FRONTEND_DIR}|g" \
   "$VHOST_SRC" > "$VHOST_DEST"
 
 ln -sf "$VHOST_DEST" "$VHOST_LINK"
@@ -265,12 +265,12 @@ docker compose build
 # ── Extract compiled frontend from the build image ────────────────────────
 info "Extracting frontend assets to ${FRONTEND_DIR}…"
 mkdir -p "$FRONTEND_DIR"
-FE_CONTAINER="ginbar_fe_extract_$$"
-docker build --target frontend-builder -t ginbar/fe-build:extract "$INSTALL_DIR" -q
-docker create --name "$FE_CONTAINER" ginbar/fe-build:extract /bin/true >/dev/null
+FE_CONTAINER="wallium_fe_extract_$$"
+docker build --target frontend-builder -t wallium/fe-build:extract "$INSTALL_DIR" -q
+docker create --name "$FE_CONTAINER" wallium/fe-build:extract /bin/true >/dev/null
 docker cp "${FE_CONTAINER}:/app/dist/." "$FRONTEND_DIR/"
 docker rm "$FE_CONTAINER" >/dev/null
-docker rmi ginbar/fe-build:extract >/dev/null
+docker rmi wallium/fe-build:extract >/dev/null
 success "Frontend assets extracted to $FRONTEND_DIR"
 
 # ── Create media directories and ensure nginx can read them ───────────────
@@ -298,8 +298,8 @@ success "Docker stack started"
 # ── Step 8: systemd service ───────────────────────────────────────────────────
 step "8 / 8  systemd service (auto-start on reboot)"
 
-SERVICE_SRC="${INSTALL_DIR}/ginbar.service"
-SERVICE_DEST="/etc/systemd/system/ginbar.service"
+SERVICE_SRC="${INSTALL_DIR}/wallium.service"
+SERVICE_DEST="/etc/systemd/system/wallium.service"
 
 # Patch WorkingDirectory in the service file
 sed "s|WorkingDirectory=.*|WorkingDirectory=${INSTALL_DIR}|" \
@@ -307,8 +307,8 @@ sed "s|WorkingDirectory=.*|WorkingDirectory=${INSTALL_DIR}|" \
 
 chmod 644 "$SERVICE_DEST"
 systemctl daemon-reload
-systemctl enable ginbar.service
-success "ginbar.service enabled (starts on boot)"
+systemctl enable wallium.service
+success "wallium.service enabled (starts on boot)"
 
 # ── Health check ─────────────────────────────────────────────────────────────
 echo ""
@@ -326,7 +326,7 @@ echo "$HEALTH"
 if echo "$HEALTH" | grep -qE "HTTP 20[0-9]"; then
   echo ""
   echo -e "${GREEN}${BOLD}══════════════════════════════════════════${RESET}"
-  echo -e "${GREEN}${BOLD}  ✓ ginbar is live at https://${DOMAIN}${RESET}"
+  echo -e "${GREEN}${BOLD}  ✓ wallium is live at https://${DOMAIN}${RESET}"
   echo -e "${GREEN}${BOLD}══════════════════════════════════════════${RESET}"
 else
   warn "HTTPS check didn't return 2xx — this is normal if Cloudflare DNS is still propagating."
@@ -338,7 +338,7 @@ fi
 
 echo ""
 echo -e " ${CYAN}Useful commands:${RESET}"
-echo "   sudo systemctl status ginbar       – service status"
-echo "   sudo systemctl restart ginbar      – restart stack"
+echo "   sudo systemctl status wallium       – service status"
+echo "   sudo systemctl restart wallium      – restart stack"
 echo "   docker compose -f ${INSTALL_DIR}/docker-compose.yml logs -f  – live logs"
 echo ""

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "==> ginbar postCreate: installing user-scope Go tools..."
+echo "==> wallium postCreate: installing user-scope Go tools..."
 
 mkdir -p "$HOME/.local/bin"
 
@@ -31,5 +31,5 @@ fi
 echo ""
 echo "==> postCreate complete."
 echo "    pgAdmin  : http://localhost:5050"
-echo "    psql     : PGPASSWORD=devpassword psql -h localhost -U ginbar ginbar"
+echo "    psql     : PGPASSWORD=devpassword psql -h localhost -U wallium wallium"
 echo "    make dev-backend / make dev-frontend"

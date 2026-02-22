@@ -88,7 +88,7 @@ export default function Nav() {
         to="/"
         className="shrink-0 text-lg font-bold tracking-tight text-(--color-accent)"
       >
-        ginbar
+        Wallium
       </Link>
 
       {/* Search */}

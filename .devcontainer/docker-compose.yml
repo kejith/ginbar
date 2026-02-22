@@ -21,8 +21,8 @@ services:
     image: postgres:17-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ginbar
-      POSTGRES_USER: ginbar
+      POSTGRES_DB: wallium
+      POSTGRES_USER: wallium
       POSTGRES_PASSWORD: devpassword
     volumes:
       - postgres-data:/var/lib/postgresql/data
@@ -30,7 +30,7 @@ services:
       - "5432:5432"
       - "5050:5050"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ginbar"]
+      test: ["CMD-SHELL", "pg_isready -U wallium"]
       interval: 5s
       timeout: 3s
       retries: 10
@@ -40,7 +40,7 @@ services:
     restart: unless-stopped
     user: root
     environment:
-      PGADMIN_DEFAULT_EMAIL: dev@ginbar.local
+      PGADMIN_DEFAULT_EMAIL: dev@wallium.local
       PGADMIN_DEFAULT_PASSWORD: devpassword
       PGADMIN_CONFIG_SERVER_MODE: "False"
       PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED: "False"
@@ -50,7 +50,7 @@ services:
     network_mode: service:postgres
     volumes:
       - pgadmin-data:/var/lib/pgadmin
-      # Pre-seed the ginbar-dev server so it appears on first open.
+      # Pre-seed the wallium-dev server so it appears on first open.
       - ./pgadmin/servers.json:/pgadmin4/servers.json:ro
       # Password file — running as root so permissions are not an issue.
       - ./pgadmin/pgpass:/pgpass

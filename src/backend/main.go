@@ -9,9 +9,9 @@ import (
 	"syscall"
 	"time"
 
-	"ginbar/api"
-	"ginbar/cache"
-	"ginbar/db"
+	"wallium/api"
+	"wallium/cache"
+	"wallium/db"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -20,7 +20,7 @@ func main() {
 	log := slog.New(slog.NewTextHandler(os.Stdout, nil))
 
 	// ── Config from environment ───────────────────────────────────────────────
-	dbURL := getenv("DB_URL", "postgres://ginbar:devpassword@localhost:5432/ginbar?sslmode=disable")
+	dbURL := getenv("DB_URL", "postgres://wallium:devpassword@localhost:5432/wallium?sslmode=disable")
 	redisURL := getenv("REDIS_URL", "redis://localhost:6379")
 	port := getenv("PORT", "3000")
 	sessionSecret := getenv("SESSION_SECRET", "change-me-in-prod")

@@ -3,7 +3,7 @@ package api
 import (
 	"errors"
 
-	"ginbar/db"
+	"wallium/db"
 
 	"github.com/gofiber/fiber/v3"
 )

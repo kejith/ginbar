@@ -17,8 +17,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"ginbar/db"
-	"ginbar/utils"
+	"wallium/db"
+	"wallium/utils"
 
 	"github.com/gofiber/fiber/v3"
 )
@@ -516,7 +516,7 @@ req, err := http.NewRequest(http.MethodGet, apiURL, nil)
 if err != nil {
 return nil, err
 }
-req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; ginbar-importer/1.0)")
+req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; wallium-importer/1.0)")
 req.Header.Set("Accept", "application/json")
 
 resp, err := pr0grammClient.Do(req)
@@ -543,7 +543,7 @@ req, err := http.NewRequest(http.MethodGet, imageURL, nil)
 if err != nil {
 return "", err
 }
-req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; ginbar-importer/1.0)")
+req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; wallium-importer/1.0)")
 req.Header.Set("Referer", "https://pr0gramm.com/")
 
 resp, err := pr0grammClient.Do(req)

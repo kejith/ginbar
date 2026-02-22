@@ -1,4 +1,4 @@
-## ginbar — root Makefile
+## wallium — root Makefile
 # Targets delegate into src/ sub-projects.
 # Run from repo root inside devcontainer.
 
@@ -17,7 +17,7 @@ dev-frontend:
 	cd src/frontend && pnpm dev
 
 # ── Database ───────────────────────────────────────────────────────────────────
-PG_URL ?= postgres://ginbar:devpassword@localhost:5432/ginbar?sslmode=disable
+PG_URL ?= postgres://wallium:devpassword@localhost:5432/wallium?sslmode=disable
 
 migrate-up:
 	goose -dir src/backend/db/migrations postgres "$(PG_URL)" up
@@ -62,4 +62,4 @@ dev-clean:
 	@bash scripts/dev-clean.sh
 
 psql:
-	PGPASSWORD=devpassword psql -h localhost -U ginbar ginbar
+	PGPASSWORD=devpassword psql -h localhost -U wallium wallium

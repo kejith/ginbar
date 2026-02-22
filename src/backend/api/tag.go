@@ -1,8 +1,8 @@
 package api
 
 import (
-	"ginbar/cache"
-	dbgen "ginbar/db/gen"
+	"wallium/cache"
+	dbgen "wallium/db/gen"
 
 	"github.com/gofiber/fiber/v3"
 )

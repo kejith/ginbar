@@ -12,8 +12,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	dbgen "ginbar/db/gen"
-	"ginbar/utils"
+	dbgen "wallium/db/gen"
+	"wallium/utils"
 
 	"github.com/gofiber/fiber/v3"
 )

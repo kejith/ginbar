@@ -8,9 +8,9 @@ import (
 	"strconv"
 	"strings"
 
-	"ginbar/cache"
-	dbgen "ginbar/db/gen"
-	"ginbar/utils"
+	"wallium/cache"
+	dbgen "wallium/db/gen"
+	"wallium/utils"
 
 	"github.com/gofiber/fiber/v3"
 )

@@ -1,5 +1,5 @@
 {
-  "name": "Ginbar Dev",
+  "name": "Wallium Dev",
   "dockerComposeFile": "docker-compose.yml",
   "service": "app",
   "runServices": ["app", "postgres", "pgadmin"],
@@ -85,12 +85,12 @@
         // ── SQL Tools ────────────────────────────────────────────────────────
         "sqltools.connections": [
           {
-            "name": "ginbar-dev",
+            "name": "wallium-dev",
             "driver": "PostgreSQL",
             "server": "localhost",
             "port": 5432,
-            "database": "ginbar",
-            "username": "ginbar",
+            "database": "wallium",
+            "username": "wallium",
             "password": "devpassword",
             "previewLimit": 50
           }

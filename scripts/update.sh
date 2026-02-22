@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# ginbar updater
+# wallium updater
 # Pulls latest code, rebuilds changed images, runs migrations, restarts stack.
 # Run as root or with sudo.
 # =============================================================================
@@ -13,8 +13,8 @@ error()   { echo -e "${RED}✗${RESET} $*" >&2; exit 1; }
 
 [[ "$EUID" -ne 0 ]] && error "Please run as root: sudo bash scripts/update.sh"
 
-INSTALL_DIR="${GINBAR_DIR:-/opt/ginbar}"
-[[ -d "$INSTALL_DIR" ]] || error "Install directory not found: $INSTALL_DIR (set \$GINBAR_DIR to override)"
+INSTALL_DIR="${WALLIUM_DIR:-/opt/wallium}"
+[[ -d "$INSTALL_DIR" ]] || error "Install directory not found: $INSTALL_DIR (set \$WALLIUM_DIR to override)"
 cd "$INSTALL_DIR"
 
 # Source .env so MEDIA_DIR and FRONTEND_DIR are available
@@ -22,7 +22,7 @@ cd "$INSTALL_DIR"
 MEDIA_DIR="${MEDIA_DIR:-${INSTALL_DIR}/media}"
 FRONTEND_DIR="${FRONTEND_DIR:-${INSTALL_DIR}/frontend}"
 
-echo -e "\n${BOLD}${CYAN}══ ginbar update ══${RESET}\n"
+echo -e "\n${BOLD}${CYAN}══ wallium update ══${RESET}\n"
 
 # ── 1. Pull latest code ───────────────────────────────────────────────────────
 info "Pulling latest code…"
@@ -45,13 +45,13 @@ docker compose build
 # ── 2a. Re-extract frontend assets from the fresh build ──────────────────────
 info "Updating frontend assets in ${FRONTEND_DIR}…"
 mkdir -p "$FRONTEND_DIR"
-FE_CONTAINER="ginbar_fe_update_$$"
-docker build --target frontend-builder -t ginbar/fe-build:update "$INSTALL_DIR" -q
-docker create --name "$FE_CONTAINER" ginbar/fe-build:update /bin/true >/dev/null
+FE_CONTAINER="wallium_fe_update_$$"
+docker build --target frontend-builder -t wallium/fe-build:update "$INSTALL_DIR" -q
+docker create --name "$FE_CONTAINER" wallium/fe-build:update /bin/true >/dev/null
 rm -rf "${FRONTEND_DIR:?}"/*
 docker cp "${FE_CONTAINER}:/app/dist/." "$FRONTEND_DIR/"
 docker rm "$FE_CONTAINER" >/dev/null
-docker rmi ginbar/fe-build:update >/dev/null
+docker rmi wallium/fe-build:update >/dev/null
 # Ensure www-data (nginx worker) can traverse the install dir and read assets
 chmod o+x "$INSTALL_DIR"
 chmod -R o+rX "$FRONTEND_DIR"
@@ -62,27 +62,27 @@ info "Running database migrations…"
 docker compose run --rm migrate
 
 # ── 4. Always overwrite the systemd service file and reload ──────────────────
-SERVICE_DEST="/etc/systemd/system/ginbar.service"
+SERVICE_DEST="/etc/systemd/system/wallium.service"
 info "Installing systemd service unit…"
 sed "s|WorkingDirectory=.*|WorkingDirectory=${INSTALL_DIR}|" \
-  "$INSTALL_DIR/ginbar.service" > "$SERVICE_DEST"
+  "$INSTALL_DIR/wallium.service" > "$SERVICE_DEST"
 chmod 644 "$SERVICE_DEST"
 systemctl daemon-reload
-success "ginbar.service installed and daemon reloaded"
+success "wallium.service installed and daemon reloaded"
 
 # ── 5. Always overwrite the host nginx vhost and reload ──────────────────────
 DOMAIN=""
-VHOST_DEST=$(ls /etc/nginx/sites-available/ginbar* 2>/dev/null | head -1 || true)
+VHOST_DEST=$(ls /etc/nginx/sites-available/wallium* 2>/dev/null | head -1 || true)
 if [[ -n "$VHOST_DEST" ]]; then
   DOMAIN=$(grep -oP 'server_name \K[^;]+' "$VHOST_DEST" | head -1 | xargs)
   CERT_DIR_VHOST="/etc/nginx/certs/${DOMAIN}"
-  VHOST_SRC="${INSTALL_DIR}/nginx/ginbar.vhost.conf"
+  VHOST_SRC="${INSTALL_DIR}/nginx/wallium.vhost.conf"
   info "Installing nginx vhost for ${DOMAIN}…"
   sed \
-    -e "s|ginbar\.kejith\.de|${DOMAIN}|g" \
-    -e "s|/etc/nginx/certs/ginbar|${CERT_DIR_VHOST}|g" \
-    -e "s|/opt/ginbar/media|${MEDIA_DIR}|g" \
-    -e "s|/opt/ginbar/frontend|${FRONTEND_DIR}|g" \
+    -e "s|wallium\.kejith\.de|${DOMAIN}|g" \
+    -e "s|/etc/nginx/certs/wallium|${CERT_DIR_VHOST}|g" \
+    -e "s|/opt/wallium/media|${MEDIA_DIR}|g" \
+    -e "s|/opt/wallium/frontend|${FRONTEND_DIR}|g" \
     "$VHOST_SRC" > "$VHOST_DEST"
   nginx -t && systemctl reload nginx
   success "Host nginx vhost updated and reloaded"
@@ -91,13 +91,13 @@ else
 fi
 
 # ── 6. Start / restart the service via systemd ───────────────────────────────
-info "Restarting ginbar service…"
-if systemctl is-active --quiet ginbar.service; then
-  systemctl restart ginbar.service
+info "Restarting wallium service…"
+if systemctl is-active --quiet wallium.service; then
+  systemctl restart wallium.service
 else
-  systemctl start ginbar.service
+  systemctl start wallium.service
 fi
-success "ginbar.service started"
+success "wallium.service started"
 
 # ── 7. Health check ───────────────────────────────────────────────────────────
 sleep 5

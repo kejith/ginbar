@@ -1,7 +1,7 @@
 package db
 
 import (
-	gen "ginbar/db/gen"
+	gen "wallium/db/gen"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )

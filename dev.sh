@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# dev.sh — start the full ginbar dev stack inside the devcontainer.
+# dev.sh — start the full wallium dev stack inside the devcontainer.
 #
 # What it does:
 #   1. Runs goose migrations (idempotent — safe to re-run)
@@ -18,7 +18,7 @@ set -euo pipefail
 RED='\033[0;31m'; GREEN='\033[0;32m'; CYAN='\033[0;36m'
 YELLOW='\033[1;33m'; BOLD='\033[1m'; RESET='\033[0m'
 
-PG_URL="${DB_URL:-postgres://ginbar:devpassword@localhost:5432/ginbar?sslmode=disable}"
+PG_URL="${DB_URL:-postgres://wallium:devpassword@localhost:5432/wallium?sslmode=disable}"
 BACKEND_DIR="$(cd "$(dirname "$0")/src/backend" && pwd)"
 FRONTEND_DIR="$(cd "$(dirname "$0")/src/frontend" && pwd)"
 
@@ -35,7 +35,7 @@ command -v pnpm  &>/dev/null || die "pnpm not found"
 # ── wait for postgres ─────────────────────────────────────────────────────────
 log "Waiting for PostgreSQL..."
 for i in $(seq 1 30); do
-  pg_isready -h localhost -p 5432 -U ginbar -q && break
+  pg_isready -h localhost -p 5432 -U wallium -q && break
   [[ $i -eq 30 ]] && die "PostgreSQL did not become ready in time"
   sleep 1
 done
@@ -87,7 +87,7 @@ FRONTEND_PID=$!
 sleep 1   # let servers print their own startup lines first
 echo ""
 echo -e "${BOLD}┌─────────────────────────────────────────────────┐${RESET}"
-echo -e "${BOLD}│  ginbar dev stack running                        │${RESET}"
+echo -e "${BOLD}│  wallium dev stack running                        │${RESET}"
 echo -e "${BOLD}│                                                   │${RESET}"
 echo -e "${BOLD}│  Frontend  ${GREEN}http://localhost:5173${RESET}${BOLD}              │${RESET}"
 echo -e "${BOLD}│  Backend   ${CYAN}http://localhost:3000${RESET}${BOLD}              │${RESET}"

@@ -5,8 +5,8 @@ import (
 	"regexp"
 	"strconv"
 
-	"ginbar/db"
-	dbgen "ginbar/db/gen"
+	"wallium/db"
+	dbgen "wallium/db/gen"
 
 	"github.com/gofiber/fiber/v3"
 	"golang.org/x/crypto/bcrypt"

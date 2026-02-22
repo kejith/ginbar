@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # =============================================================================
-# ginbar dev-clean
+# wallium dev-clean
 # Completely resets the local development environment:
 #   • Stops all running dev processes (air, vite/pnpm dev, redis)
-#   • Drops and recreates the ginbar PostgreSQL database
+#   • Drops and recreates the wallium PostgreSQL database
 #   • Re-runs all goose migrations on the fresh database
 #   • Wipes media files (images, thumbnails, videos, upload staging)
 #   • Wipes the backend tmp/ directory
@@ -36,9 +36,9 @@ TMP_DIR="$BACKEND_DIR/tmp"
 # ── Database config (mirrors .devcontainer/docker-compose.yml defaults) ───────
 PG_HOST="${PGHOST:-localhost}"
 PG_PORT="${PGPORT:-5432}"
-PG_USER="${PGUSER:-ginbar}"
+PG_USER="${PGUSER:-wallium}"
 PG_PASS="${PGPASSWORD:-devpassword}"
-PG_DB="${PGDATABASE:-ginbar}"
+PG_DB="${PGDATABASE:-wallium}"
 
 export PGPASSWORD="$PG_PASS"
 
@@ -46,7 +46,7 @@ PG_URL="postgres://${PG_USER}:${PG_PASS}@${PG_HOST}:${PG_PORT}/${PG_DB}?sslmode=
 
 # ── Confirmation ──────────────────────────────────────────────────────────────
 if [[ "${1:-}" != "--yes" ]]; then
-  echo -e "\n${BOLD}${RED}══ ginbar dev-clean — COMPLETE RESET ══${RESET}\n"
+  echo -e "\n${BOLD}${RED}══ wallium dev-clean — COMPLETE RESET ══${RESET}\n"
   echo " This will permanently wipe:"
   echo ""
   echo -e "   ${RED}•${RESET} PostgreSQL database '${PG_DB}' — all rows, all tables"

@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"time"
 
-	"ginbar/db"
-	"ginbar/utils"
+	"wallium/db"
+	"wallium/utils"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/gofiber/fiber/v3/middleware/cors"

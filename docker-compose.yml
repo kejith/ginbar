@@ -1,4 +1,4 @@
-# docker-compose.yml — ginbar production stack
+# docker-compose.yml — wallium production stack
 # Spin up: docker compose up -d
 # First run:  docker compose run --rm migrate
 #
@@ -10,7 +10,7 @@
 #   POSTGRES_PASSWORD  – postgres password
 #   SESSION_SECRET     – session signing key
 #   MEDIA_DIR          – host path where the backend writes media
-#                        (default: /opt/ginbar/media)
+#                        (default: /opt/wallium/media)
 
 services:
   # ── Redis 7 ───────────────────────────────────────────────────────────────
@@ -28,26 +28,26 @@ services:
     image: postgres:17-alpine
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ${POSTGRES_DB:-ginbar}
-      POSTGRES_USER: ${POSTGRES_USER:-ginbar}
+      POSTGRES_DB: ${POSTGRES_DB:-wallium}
+      POSTGRES_USER: ${POSTGRES_USER:-wallium}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ginbar}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-wallium}"]
       interval: 5s
       timeout: 5s
       retries: 10
 
   # ── Go / Fiber backend ────────────────────────────────────────────────────
   backend:
-    image: ginbar-backend
+    image: wallium-backend
     build:
       context: .
       target: backend
     restart: unless-stopped
     environment:
-      DB_URL: postgres://${POSTGRES_USER:-ginbar}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ginbar}?sslmode=disable
+      DB_URL: postgres://${POSTGRES_USER:-wallium}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-wallium}?sslmode=disable
       REDIS_URL: redis://redis:6379
       PORT: 3000
       SESSION_SECRET: ${SESSION_SECRET:?required}
@@ -55,7 +55,7 @@ services:
       # Bind-mount host media directory so the host nginx can serve files
       # directly without going through Docker.  MEDIA_DIR must be set in .env
       # (the install script writes it automatically).
-      - ${MEDIA_DIR:-/opt/ginbar/media}:/app/public
+      - ${MEDIA_DIR:-/opt/wallium/media}:/app/public
     ports:
       # Expose the API only on loopback so the host nginx can reach it.
       # Nothing else should talk to the backend directly.
@@ -75,12 +75,12 @@ services:
 
   # ── goose migrations (run once: docker compose run --rm migrate) ──────────
   migrate:
-    image: ginbar-backend
+    image: wallium-backend
     build:
       context: .
       target: backend
     environment:
-      DB_URL: postgres://${POSTGRES_USER:-ginbar}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-ginbar}?sslmode=disable
+      DB_URL: postgres://${POSTGRES_USER:-wallium}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-wallium}?sslmode=disable
     entrypoint: ["/bin/sh", "-c"]
     command:
       - /app/goose -dir /app/db/migrations postgres "$$DB_URL" up

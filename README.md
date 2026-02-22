@@ -1,4 +1,4 @@
-# Ginbar
+# Wallium
 
 A custom-made imageboard. Go/Fiber backend, React frontend.
 
@@ -21,7 +21,7 @@ make dev-backend  # backend only
 make dev-frontend # frontend only
 ```
 
-Default DB URL: `postgres://ginbar:devpassword@localhost:5432/ginbar`
+Default DB URL: `postgres://wallium:devpassword@localhost:5432/wallium`
 
 ### Database
 
@@ -59,14 +59,14 @@ sudo bash scripts/install.sh
 The script will:
 
 1. Check/install prerequisites (git, nginx, docker)
-2. Set the install directory (default `/opt/ginbar`)
+2. Set the install directory (default `/opt/wallium`)
 3. Configure the domain and Cloudflare Origin Certificate
 4. Write `.env` with generated secrets and host paths
 5. Install and enable the nginx vhost
 6. Build Docker images and extract the Vite frontend to `FRONTEND_DIR`
 7. Create media directories (`MEDIA_DIR/{images,videos,upload}`)
 8. Run database migrations and start the stack
-9. Install `ginbar.service` so the stack auto-starts on reboot
+9. Install `wallium.service` so the stack auto-starts on reboot
 
 ### Updating
 
@@ -92,8 +92,8 @@ sudo bash scripts/clean.sh
 | `SESSION_SECRET`    | yes      | —                        | Session signing key                                                             |
 | `MEDIA_DIR`         | no       | `<install_dir>/media`    | Host path where backend writes uploaded files; host nginx reads from here       |
 | `FRONTEND_DIR`      | no       | `<install_dir>/frontend` | Host path where the compiled Vite SPA is extracted; host nginx serves from here |
-| `POSTGRES_DB`       | no       | `ginbar`                 | Database name                                                                   |
-| `POSTGRES_USER`     | no       | `ginbar`                 | Database user                                                                   |
+| `POSTGRES_DB`       | no       | `wallium`                 | Database name                                                                   |
+| `POSTGRES_USER`     | no       | `wallium`                 | Database user                                                                   |
 
 ### Manual Docker commands
 

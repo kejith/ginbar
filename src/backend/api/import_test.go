@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"ginbar/db"
-	dbgen "ginbar/db/gen"
-	"ginbar/utils"
+	"wallium/db"
+	dbgen "wallium/db/gen"
+	"wallium/utils"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"

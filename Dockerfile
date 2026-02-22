@@ -40,7 +40,7 @@ RUN go install github.com/pressly/goose/v3/cmd/goose@latest
 COPY src/backend/ ./
 
 # Build app binary
-RUN CGO_ENABLED=1 GOOS=linux go build -o ginbar .
+RUN CGO_ENABLED=1 GOOS=linux go build -o wallium .
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -57,7 +57,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-COPY --from=backend-builder /app/ginbar ./ginbar
+COPY --from=backend-builder /app/wallium ./wallium
 COPY --from=backend-builder /go/bin/goose ./goose
 COPY --from=backend-builder /app/db/migrations ./db/migrations
 
@@ -69,7 +69,7 @@ RUN mkdir -p \
     ./tmp/thumbnails
 
 EXPOSE 3000
-CMD ["./ginbar"]
+CMD ["./wallium"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────

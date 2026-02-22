@@ -5,7 +5,7 @@ import (
 	"errors"
 	"log/slog"
 
-	gen "ginbar/db/gen"
+	gen "wallium/db/gen"
 
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/bcrypt"

@@ -1,12 +1,12 @@
 {
   "Servers": {
     "1": {
-      "Name": "ginbar-dev",
+      "Name": "wallium-dev",
       "Group": "Servers",
       "Host": "localhost",
       "Port": 5432,
-      "MaintenanceDB": "ginbar",
-      "Username": "ginbar",
+      "MaintenanceDB": "wallium",
+      "Username": "wallium",
       "SSLMode": "disable"
     }
   }

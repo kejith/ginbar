@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	dbgen "ginbar/db/gen"
+	dbgen "wallium/db/gen"
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/jackc/pgx/v5/pgtype"

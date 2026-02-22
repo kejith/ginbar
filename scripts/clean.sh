@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# ginbar clean
+# wallium clean
 # Wipes the PostgreSQL database (drops the pgdata volume) and deletes all
 # uploaded images, thumbnails, and videos from the media directory.
 #
@@ -23,8 +23,8 @@ error()   { echo -e "${RED}✗${RESET} $*" >&2; exit 1; }
 # ── Root check ───────────────────────────────────────────────────────────────
 [[ "$EUID" -ne 0 ]] && error "Please run as root: sudo bash scripts/clean.sh"
 
-INSTALL_DIR="${GINBAR_DIR:-/opt/ginbar}"
-[[ -d "$INSTALL_DIR" ]] || error "Install directory not found: $INSTALL_DIR (set \$GINBAR_DIR to override)"
+INSTALL_DIR="${WALLIUM_DIR:-/opt/wallium}"
+[[ -d "$INSTALL_DIR" ]] || error "Install directory not found: $INSTALL_DIR (set \$WALLIUM_DIR to override)"
 cd "$INSTALL_DIR"
 
 # Source .env so MEDIA_DIR is resolved
@@ -32,7 +32,7 @@ cd "$INSTALL_DIR"
 MEDIA_DIR="${MEDIA_DIR:-${INSTALL_DIR}/media}"
 
 # ── Warning banner ────────────────────────────────────────────────────────────
-echo -e "\n${BOLD}${RED}══ ginbar clean — DESTRUCTIVE OPERATION ══${RESET}\n"
+echo -e "\n${BOLD}${RED}══ wallium clean — DESTRUCTIVE OPERATION ══${RESET}\n"
 echo " This will permanently delete:"
 echo ""
 echo -e "   ${RED}•${RESET} PostgreSQL database — all posts, users, comments, votes, tags"
@@ -102,7 +102,7 @@ docker compose up -d --remove-orphans
 # ── 5. Summary ────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}${BOLD}══════════════════════════════════════════════${RESET}"
-echo -e "${GREEN}${BOLD}  ✓ ginbar database and media wiped.          ${RESET}"
+echo -e "${GREEN}${BOLD}  ✓ wallium database and media wiped.          ${RESET}"
 echo -e "${GREEN}${BOLD}  ✓ Fresh database migrated and stack running. ${RESET}"
 echo -e "${GREEN}${BOLD}══════════════════════════════════════════════${RESET}"
 echo ""
@@ -110,6 +110,6 @@ info "Container status:"
 docker compose ps
 echo ""
 echo -e " ${CYAN}Useful commands:${RESET}"
-echo "   sudo systemctl status ginbar                 – service status"
+echo "   sudo systemctl status wallium                 – service status"
 echo "   docker compose -f ${INSTALL_DIR}/docker-compose.yml logs -f  – live logs"
 echo ""

@@ -1,4 +1,4 @@
-module ginbar
+module wallium
 
 go 1.23
 
