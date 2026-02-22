@@ -401,7 +401,8 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 				newFilePath := filepath.Join(dirs.Image, newFilename)
 				newThumbPath := filepath.Join(dirs.Thumbnail, newThumbFilename)
 
-				// Full-res encode: CRF 18 / preset 4 (≈ visually lossless), max 920 px wide.
+				// Full-res encode: CRF 18 / preset 4 (≈ visually lossless), scaled down
+				// to 920 px wide only when the source is wider than that.
 				if encErr := utils.ConvertImageToAvif(srcPath, newFilePath, 18, 4, 920); encErr != nil {
 					log.WarnContext(ctx, "regenerate: encode failed", "post", p.ID, "err", encErr)
 					failed.Add(1)
@@ -477,7 +478,7 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 }
 
 // dimensionsForPost derives (width, height) from a post's media file on disk.
-// It uses ffprobe for all file types since the stored images may be AVIF and
+// It uses ffprobe for all file types since the stored images are AVIF and
 // Go's standard image.Decode does not support AVIF natively.
 func dimensionsForPost(p dbgen.Post, dirs utils.Directories) (int, int, error) {
 	isVideo := strings.HasPrefix(p.ContentType, "video/")
@@ -485,7 +486,7 @@ func dimensionsForPost(p dbgen.Post, dirs utils.Directories) (int, int, error) {
 		filePath := filepath.Join(dirs.Video, p.Filename)
 		return utils.GetVideoDimensions(filePath)
 	}
-	// Images are stored as .webp — use ffprobe which handles both.
+	// Images are stored as AVIF — ffprobe handles both images and videos.
 	filePath := filepath.Join(dirs.Image, p.Filename)
 	return utils.GetVideoDimensions(filePath)
 }

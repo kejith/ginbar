@@ -44,7 +44,8 @@ func ProcessImage(inputFilePath string, dirs Directories) (*ImageProcessResult, 
 
 	go func() {
 		// CRF 18 / preset 8 — visually lossless at ~2× the speed of preset 4.
-		// Scale down to at most 920 px wide to keep file sizes reasonable.
+		// Scale down to at most 920 px wide; images narrower than 920 px are
+		// stored at their original width.
 		avifCh <- avifRes{ConvertImageToAvif(inputFilePath, outputFilePath, 18, 8, 920)}
 	}()
 	go func() {
@@ -77,8 +78,8 @@ func ProcessImage(inputFilePath string, dirs Directories) (*ImageProcessResult, 
 		return nil, fmt.Errorf("thumbnail: %w", err)
 	}
 
-	// Read actual dimensions from the encoded AVIF, which may be narrower than
-	// the source after the 920 px max-width scale step.
+	// Read actual dimensions from the encoded AVIF (may differ from the source
+	// if it was wider than 920 px and was scaled down).
 	outW, outH, _ := GetVideoDimensions(outputFilePath)
 	if outW == 0 || outH == 0 {
 		// Fallback to source bounds if ffprobe fails for any reason.
@@ -177,19 +178,21 @@ const (
 //
 // The crop/scale filter ensures even dimensions required by YUV 4:2:0.
 func ConvertImageToAvif(inputFilePath, outputFilePath string, crf, preset, maxWidth int) error {
+	// Probe dimensions first — needed both to select the encoder and to decide
+	// whether to apply the scale-down filter.
+	w, h, _ := GetVideoDimensions(inputFilePath)
+	useSVT := (w == 0 && h == 0) || (w <= svtMaxWidth && h <= svtMaxHeight)
+
 	// Build the -vf filter chain:
-	//   • optional scale-down to maxWidth (no upscaling)
+	//   • scale-down to maxWidth only when the image is actually wider
+	//     (images narrower than maxWidth keep their original dimensions)
 	//   • crop to even dimensions required by YUV 4:2:0
 	vf := "crop=trunc(iw/2)*2:trunc(ih/2)*2"
-	if maxWidth > 0 {
-		// scale='min(MW,iw)':-2  →  shrink if wider than MW, keep AR, even height
+	if maxWidth > 0 && (w == 0 || w > maxWidth) {
+		// scale='min(MW,iw)':-2  →  shrink to MW, keep AR, even height.
 		// The trailing crop handles any residual odd pixel from the scale.
 		vf = fmt.Sprintf("scale='min(%d,iw)':-2,crop=trunc(iw/2)*2:trunc(ih/2)*2", maxWidth)
 	}
-
-	// Probe dimensions to decide which encoder to use.
-	w, h, _ := GetVideoDimensions(inputFilePath)
-	useSVT := (w == 0 && h == 0) || (w <= svtMaxWidth && h <= svtMaxHeight)
 
 	var args []string
 	if useSVT {
