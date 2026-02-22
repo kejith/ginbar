@@ -541,7 +541,7 @@ export default function InlinePost({
                     <button
                       disabled={deletingPost}
                       onClick={handleDeletePost}
-                      className="ml-auto rounded bg-(--color-danger) px-2 py-0.5 text-xs text-white disabled:opacity-50"
+                      className="ml-auto rounded-[var(--radius-sm)] bg-(--color-danger) px-2 py-0.5 text-xs text-white disabled:opacity-50"
                     >
                       {deletingPost ? "deleting…" : "delete post"}
                     </button>
@@ -604,7 +604,7 @@ export default function InlinePost({
                           value={tagInput}
                           onChange={(e) => setTagInput(e.target.value)}
                           placeholder="tag name"
-                          className="w-28 rounded border border-(--color-border) bg-(--color-bg) px-2 py-0.5 text-xs text-(--color-text) outline-none focus:border-(--color-accent)"
+                          className="w-28 rounded-[var(--radius-sm)] border border-(--color-border) bg-(--color-bg) px-2 py-0.5 text-xs text-(--color-text) outline-none focus:border-(--color-accent)"
                         />
                         <button
                           type="submit"

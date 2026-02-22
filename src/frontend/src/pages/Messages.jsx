@@ -52,7 +52,7 @@ function NotificationRow({ n, onMarkRead }) {
       aria-label={unread ? "Unread notification" : "Notification"}
     >
       {/* Thumbnail */}
-      <div className="shrink-0 w-12 h-12 rounded overflow-hidden bg-(--color-border) flex items-center justify-center">
+      <div className="shrink-0 w-12 h-12 rounded-[var(--radius-sm)] overflow-hidden bg-(--color-border) flex items-center justify-center">
         {thumbUrl ? (
           <img
             src={thumbUrl}
@@ -187,7 +187,7 @@ function ThreadPanel({ partner }) {
               <div
                 className={`max-w-[70%] px-3 py-2 rounded-2xl text-sm ${
                   mine
-                    ? "bg-(--color-accent) text-white rounded-br-sm"
+                    ? "bg-(--color-accent) text-(--color-accent-text) rounded-br-sm"
                     : "bg-(--color-surface) text-(--color-text) rounded-bl-sm"
                 }`}
               >
@@ -220,7 +220,7 @@ function ThreadPanel({ partner }) {
         <button
           type="submit"
           disabled={sending || !body.trim()}
-          className="px-4 py-2 rounded-full bg-(--color-accent) text-white text-sm font-medium disabled:opacity-40 hover:opacity-90 transition-opacity"
+          className="px-4 py-2 rounded-full bg-(--color-accent) text-(--color-accent-text) text-sm font-medium disabled:opacity-40 hover:opacity-90 transition-opacity"
         >
           Send
         </button>
@@ -328,7 +328,7 @@ export default function Messages() {
         >
           Notifications
           {unreadCount > 0 && (
-            <span className="ml-2 inline-flex items-center justify-center text-[10px] font-bold w-4 h-4 rounded-full bg-(--color-accent) text-white">
+            <span className="ml-2 inline-flex items-center justify-center text-[10px] font-bold w-4 h-4 rounded-full bg-(--color-accent) text-(--color-accent-text)">
               {unreadCount > 99 ? "99+" : unreadCount}
             </span>
           )}
@@ -401,21 +401,21 @@ export default function Messages() {
                 <form onSubmit={handleNewDmSubmit} className="flex gap-2">
                   <input
                     autoFocus
-                    className="flex-1 rounded border border-(--color-border) bg-(--color-bg) px-2 py-1 text-sm text-(--color-text) focus:outline-none focus:border-(--color-accent)"
+                    className="flex-1 rounded-[var(--radius-sm)] border border-(--color-border) bg-(--color-bg) px-2 py-1 text-sm text-(--color-text) focus:outline-none focus:border-(--color-accent)"
                     placeholder="Username…"
                     value={newDmPartner}
                     onChange={(e) => setNewDmPartner(e.target.value)}
                   />
                   <button
                     type="submit"
-                    className="px-2 py-1 rounded bg-(--color-accent) text-white text-sm"
+                    className="px-2 py-1 rounded-[var(--radius-sm)] bg-(--color-accent) text-(--color-accent-text) text-sm"
                   >
                     Go
                   </button>
                   <button
                     type="button"
                     onClick={() => setShowNewDm(false)}
-                    className="px-2 py-1 rounded border border-(--color-border) text-sm text-(--color-muted)"
+                    className="px-2 py-1 rounded-[var(--radius-sm)] border border-(--color-border) text-sm text-(--color-muted)"
                   >
                     ✕
                   </button>
@@ -423,7 +423,7 @@ export default function Messages() {
               ) : (
                 <button
                   onClick={() => setShowNewDm(true)}
-                  className="w-full text-sm text-center py-1.5 rounded border border-(--color-border) text-(--color-muted) hover:text-(--color-text) hover:bg-(--color-surface) transition-colors"
+                  className="w-full text-sm text-center py-1.5 rounded-[var(--radius-sm)] border border-(--color-border) text-(--color-muted) hover:text-(--color-text) hover:bg-(--color-surface) transition-colors"
                 >
                   + New message
                 </button>
@@ -452,7 +452,7 @@ export default function Messages() {
                   </p>
                 </div>
                 {c.unread > 0 && (
-                  <span className="shrink-0 mt-0.5 inline-flex items-center justify-center text-[10px] font-bold min-w-[1rem] h-4 px-1 rounded-full bg-(--color-accent) text-white">
+                  <span className="shrink-0 mt-0.5 inline-flex items-center justify-center text-[10px] font-bold min-w-[1rem] h-4 px-1 rounded-full bg-(--color-accent) text-(--color-accent-text)">
                     {c.unread}
                   </span>
                 )}

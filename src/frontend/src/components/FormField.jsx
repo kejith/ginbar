@@ -10,7 +10,7 @@
  *   children  ReactNode  the actual `<input>` / `<textarea>` / `<select>`
  */
 export const inputCls =
-  "w-full rounded bg-(--color-bg) px-3 py-2 text-sm text-(--color-text) " +
+  "w-full rounded-[var(--radius-sm)] bg-(--color-bg) px-3 py-2 text-sm text-(--color-text) " +
   "ring-1 ring-(--color-border) focus:outline-none focus:ring-(--color-accent) " +
   "placeholder:text-(--color-muted) disabled:opacity-50";
 

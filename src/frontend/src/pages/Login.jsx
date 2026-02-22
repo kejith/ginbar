@@ -52,7 +52,7 @@ export default function Login() {
         <button
           type="submit"
           disabled={loading}
-          className="mt-2 rounded bg-(--color-accent) py-2 text-sm font-semibold text-white disabled:opacity-50"
+          className="mt-2 rounded-[var(--radius-sm)] bg-(--color-accent) py-2 text-sm font-semibold text-(--color-accent-text) disabled:opacity-50"
         >
           {loading ? "…" : "sign in"}
         </button>

@@ -9,10 +9,10 @@
  *   ...rest    forwarded to the underlying element
  */
 const BASE =
-  "inline-flex items-center justify-center font-semibold transition-opacity disabled:opacity-50 rounded";
+  "inline-flex items-center justify-center font-semibold transition-opacity disabled:opacity-50 rounded-[var(--radius-sm)]";
 
 const VARIANT = {
-  primary: "bg-(--color-accent) text-white hover:opacity-90",
+  primary: "bg-(--color-accent) text-(--color-accent-text) hover:opacity-90",
   danger: "bg-(--color-danger) text-white hover:opacity-90",
   admin: "bg-(--color-admin) text-white hover:opacity-90",
   ghost: "text-(--color-muted) hover:text-(--color-text)",

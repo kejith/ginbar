@@ -226,7 +226,7 @@ export default function UploadModal({ onClose }) {
               <button
                 type="submit"
                 disabled={loading || success}
-                className="rounded-lg bg-(--color-accent) py-2 text-sm font-semibold text-white disabled:opacity-50"
+                className="rounded-lg bg-(--color-accent) py-2 text-sm font-semibold text-(--color-accent-text) disabled:opacity-50"
               >
                 {loading ? "Uploading…" : "Upload"}
               </button>
@@ -392,7 +392,7 @@ export default function UploadModal({ onClose }) {
                 <button
                   type="submit"
                   disabled={isImporting || prProgress?.phase === "done"}
-                  className="flex-1 rounded-lg bg-(--color-accent) py-2 text-sm font-semibold text-white disabled:opacity-50"
+                  className="flex-1 rounded-lg bg-(--color-accent) py-2 text-sm font-semibold text-(--color-accent-text) disabled:opacity-50"
                 >
                   {isImporting
                     ? prProgress?.phase === "fetching"

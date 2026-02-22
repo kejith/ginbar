@@ -48,7 +48,7 @@ export default function CommentForm({
         onChange={(e) => setText(e.target.value)}
         rows={3}
         placeholder={parentId ? "Write a reply…" : "Write a comment…"}
-        className="w-full rounded bg-(--color-bg) p-2 text-sm text-(--color-text) placeholder:text-(--color-muted) ring-1 ring-(--color-border) focus:outline-none focus:ring-(--color-accent) resize-none"
+        className="w-full rounded-[var(--radius-sm)] bg-(--color-bg) p-2 text-sm text-(--color-text) placeholder:text-(--color-muted) ring-1 ring-(--color-border) focus:outline-none focus:ring-(--color-accent) resize-none"
       />
       {error && <p className="mt-1 text-xs text-(--color-danger)">{error}</p>}
       <div className="mt-2 flex gap-2 justify-end">
@@ -56,7 +56,7 @@ export default function CommentForm({
           <button
             type="button"
             onClick={onCancel}
-            className="rounded px-4 py-1.5 text-sm font-medium text-(--color-muted) hover:text-(--color-text)"
+            className="rounded-[var(--radius-sm)] px-4 py-1.5 text-sm font-medium text-(--color-muted) hover:text-(--color-text)"
           >
             cancel
           </button>
@@ -64,7 +64,7 @@ export default function CommentForm({
         <button
           type="submit"
           disabled={loading || !text.trim()}
-          className="rounded bg-(--color-accent) px-4 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+          className="rounded-[var(--radius-sm)] bg-(--color-accent) px-4 py-1.5 text-sm font-medium text-(--color-accent-text) disabled:opacity-50"
         >
           {loading ? "posting…" : parentId ? "reply" : "post"}
         </button>

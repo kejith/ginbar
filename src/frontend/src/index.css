@@ -1,7 +1,7 @@
 /* Tailwind v4 CSS-first entry — no tailwind.config.js needed */
 @import "tailwindcss";
 
-/* Global tokens */
+/* ─── Global tokens — Default (orange) ──────────────────────────── */
 :root {
   /* Layout */
   --nav-height: 3rem;
@@ -13,17 +13,164 @@
   --color-text: #e4e4e7;
   --color-muted: #71717a;
   --color-accent: #f97316; /* orange-500 — brand colour */
+  --color-accent-text: #fff; /* text on accent bg         */
 
   /* Semantic role colours */
-  --color-danger: #ef4444; /* red-500 — destructive actions, error text   */
-  --color-admin: #d97706; /* amber-600 — admin-level badge / action       */
-  --color-down: #60a5fa; /* blue-400 — downvote indicator                */
-  --color-success: #4ade80; /* green-400 — success states                   */
+  --color-danger: #ef4444; /* red-500                    */
+  --color-admin: #d97706; /* amber-600                  */
+  --color-down: #60a5fa; /* blue-400                   */
+  --color-success: #4ade80; /* green-400                  */
+
+  /* Typography */
+  --font-body: system-ui, sans-serif;
+  --font-mono: ui-monospace, monospace;
+
+  /* Geometry */
+  --radius-sm: 4px; /* buttons, inputs, small UI  */
+  --radius-card: 2px; /* image grid cells           */
+  --radius-badge: 9999px; /* tags / chips — pill        */
+
+  /* Grid */
+  --grid-gap: 4px; /* gap between post thumbnails */
+
+  /* Image treatment */
+  --img-filter: none;
+  --img-filter-hover: none;
+
+  /* Brand / nav */
+  --brand-weight: 700;
+  --brand-tracking: -0.025em;
+}
+
+/* ─── Phosphor — CRT lime on near-black ─────────────────────────── */
+[data-theme="phosphor"] {
+  --color-bg: #0b0b0f;
+  --color-surface: #13131a;
+  --color-border: #1c1c24;
+  --color-text: #e8e8ec;
+  --color-muted: #5a5a6a;
+  --color-accent: #a3ff12;
+  --color-accent-text: #0b0b0f;
+  --color-danger: #ff4444;
+  --color-admin: #e0a800;
+  --color-down: #5b9cf6;
+  --color-success: #4ade80;
+  --font-body: "Geist", system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, monospace;
+  --radius-sm: 3px;
+  --radius-card: 0px;
+  --radius-badge: 2px;
+  --grid-gap: 2px;
+  --img-filter: brightness(0.88) saturate(0.85);
+  --img-filter-hover: brightness(1) saturate(1);
+  --brand-weight: 700;
+  --brand-tracking: -0.03em;
+}
+
+/* ─── Obsidian — electric violet on cool grey dark ──────────────── */
+[data-theme="obsidian"] {
+  --color-bg: #101014;
+  --color-surface: #18181e;
+  --color-border: #26262f;
+  --color-text: #dedee8;
+  --color-muted: #606070;
+  --color-accent: #7c5cfc;
+  --color-accent-text: #fff;
+  --color-danger: #f87171;
+  --color-admin: #c084fc;
+  --color-down: #60a5fa;
+  --color-success: #4ade80;
+  --font-body: "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --radius-sm: 6px;
+  --radius-card: 4px;
+  --radius-badge: 9999px;
+  --grid-gap: 3px;
+  --img-filter: brightness(0.85) saturate(0.9);
+  --img-filter-hover: brightness(1) saturate(1.05);
+  --brand-weight: 600;
+  --brand-tracking: -0.01em;
+}
+
+/* ─── Infrared — hot red on deep charcoal ───────────────────────── */
+[data-theme="infrared"] {
+  --color-bg: #0f0e0e;
+  --color-surface: #1a1616;
+  --color-border: #221e1e;
+  --color-text: #ede8e8;
+  --color-muted: #5c5454;
+  --color-accent: #ff3d3d;
+  --color-accent-text: #fff;
+  --color-danger: #ff3d3d;
+  --color-admin: #f97316;
+  --color-down: #60a5fa;
+  --color-success: #4ade80;
+  --font-body: "Syne", system-ui, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, monospace;
+  --radius-sm: 2px;
+  --radius-card: 0px;
+  --radius-badge: 0px;
+  --grid-gap: 2px;
+  --img-filter: brightness(0.86) saturate(0.8) contrast(1.05);
+  --img-filter-hover: brightness(1) saturate(1) contrast(1);
+  --brand-weight: 800;
+  --brand-tracking: -0.04em;
+}
+
+/* ─── Fog — warm amber on near-black olive ──────────────────────── */
+[data-theme="fog"] {
+  --color-bg: #111009;
+  --color-surface: #181509;
+  --color-border: #26220f;
+  --color-text: #e8e4d4;
+  --color-muted: #5e584a;
+  --color-accent: #d4a843;
+  --color-accent-text: #111009;
+  --color-danger: #ef4444;
+  --color-admin: #d4a843;
+  --color-down: #7bb5e8;
+  --color-success: #86efac;
+  --font-body: "DM Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
+  --radius-sm: 4px;
+  --radius-card: 0px;
+  --radius-badge: 3px;
+  --grid-gap: 2px;
+  --img-filter: brightness(0.82) saturate(0.7) sepia(0.08);
+  --img-filter-hover: brightness(0.95) saturate(0.9) sepia(0.04);
+  --brand-weight: 700;
+  --brand-tracking: -0.02em;
+}
+
+/* ─── Void — ice-blue on true black ─────────────────────────────── */
+[data-theme="void"] {
+  --color-bg: #060608;
+  --color-surface: #0c0c12;
+  --color-border: #151520;
+  --color-text: #c8c8d8;
+  --color-muted: #404050;
+  --color-accent: #38bdf8;
+  --color-accent-text: #060608;
+  --color-danger: #f87171;
+  --color-admin: #7dd3fc;
+  --color-down: #818cf8;
+  --color-success: #4ade80;
+  --font-body: "Fragment Mono", ui-monospace, monospace;
+  --font-mono: "Fragment Mono", ui-monospace, monospace;
+  --radius-sm: 2px;
+  --radius-card: 0px;
+  --radius-badge: 2px;
+  --grid-gap: 1px;
+  --img-filter: brightness(0.78) saturate(0.6) contrast(1.1);
+  --img-filter-hover: brightness(0.95) saturate(0.85);
+  --brand-weight: 400;
+  --brand-tracking: 0.02em;
 }
 
 html {
   background-color: var(--color-bg);
   color: var(--color-text);
+  font-family: var(--font-body);
   /* sub-pixel antialiasing for crisp text */
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
@@ -39,4 +186,20 @@ body {
   display: grid;
   grid-template-rows: auto 1fr;
   min-height: 100dvh;
+}
+
+/* ── Image filter on grid thumbnails ─────────────────────────────── */
+/* Applied via .post-thumb class on the wrapping <button> in PostCard */
+.post-thumb img,
+.post-thumb video {
+  filter: var(--img-filter);
+  transition:
+    filter 0.3s ease,
+    transform 0.3s ease,
+    opacity 0.3s ease;
+}
+.post-thumb:hover img,
+.post-thumb:hover video {
+  filter: var(--img-filter-hover);
+  transform: scale(1.03);
 }

@@ -16,7 +16,7 @@ function fmtBytes(bytes) {
 
 function StatCard({ label, value, sub }) {
   return (
-    <div className="rounded border border-(--color-border) bg-(--color-surface) p-4">
+    <div className="rounded-[var(--radius-sm)] border border-(--color-border) bg-(--color-surface) p-4">
       <p className="text-2xl font-bold text-(--color-text)">{value ?? "—"}</p>
       <p className="mt-1 text-sm text-(--color-muted)">{label}</p>
       {sub && <p className="mt-0.5 text-xs text-(--color-muted)">{sub}</p>}
@@ -30,10 +30,10 @@ function RoleBadge({ level }) {
     level >= LEVEL_ADMIN
       ? "bg-(--color-admin) text-white"
       : level >= LEVEL_MEMBER
-        ? "bg-(--color-accent) text-white"
+        ? "bg-(--color-accent) text-(--color-accent-text)"
         : "bg-(--color-border) text-(--color-muted)";
   return (
-    <span className={`rounded px-2 py-0.5 text-xs font-semibold ${color}`}>
+    <span className={`rounded-[var(--radius-sm)] px-2 py-0.5 text-xs font-semibold ${color}`}>
       {name} ({level})
     </span>
   );
@@ -72,7 +72,7 @@ function StatsSection() {
       </div>
 
       {/* Disk usage */}
-      <div className="rounded border border-(--color-border) bg-(--color-surface) p-4">
+      <div className="rounded-[var(--radius-sm)] border border-(--color-border) bg-(--color-surface) p-4">
         <p className="mb-3 text-sm font-semibold text-(--color-text)">
           Disk usage — total: {fmtBytes(disk.total_bytes)}
         </p>
@@ -148,7 +148,7 @@ function UsersSection() {
   if (!users) return <p className="text-(--color-muted) text-sm">loading…</p>;
 
   return (
-    <div className="overflow-x-auto rounded border border-(--color-border)">
+    <div className="overflow-x-auto rounded-[var(--radius-sm)] border border-(--color-border)">
       <table className="w-full text-sm">
         <thead className="bg-(--color-surface)">
           <tr className="text-left text-(--color-muted)">
@@ -181,7 +181,7 @@ function UsersSection() {
                     <button
                       disabled={busy === u.id}
                       onClick={() => setLevel(u.id, LEVEL_ADMIN)}
-                      className="rounded bg-(--color-admin) px-2 py-0.5 text-xs text-white disabled:opacity-50"
+                      className="rounded-[var(--radius-sm)] bg-(--color-admin) px-2 py-0.5 text-xs text-white disabled:opacity-50"
                     >
                       promote
                     </button>
@@ -189,7 +189,7 @@ function UsersSection() {
                     <button
                       disabled={busy === u.id}
                       onClick={() => setLevel(u.id, LEVEL_MEMBER)}
-                      className="rounded bg-(--color-border) px-2 py-0.5 text-xs text-(--color-text) disabled:opacity-50"
+                      className="rounded-[var(--radius-sm)] bg-(--color-border) px-2 py-0.5 text-xs text-(--color-text) disabled:opacity-50"
                     >
                       demote
                     </button>
@@ -197,7 +197,7 @@ function UsersSection() {
                   <button
                     disabled={busy === u.id}
                     onClick={() => deleteUser(u.id, u.name)}
-                    className="rounded bg-(--color-danger) px-2 py-0.5 text-xs text-white disabled:opacity-50"
+                    className="rounded-[var(--radius-sm)] bg-(--color-danger) px-2 py-0.5 text-xs text-white disabled:opacity-50"
                   >
                     delete
                   </button>
@@ -297,13 +297,13 @@ function ContentSection() {
             posts.map((p) => (
               <div
                 key={p.id}
-                className="flex items-center gap-3 rounded border border-(--color-border) bg-(--color-surface) p-2"
+                className="flex items-center gap-3 rounded-[var(--radius-sm)] border border-(--color-border) bg-(--color-surface) p-2"
               >
                 {p.thumbnail_filename && (
                   <img
                     src={`/images/thumbnails/${p.thumbnail_filename}`}
                     alt=""
-                    className="h-10 w-10 shrink-0 rounded object-cover"
+                    className="h-10 w-10 shrink-0 rounded-[var(--radius-sm)] object-cover"
                   />
                 )}
                 <div className="min-w-0 flex-1">
@@ -318,7 +318,7 @@ function ContentSection() {
                 <button
                   disabled={busy === `post-${p.id}`}
                   onClick={() => deletePost(p.id)}
-                  className="shrink-0 rounded bg-(--color-danger) px-2 py-0.5 text-xs text-white disabled:opacity-50"
+                  className="shrink-0 rounded-[var(--radius-sm)] bg-(--color-danger) px-2 py-0.5 text-xs text-white disabled:opacity-50"
                 >
                   delete
                 </button>
@@ -339,7 +339,7 @@ function ContentSection() {
             comments.map((c) => (
               <div
                 key={c.id}
-                className="flex items-start gap-3 rounded border border-(--color-border) bg-(--color-surface) p-2"
+                className="flex items-start gap-3 rounded-[var(--radius-sm)] border border-(--color-border) bg-(--color-surface) p-2"
               >
                 <div className="min-w-0 flex-1">
                   <p className="text-xs text-(--color-muted) mb-0.5">
@@ -353,7 +353,7 @@ function ContentSection() {
                 <button
                   disabled={busy === `comment-${c.id}`}
                   onClick={() => deleteComment(c.id)}
-                  className="shrink-0 rounded bg-(--color-danger) px-2 py-0.5 text-xs text-white disabled:opacity-50"
+                  className="shrink-0 rounded-[var(--radius-sm)] bg-(--color-danger) px-2 py-0.5 text-xs text-white disabled:opacity-50"
                 >
                   delete
                 </button>
@@ -403,7 +403,7 @@ function BroadcastPanel() {
           value={subject}
           onChange={(e) => setSubject(e.target.value)}
           placeholder="Subject (optional)"
-          className="rounded bg-(--color-bg) px-3 py-2 text-sm text-(--color-text) placeholder:text-(--color-muted) ring-1 ring-(--color-border) focus:outline-none focus:ring-(--color-accent)"
+          className="rounded-[var(--radius-sm)] bg-(--color-bg) px-3 py-2 text-sm text-(--color-text) placeholder:text-(--color-muted) ring-1 ring-(--color-border) focus:outline-none focus:ring-(--color-accent)"
         />
         <textarea
           value={body}
@@ -411,7 +411,7 @@ function BroadcastPanel() {
           rows={4}
           placeholder="Message body…"
           required
-          className="rounded bg-(--color-bg) px-3 py-2 text-sm text-(--color-text) placeholder:text-(--color-muted) ring-1 ring-(--color-border) focus:outline-none focus:ring-(--color-accent) resize-none"
+          className="rounded-[var(--radius-sm)] bg-(--color-bg) px-3 py-2 text-sm text-(--color-text) placeholder:text-(--color-muted) ring-1 ring-(--color-border) focus:outline-none focus:ring-(--color-accent) resize-none"
         />
         {status === "error" && (
           <p className="text-xs text-(--color-danger)">Broadcast failed.</p>
@@ -424,7 +424,7 @@ function BroadcastPanel() {
         <button
           type="submit"
           disabled={!body.trim() || status === "loading"}
-          className="self-start rounded bg-(--color-accent) px-4 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+          className="self-start rounded-[var(--radius-sm)] bg-(--color-accent) px-4 py-1.5 text-sm font-medium text-(--color-accent-text) disabled:opacity-50"
         >
           {status === "loading" ? "sending…" : "broadcast"}
         </button>
@@ -504,7 +504,7 @@ function JobCard({ job }) {
         {state !== "running" && (
           <button
             onClick={handleRun}
-            className="shrink-0 rounded bg-(--color-accent) px-3 py-1.5 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50 transition-opacity"
+            className="shrink-0 rounded-[var(--radius-sm)] bg-(--color-accent) px-3 py-1.5 text-sm font-medium text-(--color-accent-text) hover:opacity-90 disabled:opacity-50 transition-opacity"
           >
             {state === "done" || state === "error" ? "Run again" : "Run"}
           </button>
@@ -556,7 +556,7 @@ function JobCard({ job }) {
 
       {/* Result */}
       {state === "done" && result !== null && (
-        <div className="rounded bg-(--color-bg) border border-(--color-border) px-3 py-2 text-sm text-(--color-text) space-y-1">
+        <div className="rounded-[var(--radius-sm)] bg-(--color-bg) border border-(--color-border) px-3 py-2 text-sm text-(--color-text) space-y-1">
           <div>{job.formatResult(result)}</div>
           {finishedAt && (
             <p className="text-xs text-(--color-muted)">
@@ -568,7 +568,7 @@ function JobCard({ job }) {
 
       {/* Error */}
       {state === "error" && (
-        <p className="rounded border border-(--color-danger)/50 bg-(--color-danger)/10 px-3 py-2 text-sm text-(--color-danger)">
+        <p className="rounded-[var(--radius-sm)] border border-(--color-danger)/50 bg-(--color-danger)/10 px-3 py-2 text-sm text-(--color-danger)">
           {errorMsg}
         </p>
       )}

@@ -16,7 +16,7 @@ export default function TagChip({ tag, onVote, onDelete, deleting }) {
   const name = typeof tag.name === "object" ? tag.name.String : tag.name;
 
   return (
-    <span className="inline-flex items-center gap-1 rounded-full border border-(--color-border) bg-(--color-surface) px-2 py-0.5 text-xs">
+    <span className="inline-flex items-center gap-1 rounded-[var(--radius-badge)] border border-(--color-border) bg-(--color-surface) px-2 py-0.5 text-xs">
       <button
         onClick={() => navigate(`/?q=${encodeURIComponent(name)}`)}
         className="text-(--color-text) hover:text-(--color-accent) truncate max-w-[14ch]"

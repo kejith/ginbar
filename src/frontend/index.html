@@ -5,10 +5,26 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Wallium</title>
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <!-- Google Fonts — loaded for optional themes -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Syne:wght@400;600;700;800&family=Fragment+Mono&family=DM+Sans:wght@300;400;500;600&display=swap"
+      rel="stylesheet"
+    />
     <!-- preconnect to the API origin so the first XHR is cheaper -->
     <link rel="preconnect" href="http://localhost:3000" crossorigin />
   </head>
   <body>
+    <!-- Apply persisted theme before first paint to avoid flash -->
+    <script>
+      try {
+        var t = JSON.parse(localStorage.getItem("wallium-theme") || "{}");
+        if (t.state && t.state.theme && t.state.theme !== "default") {
+          document.documentElement.dataset.theme = t.state.theme;
+        }
+      } catch (_) {}
+    </script>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>

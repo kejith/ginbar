@@ -8,6 +8,7 @@ import {
 import useAuthStore from "../stores/authStore.js";
 import useMessageStore from "../stores/messageStore.js";
 import UploadModal from "./UploadModal.jsx";
+import ThemeSwitcher from "./ThemeSwitcher.jsx";
 import { isAdmin } from "../utils/roles.js";
 
 export default function Nav() {
@@ -86,7 +87,11 @@ export default function Nav() {
       {/* Logo */}
       <Link
         to="/"
-        className="shrink-0 text-lg font-bold tracking-tight text-(--color-accent)"
+        className="shrink-0 text-lg text-(--color-accent)"
+        style={{
+          fontWeight: "var(--brand-weight)",
+          letterSpacing: "var(--brand-tracking)",
+        }}
       >
         Wallium
       </Link>
@@ -97,15 +102,18 @@ export default function Nav() {
           ref={inputRef}
           type="search"
           placeholder="tags… or user:name…"
-          className="h-8 w-full min-w-0 rounded bg-(--color-bg) px-3 text-sm text-(--color-text) placeholder:text-(--color-muted) outline-none ring-1 ring-(--color-border) focus:ring-(--color-accent)"
+          className="h-8 w-full min-w-0 rounded-[var(--radius-sm)] bg-(--color-bg) px-3 text-sm text-(--color-text) placeholder:text-(--color-muted) outline-none ring-1 ring-(--color-border) focus:ring-(--color-accent)"
         />
         <button
           type="submit"
-          className="shrink-0 rounded bg-(--color-accent) px-3 text-sm font-medium text-white"
+          className="shrink-0 rounded-[var(--radius-sm)] bg-(--color-accent) px-3 text-sm font-medium text-(--color-accent-text)"
         >
           go
         </button>
       </form>
+
+      {/* Theme switcher */}
+      <ThemeSwitcher />
 
       {/* Auth */}
       <div className="shrink-0 text-sm">
@@ -113,7 +121,7 @@ export default function Nav() {
           <div className="flex items-center gap-3">
             <button
               onClick={() => setShowUpload(true)}
-              className="rounded bg-(--color-accent) px-2.5 py-1 text-xs font-semibold text-white"
+              className="rounded-[var(--radius-sm)] bg-(--color-accent) px-2.5 py-1 text-xs font-semibold text-(--color-accent-text)"
               title="Upload post"
             >
               + post
@@ -121,7 +129,7 @@ export default function Nav() {
             {isAdmin(user) && (
               <Link
                 to="/admin"
-                className="rounded bg-(--color-admin) px-2.5 py-1 text-xs font-semibold text-white"
+                className="rounded-[var(--radius-sm)] bg-(--color-admin) px-2.5 py-1 text-xs font-semibold text-white"
                 title="Admin panel"
               >
                 admin

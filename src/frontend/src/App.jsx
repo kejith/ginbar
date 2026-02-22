@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect } from "react";
 import { Routes, Route } from "react-router-dom";
 import useAuthStore from "./stores/authStore.js";
+import useThemeStore from "./stores/themeStore.js";
 import Nav from "./components/Nav.jsx";
 import RequireAdmin from "./components/RequireAdmin.jsx";
 
@@ -16,9 +17,21 @@ const Messages = lazy(() => import("./pages/Messages.jsx"));
 
 export default function App() {
   const hydrate = useAuthStore((s) => s.hydrate);
+  const theme = useThemeStore((s) => s.theme);
+
   useEffect(() => {
     hydrate();
   }, [hydrate]);
+
+  // Apply chosen theme to <html> so CSS [data-theme="..."] vars take effect.
+  useEffect(() => {
+    const root = document.documentElement;
+    if (theme === "default") {
+      delete root.dataset.theme;
+    } else {
+      root.dataset.theme = theme;
+    }
+  }, [theme]);
   return (
     <Suspense
       fallback={<div className="p-4 text-(--color-muted)">loading…</div>}

@@ -73,7 +73,7 @@ export default function CommentItem({
             <button
               disabled={deleting === comment.id}
               onClick={() => onDelete(comment.id)}
-              className="self-start mt-1 shrink-0 rounded bg-(--color-danger) px-2 py-0.5 text-xs text-white disabled:opacity-50"
+              className="self-start mt-1 shrink-0 rounded-[var(--radius-sm)] bg-(--color-danger) px-2 py-0.5 text-xs text-white disabled:opacity-50"
               title="delete comment"
             >
               {deleting === comment.id ? "…" : "del"}

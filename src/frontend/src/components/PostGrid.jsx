@@ -223,9 +223,10 @@ export default function PostGrid({
             >
               {row.type === "posts" && (
                 <div
-                  className="grid gap-1 px-2 py-0.5"
+                  className="grid px-2 py-0.5"
                   style={{
                     gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+                    gap: "var(--grid-gap)",
                   }}
                 >
                   {row.items.map((post) => (
@@ -260,9 +261,10 @@ export default function PostGrid({
 
               {row.type === "loading" && (
                 <div
-                  className="grid gap-1 px-2 py-0.5"
+                  className="grid px-2 py-0.5"
                   style={{
                     gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+                    gap: "var(--grid-gap)",
                   }}
                 >
                   {Array.from({ length: cols }).map((_, i) => (
