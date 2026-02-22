@@ -276,11 +276,11 @@ export default function InlinePost({
       )}
 
       {!postError && (
-        <div className="mx-auto max-w-5xl lg:grid lg:grid-cols-[1fr_300px]">
+        <div className="mx-auto max-w-5xl">
           {/* ── LEFT: Media column ─────────────────────────────────────────── */}
           {/* On lg the column is sticky so it pins to the top of the PostGrid
               scroll container while the sidebar (comments) scrolls past it. */}
-          <div className="relative bg-black lg:sticky lg:top-0 lg:self-start lg:max-h-[calc(100vh-var(--nav-height))] lg:flex lg:items-center lg:justify-center lg:overflow-hidden">
+          <div className="relative bg-black">
             {/* Nav arrows — centred vertically on the media */}
             <button
               onClick={onNewer}
@@ -424,7 +424,7 @@ export default function InlinePost({
           </div>
 
           {/* ── RIGHT: Sidebar ─────────────────────────────────────────────── */}
-          <div className="flex flex-col border-t border-(--color-border) lg:border-t-0 lg:border-l lg:border-(--color-border)">
+          <div className="flex flex-col border-t border-(--color-border)">
             {/* Loading skeleton — visible before post data arrives */}
             {!isReady && (
               <div className="flex h-24 items-center justify-center text-sm text-(--color-muted) animate-pulse">
