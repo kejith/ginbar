@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import PostGrid from "../components/PostGrid.jsx";
+import FilterSelector from "../components/FilterSelector.jsx";
 import usePostStore from "../stores/postStore.js";
 
 export default function Home() {
@@ -17,7 +18,8 @@ export default function Home() {
 
   const [expandedId, setExpandedId] = useState(initialExpanded);
 
-  const { listError, fetchPosts, fetchAroundPost, search } = usePostStore();
+  const { listError, fetchPosts, fetchAroundPost, search, activeFilter } =
+    usePostStore();
 
   // Initial data load
   useEffect(() => {
@@ -31,7 +33,7 @@ export default function Home() {
       fetchPosts({ page: 1, tag: tag || undefined, reset: true });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [query, tag]);
+  }, [query, tag, activeFilter]);
 
   function handlePostOpen(id) {
     setExpandedId(id);
@@ -72,6 +74,8 @@ export default function Home() {
       className="flex flex-col"
       style={{ height: "calc(100vh - var(--nav-height))" }}
     >
+      <FilterSelector />
+
       {(query || tag) && (
         <p className="px-3 pt-2 pb-1 text-sm text-(--color-muted)">
           {query ? `results for "${query}"` : `tag: ${tag}`}

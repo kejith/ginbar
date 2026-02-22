@@ -18,6 +18,15 @@ const usePostStore = create((set, get) => ({
   listLoading: false,
   listError: null,
 
+  // ── filter state ─────────────────────────────────────────────────────────
+  // Empty string means "show all content the current user is allowed to see".
+  // Non-empty values: 'sfw' | 'nsfp' | 'nsfw' | 'secret'
+  activeFilter: "",
+
+  /** Change the active feed filter and reset the post list. */
+  setFilter: (filter) =>
+    set({ activeFilter: filter, posts: [], page: 1, hasMore: true }),
+
   // ── cursor-mode state (active when a direct /post/:id URL is opened) ──────
   // Replaces page-based pagination for the default feed. Both ends use the
   // min/max id already in `posts` as the cursor so no extra tracking needed.
@@ -38,6 +47,8 @@ const usePostStore = create((set, get) => ({
     try {
       const params = { page, limit };
       if (tag) params.tag = tag;
+      const { activeFilter } = usePostStore.getState();
+      if (activeFilter) params.filter = activeFilter;
       const { data } = await api.get("/post/", { params });
       const incoming = data.posts ?? [];
       set((s) => ({
@@ -62,7 +73,9 @@ const usePostStore = create((set, get) => ({
   fetchAroundPost: async (postId) => {
     set({ listLoading: true, listError: null, cursorMode: false });
     try {
-      const { data } = await api.get(`/post/around/${postId}`);
+      const { activeFilter } = usePostStore.getState();
+      const params = activeFilter ? { filter: activeFilter } : undefined;
+      const { data } = await api.get(`/post/around/${postId}`, { params });
       const incoming = data.posts ?? [];
       set({
         posts: incoming,
@@ -86,9 +99,10 @@ const usePostStore = create((set, get) => ({
     const minId = Math.min(...posts.map((p) => p.id));
     set({ olderLoading: true });
     try {
-      const { data } = await api.get("/post/cursor", {
-        params: { before_id: minId },
-      });
+      const { activeFilter } = usePostStore.getState();
+      const cursorParams = { before_id: minId };
+      if (activeFilter) cursorParams.filter = activeFilter;
+      const { data } = await api.get("/post/cursor", { params: cursorParams });
       const incoming = data.posts ?? [];
       set((s) => ({
         posts: [...s.posts, ...incoming],
@@ -108,9 +122,10 @@ const usePostStore = create((set, get) => ({
     const maxId = Math.max(...posts.map((p) => p.id));
     set({ newerLoading: true });
     try {
-      const { data } = await api.get("/post/cursor", {
-        params: { after_id: maxId },
-      });
+      const { activeFilter } = usePostStore.getState();
+      const cursorParams = { after_id: maxId };
+      if (activeFilter) cursorParams.filter = activeFilter;
+      const { data } = await api.get("/post/cursor", { params: cursorParams });
       const incoming = data.posts ?? [];
       set((s) => ({
         posts: [...incoming, ...s.posts],
@@ -129,8 +144,13 @@ const usePostStore = create((set, get) => ({
     set({ listLoading: true, listError: null });
     try {
       const encoded = encodeURIComponent(query.trim()).replace(/%20/g, "%20");
-      const params = username ? { user: username } : undefined;
-      const { data } = await api.get(`/post/search/${encoded}`, { params });
+      const { activeFilter } = usePostStore.getState();
+      const params = {};
+      if (username) params.user = username;
+      if (activeFilter) params.filter = activeFilter;
+      const { data } = await api.get(`/post/search/${encoded}`, {
+        params: Object.keys(params).length ? params : undefined,
+      });
       set({
         posts: data.posts ?? [],
         listLoading: false,
@@ -230,6 +250,7 @@ const usePostStore = create((set, get) => ({
   // ── createPost (URL-based) ────────────────────────────────────────────────
   // Returns { status: "queued", post_id, queue_position, eta_sec }.
   // Poll getPostQueueStatus(post_id) until dirty=false to know when it is done.
+  // Filter starts as "sfw" — add tag "nsfp", "nsfw", or "secret" to promote it.
   createPost: async (url) => {
     const { data } = await api.post("/post/create", { URL: url });
     return data; // { status, post_id, queue_position, eta_sec }
@@ -237,6 +258,7 @@ const usePostStore = create((set, get) => ({
 
   // ── uploadPost (file) ─────────────────────────────────────────────────────
   // Returns { status: "queued", post_id, queue_position, eta_sec }.
+  // Filter starts as "sfw" — add tag "nsfp", "nsfw", or "secret" to promote it.
   uploadPost: async (file) => {
     const form = new FormData();
     form.append("file", file);
@@ -255,10 +277,22 @@ const usePostStore = create((set, get) => ({
   },
 
   // ── getPostQueueStatus ────────────────────────────────────────────────────
-  // Returns { dirty, queue_position, eta_sec }.
+  // Returns { dirty, needs_release, queue_position, eta_sec }.
   // dirty=false means the post was finalized (or deleted on failure).
+  // needs_release=true means the post is done processing but not yet released.
   getPostQueueStatus: async (postId) => {
     const { data } = await api.get(`/post/queue/${postId}`);
+    return data;
+  },
+
+  // ── releasePost ───────────────────────────────────────────────────────────
+  // Publishes a finalized post: adds tags, creates an optional initial comment,
+  // and sets released=true so the post becomes visible in the feed.
+  releasePost: async (postId, tags, comment) => {
+    const { data } = await api.post(`/post/${postId}/release`, {
+      tags: tags ?? [],
+      comment: comment ?? "",
+    });
     return data;
   },
 

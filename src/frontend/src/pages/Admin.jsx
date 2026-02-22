@@ -1,6 +1,11 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import api, { ssePost } from "../utils/api.js";
-import { roleName, LEVEL_MEMBER, LEVEL_ADMIN } from "../utils/roles.js";
+import {
+  roleName,
+  LEVEL_MEMBER,
+  LEVEL_SECRET,
+  LEVEL_ADMIN,
+} from "../utils/roles.js";
 import Tabs from "../components/Tabs.jsx";
 import ProgressBar from "../components/ProgressBar.jsx";
 import UserLink from "../components/UserLink.jsx";
@@ -35,13 +40,13 @@ function RoleBadge({ level }) {
   const color =
     level >= LEVEL_ADMIN
       ? "bg-(--color-admin) text-white"
-      : level >= LEVEL_MEMBER
-        ? "bg-(--color-accent) text-(--color-accent-text)"
-        : "bg-(--color-border) text-(--color-muted)";
+      : level >= LEVEL_SECRET
+        ? "bg-purple-600 text-white"
+        : level >= LEVEL_MEMBER
+          ? "bg-(--color-accent) text-(--color-accent-text)"
+          : "bg-(--color-border) text-(--color-muted)";
   return (
-    <span
-      className={`rounded-sm px-2 py-0.5 text-xs font-semibold ${color}`}
-    >
+    <span className={`rounded-sm px-2 py-0.5 text-xs font-semibold ${color}`}>
       {name} ({level})
     </span>
   );
@@ -305,6 +310,23 @@ function UsersSection() {
                       demote
                     </button>
                   )}
+                  {u.level < LEVEL_SECRET ? (
+                    <button
+                      disabled={busy === u.id}
+                      onClick={() => setLevel(u.id, LEVEL_SECRET)}
+                      className="rounded-sm bg-purple-600 px-2 py-0.5 text-xs text-white disabled:opacity-50"
+                    >
+                      make secret
+                    </button>
+                  ) : u.level < LEVEL_ADMIN ? (
+                    <button
+                      disabled={busy === u.id}
+                      onClick={() => setLevel(u.id, LEVEL_MEMBER)}
+                      className="rounded-sm bg-(--color-border) px-2 py-0.5 text-xs text-(--color-text) disabled:opacity-50"
+                    >
+                      revoke secret
+                    </button>
+                  ) : null}
                   <button
                     disabled={busy === u.id}
                     onClick={() => deleteUser(u.id, u.name)}

@@ -2,7 +2,8 @@ import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import usePostStore from "../stores/postStore.js";
 import useAuthStore from "../stores/authStore.js";
-import { isAdmin } from "../utils/roles.js";
+import useTagStore from "../stores/tagStore.js";
+import { isAdmin, isSecret } from "../utils/roles.js";
 import Tabs from "./Tabs.jsx";
 import ProgressBar from "./ProgressBar.jsx";
 
@@ -59,6 +60,17 @@ export default function UploadModal({
   // Once the post is queued, queueInfo is set and we poll for completion.
   const [queueInfo, setQueueInfo] = useState(null); // { post_id, queue_position, eta_sec }
   const [queueDone, setQueueDone] = useState(false);
+  const [needsRelease, setNeedsRelease] = useState(false);
+  // tag chip state for release form
+  const [pendingTags, setPendingTags] = useState([]);
+  const [tagDraft, setTagDraft] = useState("");
+  const [tagError, setTagError] = useState("");
+  const [suggestions, setSuggestions] = useState([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const tagInputRef = useRef(null);
+  const [releaseComment, setReleaseComment] = useState("");
+  const [releaseSubmitting, setReleaseSubmitting] = useState(false);
+  const [releaseError, setReleaseError] = useState(null);
   const [duplicates, setDuplicates] = useState(null); // [{id, thumbnail_filename, hamming_distance}]
   const fileRef = useRef(null);
   const pollRef = useRef(null);
@@ -81,7 +93,12 @@ export default function UploadModal({
   const uploadPost = usePostStore((s) => s.uploadPost);
   const getUserQueueStatus = usePostStore((s) => s.getUserQueueStatus);
   const getPostQueueStatus = usePostStore((s) => s.getPostQueueStatus);
+  const releasePost = usePostStore((s) => s.releasePost);
   const importFromPr0gramm = usePostStore((s) => s.importFromPr0gramm);
+  const fetchPosts = usePostStore((s) => s.fetchPosts);
+
+  const fetchAllTags = useTagStore((s) => s.fetchAllTags);
+  const allTags = useTagStore((s) => s.allTags);
 
   // ── On-mount queue check ──────────────────────────────────────────────────
   // Ask the backend whether this user already has a post in the queue.
@@ -98,6 +115,11 @@ export default function UploadModal({
             queue_position: status.queue_position,
             eta_sec: status.eta_sec,
           });
+          if (!status.dirty && status.needs_release) {
+            setQueueDone(true);
+            setNeedsRelease(true);
+            if (isSecret(user)) setPendingTags(["secret"]);
+          }
         }
       })
       .catch((err) => {
@@ -138,6 +160,10 @@ export default function UploadModal({
           if (status.duplicates?.length > 0) {
             setDuplicates(status.duplicates);
             // Don't auto-close — user needs to inspect duplicates
+          } else if (status.needs_release) {
+            setQueueDone(true);
+            setNeedsRelease(true);
+            if (isSecret(user)) setPendingTags(["secret"]);
           } else {
             setQueueDone(true);
             setTimeout(onClose, 1500);
@@ -185,6 +211,101 @@ export default function UploadModal({
       setSubmitting(false);
     }
   }
+
+  // ── Release form submit ────────────────────────────────────────────────────
+  async function handleRelease(e) {
+    e.preventDefault();
+    setReleaseError(null);
+    setReleaseSubmitting(true);
+    try {
+      const draftName = tagDraft.trim();
+      const tags = draftName ? [...pendingTags, draftName] : [...pendingTags];
+      await releasePost(queueInfo.post_id, tags, releaseComment.trim());
+      onClose();
+      fetchPosts({ page: 1, reset: true });
+    } catch (err) {
+      setReleaseError(
+        err.response?.data?.error ?? err.message ?? "Failed to publish",
+      );
+    } finally {
+      setReleaseSubmitting(false);
+    }
+  }
+
+  // ── Tag chip helpers (release form) ───────────────────────────────────────
+  function commitTagDraft() {
+    const name = tagDraft.trim();
+    if (!name) return;
+    setPendingTags((prev) => [...prev, name]);
+    setTagDraft("");
+    setSuggestions([]);
+    setShowSuggestions(false);
+  }
+
+  function removeTagChip(index) {
+    setPendingTags((prev) => prev.filter((_, i) => i !== index));
+    tagInputRef.current?.focus();
+  }
+
+  function handleTagKeyDown(e) {
+    if (e.key === "," || e.key === "Tab") {
+      if (tagDraft.trim()) {
+        e.preventDefault();
+        commitTagDraft();
+      } else {
+        e.preventDefault();
+      }
+      return;
+    }
+    if (e.key === "Backspace" && tagDraft === "" && pendingTags.length > 0) {
+      e.preventDefault();
+      const last = pendingTags[pendingTags.length - 1];
+      setPendingTags((prev) => prev.slice(0, -1));
+      setTagDraft(last);
+    }
+  }
+
+  function handleTagDraftChange(e) {
+    const value = e.target.value.replace(/,/g, "");
+    setTagDraft(value);
+    const token = value.trimStart().toLowerCase();
+    if (!token) {
+      setSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+    const existingNames = new Set(pendingTags.map((n) => n.toLowerCase()));
+    const matches = allTags
+      .map((t) => (typeof t.name === "object" ? t.name.String : t.name))
+      .filter(
+        (n) =>
+          n.toLowerCase().includes(token) &&
+          !existingNames.has(n.toLowerCase()),
+      )
+      .slice(0, 8);
+    setSuggestions(matches);
+    setShowSuggestions(matches.length > 0);
+  }
+
+  function applyTagSuggestion(name) {
+    setPendingTags((prev) => [...prev, name]);
+    setTagDraft("");
+    setSuggestions([]);
+    setShowSuggestions(false);
+    tagInputRef.current?.focus();
+  }
+
+  // Fetch all tags for suggestions when the release form becomes visible.
+  useEffect(() => {
+    if (needsRelease) fetchAllTags();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [needsRelease]);
+
+  // Focus the tag input when the release form appears.
+  useEffect(() => {
+    if (needsRelease && tagInputRef.current) tagInputRef.current.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [needsRelease]);
 
   // ── Pr0gramm import submit ─────────────────────────────────────────────────
   async function handlePr0grammImport(e) {
@@ -404,6 +525,112 @@ export default function UploadModal({
                   >
                     Close
                   </button>
+                </div>
+              ) : needsRelease ? (
+                /* ── Release form ─────────────────────────────────────────── */
+                <div className="flex flex-col gap-4">
+                  <div className="flex items-center gap-2 rounded-lg bg-(--color-bg) px-3 py-2 text-sm text-(--color-accent)">
+                    <span>✓</span>
+                    <span>
+                      Processing complete! Add tags and publish your post.
+                    </span>
+                  </div>
+                  <form
+                    onSubmit={handleRelease}
+                    className="flex flex-col gap-3"
+                  >
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs font-medium text-(--color-muted)">
+                        Tags
+                      </label>
+                      {/* Chip input — identical to InlinePost tag input */}
+                      <div
+                        className="relative flex flex-wrap items-center gap-1 rounded-lg border border-(--color-border) bg-(--color-bg) px-2 py-1.5 cursor-text focus-within:border-(--color-accent)"
+                        onClick={() => tagInputRef.current?.focus()}
+                      >
+                        {pendingTags.map((name, i) => (
+                          <span
+                            key={i}
+                            className="inline-flex items-center gap-1 rounded-(--radius-badge) border border-(--color-border) bg-(--color-surface) px-2 py-0.5 text-xs text-(--color-text) shrink-0"
+                          >
+                            {name}
+                            <button
+                              type="button"
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => removeTagChip(i)}
+                              className="text-[10px] leading-none text-(--color-muted) hover:text-(--color-danger)"
+                            >
+                              ×
+                            </button>
+                          </span>
+                        ))}
+                        <input
+                          ref={tagInputRef}
+                          value={tagDraft}
+                          onChange={handleTagDraftChange}
+                          onKeyDown={handleTagKeyDown}
+                          onFocus={() =>
+                            suggestions.length > 0 && setShowSuggestions(true)
+                          }
+                          onBlur={() =>
+                            setTimeout(() => setShowSuggestions(false), 150)
+                          }
+                          placeholder={
+                            pendingTags.length === 0 ? "add tags…" : ""
+                          }
+                          className="min-w-16 flex-1 bg-transparent text-sm text-(--color-text) outline-none"
+                        />
+                        {showSuggestions && (
+                          <ul className="absolute left-0 top-full z-50 mt-0.5 w-48 rounded-sm border border-(--color-border) bg-(--color-surface) py-0.5 shadow-lg">
+                            {suggestions.map((name) => (
+                              <li key={name}>
+                                <button
+                                  type="button"
+                                  onMouseDown={(e) => e.preventDefault()}
+                                  onClick={() => applyTagSuggestion(name)}
+                                  className="w-full truncate px-2 py-1 text-left text-xs text-(--color-text) hover:bg-(--color-accent) hover:text-(--color-accent-text)"
+                                >
+                                  {name}
+                                </button>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                      {tagError && (
+                        <p className="text-xs text-(--color-danger)">
+                          {tagError}
+                        </p>
+                      )}
+                    </div>
+                    <div className="flex flex-col gap-1">
+                      <label className="text-xs font-medium text-(--color-muted)">
+                        Comment{" "}
+                        <span className="text-(--color-muted) font-normal">
+                          (optional)
+                        </span>
+                      </label>
+                      <textarea
+                        value={releaseComment}
+                        onChange={(e) => setReleaseComment(e.target.value)}
+                        placeholder="Add a description or note…"
+                        rows={3}
+                        className="w-full rounded-lg bg-(--color-bg) px-3 py-2 text-sm text-(--color-text) outline-none ring-1 ring-(--color-border) focus:ring-(--color-accent) resize-none"
+                      />
+                    </div>
+                    {releaseError && (
+                      <p className="rounded-lg bg-(--color-bg) px-3 py-2 text-sm text-(--color-danger)">
+                        {releaseError}
+                      </p>
+                    )}
+                    <button
+                      type="submit"
+                      disabled={releaseSubmitting}
+                      className="rounded-lg bg-(--color-accent) py-2 text-sm font-semibold text-(--color-accent-text) disabled:opacity-50"
+                    >
+                      {releaseSubmitting ? "Publishing…" : "Publish"}
+                    </button>
+                  </form>
                 </div>
               ) : !queueDone ? (
                 <>
