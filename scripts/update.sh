@@ -76,6 +76,57 @@ for OLD_VHOST in /etc/nginx/sites-available/ginbar*; do
   fi
 done
 
+# ── 1c. One-time PostgreSQL role/database migration: ginbar → wallium ────────
+# The Postgres data volume is initialised once; POSTGRES_USER/DB env vars in
+# docker-compose.yml are ignored on subsequent starts.  If the old ginbar role
+# still owns the data we must rename it before goose can connect as wallium.
+#
+# Strategy: try to connect as ginbar via the unix socket (no password needed
+# inside the container).  If that succeeds the migration hasn't run yet.
+info "Checking for legacy ginbar PostgreSQL role…"
+# Make sure postgres is up (it normally is during an update, but be safe)
+docker compose up -d postgres 2>/dev/null
+for _i in $(seq 1 20); do
+  docker compose exec -T postgres pg_isready -q 2>/dev/null && break
+  sleep 1
+done
+
+if docker compose exec -T postgres psql -U ginbar -d postgres -c "" >/dev/null 2>&1; then
+  # ginbar role is still the owner — check whether wallium already exists
+  _WALLIUM=$(docker compose exec -T postgres psql -U ginbar -d postgres -tAc \
+    "SELECT 1 FROM pg_roles WHERE rolname='wallium';" 2>/dev/null | tr -d '[:space:]' || true)
+
+  if [[ "$_WALLIUM" != "1" ]]; then
+    info "Migrating PostgreSQL: creating wallium role and renaming ginbar database…"
+    _PG_PASS="${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env for this migration}"
+    # Create wallium as superuser (we can't rename ginbar while connected as it)
+    docker compose exec -T postgres psql -U ginbar -d postgres \
+      -c "CREATE ROLE wallium SUPERUSER LOGIN PASSWORD '${_PG_PASS}';"
+    docker compose exec -T postgres psql -U ginbar -d postgres \
+      -c "ALTER DATABASE ginbar RENAME TO wallium;"
+    success "PostgreSQL role and database renamed to wallium"
+  else
+    # wallium role exists — rename the database if it's still called ginbar
+    _GINBAR_DB=$(docker compose exec -T postgres psql -U wallium -d postgres -tAc \
+      "SELECT 1 FROM pg_database WHERE datname='ginbar';" 2>/dev/null | tr -d '[:space:]' || true)
+    if [[ "$_GINBAR_DB" == "1" ]]; then
+      info "Renaming ginbar database to wallium…"
+      docker compose exec -T postgres psql -U wallium -d postgres \
+        -c "ALTER DATABASE ginbar RENAME TO wallium;"
+      success "PostgreSQL database renamed to wallium"
+    fi
+  fi
+else
+  # Can't connect as ginbar — either already migrated or postgres not ready
+  _WALLIUM=$(docker compose exec -T postgres psql -U wallium -d postgres -tAc \
+    "SELECT 1 FROM pg_roles WHERE rolname='wallium';" 2>/dev/null | tr -d '[:space:]' || true)
+  if [[ "$_WALLIUM" == "1" ]]; then
+    success "PostgreSQL already using wallium role — no migration needed"
+  else
+    warn "Could not connect to PostgreSQL as ginbar or wallium — skipping DB migration (manual action may be required)"
+  fi
+fi
+
 # ── 2. Rebuild changed images ─────────────────────────────────────────────────
 info "Building images (only rebuilds layers that changed)…"
 docker compose build
