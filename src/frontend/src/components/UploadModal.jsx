@@ -22,14 +22,15 @@ const FLAGS_OPTIONS = [
 /**
  * UploadModal — three-tab modal: URL download, file upload, or pr0gramm import.
  * Props:
- *   onClose()  — called when the modal should be dismissed
+ *   onClose()      — called when the modal should be dismissed
+ *   initialFile    — File object to pre-fill in the "File upload" tab
  */
-export default function UploadModal({ onClose }) {
-  const [tab, setTab] = useState("url");
+export default function UploadModal({ onClose, initialFile = null }) {
+  const [tab, setTab] = useState(initialFile ? "file" : "url");
 
   // url / file state
   const [url, setUrl] = useState("");
-  const [file, setFile] = useState(null);
+  const [file, setFile] = useState(initialFile);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const [success, setSuccess] = useState(false);

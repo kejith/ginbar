@@ -19,6 +19,8 @@ export default function Nav() {
   const inputRef = useRef(null);
   const navigate = useNavigate();
   const [showUpload, setShowUpload] = useState(false);
+  const [preloadFile, setPreloadFile] = useState(null);
+  const [dragging, setDragging] = useState(false);
   const [searchParams] = useSearchParams();
   const location = useLocation();
 
@@ -29,6 +31,62 @@ export default function Nav() {
     const id = setInterval(fetchUnread, 30_000);
     return () => clearInterval(id);
   }, [user, fetchUnread]);
+
+  // Global drag-and-drop upload
+  useEffect(() => {
+    if (!user) return;
+
+    function onDragOver(e) {
+      if ([...e.dataTransfer.items].some((i) => i.kind === "file")) {
+        e.preventDefault();
+        setDragging(true);
+      }
+    }
+    function onDragLeave(e) {
+      // only clear when leaving the viewport entirely
+      if (e.relatedTarget === null) setDragging(false);
+    }
+    function onDrop(e) {
+      e.preventDefault();
+      setDragging(false);
+      const f = e.dataTransfer.files[0];
+      if (!f) return;
+      if (!f.type.startsWith("image/") && !f.type.startsWith("video/")) return;
+      setPreloadFile(f);
+      setShowUpload(true);
+    }
+
+    document.addEventListener("dragover", onDragOver);
+    document.addEventListener("dragleave", onDragLeave);
+    document.addEventListener("drop", onDrop);
+    return () => {
+      document.removeEventListener("dragover", onDragOver);
+      document.removeEventListener("dragleave", onDragLeave);
+      document.removeEventListener("drop", onDrop);
+    };
+  }, [user]);
+
+  // Global Ctrl+V clipboard image upload
+  useEffect(() => {
+    if (!user) return;
+
+    function onPaste(e) {
+      // ignore when typing in an input/textarea
+      const tag = document.activeElement?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      const items = [...(e.clipboardData?.items ?? [])];
+      const imageItem = items.find((i) => i.type.startsWith("image/"));
+      if (!imageItem) return;
+      const f = imageItem.getAsFile();
+      if (!f) return;
+      e.preventDefault();
+      setPreloadFile(f);
+      setShowUpload(true);
+    }
+
+    document.addEventListener("paste", onPaste);
+    return () => document.removeEventListener("paste", onPaste);
+  }, [user]);
 
   // Keep the search input in sync with the current URL.
   useEffect(() => {
@@ -183,7 +241,25 @@ export default function Nav() {
         )}
       </div>
 
-      {showUpload && <UploadModal onClose={() => setShowUpload(false)} />}
+      {/* Drag-over overlay */}
+      {dragging && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 backdrop-blur-sm pointer-events-none">
+          <div className="rounded-2xl border-2 border-dashed border-(--color-accent) px-12 py-10 text-center text-(--color-accent)">
+            <div className="text-4xl mb-2">📎</div>
+            <div className="text-lg font-semibold">Drop to upload</div>
+          </div>
+        </div>
+      )}
+
+      {showUpload && (
+        <UploadModal
+          initialFile={preloadFile}
+          onClose={() => {
+            setShowUpload(false);
+            setPreloadFile(null);
+          }}
+        />
+      )}
     </nav>
   );
 }
