@@ -9,6 +9,7 @@ services:
       - ..:/workspace:cached
       - go-cache:/home/vscode/go
       - node-modules-cache:/workspace/src/frontend/node_modules
+      - ~/.ssh/id_ed25519:/home/vscode/.ssh-host/id_ed25519
     command: sleep infinity
     environment:
       - GOPATH=/home/vscode/go
