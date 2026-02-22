@@ -67,8 +67,11 @@ export default function InlinePost({
   const tagInputRef = useRef(null);
   const [showAllTags, setShowAllTags] = useState(false);
   const [addingTag, setAddingTag] = useState(false);
-  const [tagInput, setTagInput] = useState("");
+  const [pendingTags, setPendingTags] = useState([]);
+  const [tagDraft, setTagDraft] = useState("");
   const [tagError, setTagError] = useState("");
+  const [suggestions, setSuggestions] = useState([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
   const [copied, setCopied] = useState(false);
   // true once the full-resolution image has fired its onLoad event
   const [imgReady, setImgReady] = useState(false);
@@ -86,13 +89,18 @@ export default function InlinePost({
   const tags = useTagStore((s) => s.byPost[postId]);
   const voteTag = useTagStore((s) => s.voteTag);
   const createTag = useTagStore((s) => s.createTag);
+  const fetchAllTags = useTagStore((s) => s.fetchAllTags);
+  const allTags = useTagStore((s) => s.allTags);
 
   // Reset tag UI when post changes
   useEffect(() => {
     setShowAllTags(false);
     setAddingTag(false);
-    setTagInput("");
+    setPendingTags([]);
+    setTagDraft("");
     setTagError("");
+    setSuggestions([]);
+    setShowSuggestions(false);
     setImgReady(false);
   }, [postId]);
 
@@ -128,9 +136,18 @@ export default function InlinePost({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [current, postId]);
 
-  // Focus tag input when opened
+  // Focus tag input when opened and pre-load all tags for suggestions
   useEffect(() => {
-    if (addingTag && tagInputRef.current) tagInputRef.current.focus();
+    if (addingTag) {
+      if (tagInputRef.current) tagInputRef.current.focus();
+      fetchAllTags();
+    } else {
+      setPendingTags([]);
+      setTagDraft("");
+      setSuggestions([]);
+      setShowSuggestions(false);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [addingTag]);
 
   // Keyboard navigation
@@ -227,16 +244,91 @@ export default function InlinePost({
 
   async function handleAddTag(e) {
     e.preventDefault();
-    const name = tagInput.trim();
-    if (!name) return;
+    const draftName = tagDraft.trim();
+    const allNames = draftName ? [...pendingTags, draftName] : [...pendingTags];
+    if (!allNames.length) return;
     setTagError("");
+    setSuggestions([]);
+    setShowSuggestions(false);
     try {
-      await createTag(postId, name);
-      setTagInput("");
+      for (const name of allNames) {
+        await createTag(postId, name);
+      }
+      setPendingTags([]);
+      setTagDraft("");
       setAddingTag(false);
     } catch (err) {
       setTagError(err.message ?? "failed");
     }
+  }
+
+  function commitDraft() {
+    const name = tagDraft.trim();
+    if (!name) return;
+    setPendingTags((prev) => [...prev, name]);
+    setTagDraft("");
+    setSuggestions([]);
+    setShowSuggestions(false);
+  }
+
+  function removeChip(index) {
+    setPendingTags((prev) => prev.filter((_, i) => i !== index));
+    tagInputRef.current?.focus();
+  }
+
+  function handleTagKeyDown(e) {
+    if (e.key === "," || e.key === "Tab") {
+      if (tagDraft.trim()) {
+        e.preventDefault();
+        commitDraft();
+      } else {
+        e.preventDefault();
+      }
+      return;
+    }
+    if (e.key === "Backspace" && tagDraft === "" && pendingTags.length > 0) {
+      e.preventDefault();
+      const last = pendingTags[pendingTags.length - 1];
+      setPendingTags((prev) => prev.slice(0, -1));
+      setTagDraft(last);
+    }
+  }
+
+  function handleTagDraftChange(e) {
+    // strip commas — they are used only as separators via keydown
+    const value = e.target.value.replace(/,/g, "");
+    setTagDraft(value);
+    const token = value.trimStart().toLowerCase();
+    if (!token) {
+      setSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+    const existingNames = new Set([
+      ...(tags ?? []).map((t) => {
+        const n = typeof t.name === "object" ? t.name.String : t.name;
+        return n.toLowerCase();
+      }),
+      ...pendingTags.map((n) => n.toLowerCase()),
+    ]);
+    const matches = allTags
+      .map((t) => (typeof t.name === "object" ? t.name.String : t.name))
+      .filter(
+        (n) =>
+          n.toLowerCase().includes(token) &&
+          !existingNames.has(n.toLowerCase()),
+      )
+      .slice(0, 8);
+    setSuggestions(matches);
+    setShowSuggestions(matches.length > 0);
+  }
+
+  function applySuggestion(name) {
+    setPendingTags((prev) => [...prev, name]);
+    setTagDraft("");
+    setSuggestions([]);
+    setShowSuggestions(false);
+    tagInputRef.current?.focus();
   }
 
   function handleShare() {
@@ -599,13 +691,60 @@ export default function InlinePost({
                         onSubmit={handleAddTag}
                         className="flex items-center gap-1.5"
                       >
-                        <input
-                          ref={tagInputRef}
-                          value={tagInput}
-                          onChange={(e) => setTagInput(e.target.value)}
-                          placeholder="tag name"
-                          className="w-28 rounded-[var(--radius-sm)] border border-(--color-border) bg-(--color-bg) px-2 py-0.5 text-xs text-(--color-text) outline-none focus:border-(--color-accent)"
-                        />
+                        {/* Chip input container */}
+                        <div
+                          className="relative flex flex-wrap items-center gap-1 rounded-[var(--radius-sm)] border border-(--color-border) bg-(--color-bg) px-1.5 py-0.5 min-w-32 max-w-64 cursor-text focus-within:border-(--color-accent)"
+                          onClick={() => tagInputRef.current?.focus()}
+                        >
+                          {pendingTags.map((name, i) => (
+                            <span
+                              key={i}
+                              className="inline-flex items-center gap-1 rounded-[var(--radius-badge)] border border-(--color-border) bg-(--color-surface) px-2 py-0.5 text-xs text-(--color-text) shrink-0"
+                            >
+                              {name}
+                              <button
+                                type="button"
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => removeChip(i)}
+                                className="text-[10px] leading-none text-(--color-muted) hover:text-(--color-danger)"
+                              >
+                                ×
+                              </button>
+                            </span>
+                          ))}
+                          <input
+                            ref={tagInputRef}
+                            value={tagDraft}
+                            onChange={handleTagDraftChange}
+                            onKeyDown={handleTagKeyDown}
+                            onFocus={() =>
+                              suggestions.length > 0 && setShowSuggestions(true)
+                            }
+                            onBlur={() =>
+                              setTimeout(() => setShowSuggestions(false), 150)
+                            }
+                            placeholder={
+                              pendingTags.length === 0 ? "add tags…" : ""
+                            }
+                            className="min-w-10 flex-1 bg-transparent text-xs text-(--color-text) outline-none"
+                          />
+                          {showSuggestions && (
+                            <ul className="absolute left-0 top-full z-50 mt-0.5 w-48 rounded-[var(--radius-sm)] border border-(--color-border) bg-(--color-surface) py-0.5 shadow-lg">
+                              {suggestions.map((name) => (
+                                <li key={name}>
+                                  <button
+                                    type="button"
+                                    onMouseDown={(e) => e.preventDefault()}
+                                    onClick={() => applySuggestion(name)}
+                                    className="w-full truncate px-2 py-1 text-left text-xs text-(--color-text) hover:bg-(--color-accent) hover:text-(--color-accent-text)"
+                                  >
+                                    {name}
+                                  </button>
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
                         <button
                           type="submit"
                           className="text-xs text-(--color-accent) hover:opacity-80"

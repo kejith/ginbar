@@ -14,9 +14,25 @@ const useTagStore = create((set) => ({
   loading: false,
   error: null,
 
+  // All tags globally (for autocomplete suggestions)
+  allTags: [],
+  allTagsLoaded: false,
+
   // ── seed ──────────────────────────────────────────────────────────────────
   seed: (postId, tags) =>
     set((s) => ({ byPost: { ...s.byPost, [postId]: tags ?? [] } })),
+
+  // ── fetchAllTags ──────────────────────────────────────────────────────────
+  // Fetches all tags once and caches them for autocomplete.
+  fetchAllTags: async () => {
+    if (useTagStore.getState().allTagsLoaded) return;
+    try {
+      const { data } = await api.get("/tag/");
+      set({ allTags: data.tags ?? [], allTagsLoaded: true });
+    } catch {
+      // non-fatal — suggestions just won't appear
+    }
+  },
 
   // ── createTag ─────────────────────────────────────────────────────────────
   createTag: async (postId, name) => {
@@ -26,13 +42,24 @@ const useTagStore = create((set) => ({
         post_id: postId,
         name,
       });
-      set((s) => ({
-        loading: false,
-        byPost: {
-          ...s.byPost,
-          [postId]: [...(s.byPost[postId] ?? []), data],
-        },
-      }));
+      set((s) => {
+        const tagName =
+          typeof data.name === "object" ? data.name.String : data.name;
+        const alreadyKnown = s.allTags.some((t) => {
+          const n = typeof t.name === "object" ? t.name.String : t.name;
+          return n === tagName;
+        });
+        return {
+          loading: false,
+          byPost: {
+            ...s.byPost,
+            [postId]: [...(s.byPost[postId] ?? []), data],
+          },
+          allTags: alreadyKnown
+            ? s.allTags
+            : [...s.allTags, { id: data.id, name: data.name }],
+        };
+      });
       return data;
     } catch (err) {
       set({ loading: false, error: err.message });
