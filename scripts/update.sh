@@ -13,7 +13,16 @@ error()   { echo -e "${RED}✗${RESET} $*" >&2; exit 1; }
 
 [[ "$EUID" -ne 0 ]] && error "Please run as root: sudo bash scripts/update.sh"
 
-INSTALL_DIR="${WALLIUM_DIR:-/opt/wallium}"
+# ── Resolve install directory (also accepts legacy GINBAR_DIR / /opt/ginbar) ─
+_DEFAULT_DIR="/opt/wallium"
+if [[ -z "${WALLIUM_DIR:-}" && -z "${GINBAR_DIR:-}" ]]; then
+  # Neither override set — prefer /opt/wallium, fall back to /opt/ginbar
+  if [[ ! -d "$_DEFAULT_DIR" && -d "/opt/ginbar" ]]; then
+    _DEFAULT_DIR="/opt/ginbar"
+    info "Legacy install directory detected at /opt/ginbar"
+  fi
+fi
+INSTALL_DIR="${WALLIUM_DIR:-${GINBAR_DIR:-$_DEFAULT_DIR}}"
 [[ -d "$INSTALL_DIR" ]] || error "Install directory not found: $INSTALL_DIR (set \$WALLIUM_DIR to override)"
 cd "$INSTALL_DIR"
 
@@ -37,6 +46,35 @@ else
   success "Updated $(git rev-parse --short HEAD~1)..$(git rev-parse --short HEAD)"
   git log --oneline "${LOCAL}..HEAD"
 fi
+
+# ── 1b. One-time ginbar → wallium migration ──────────────────────────────────
+# Migrate .env: replace any lingering /opt/ginbar paths with the actual
+# install dir so subsequent steps (nginx, service) use the right paths.
+if grep -q '/opt/ginbar' "$INSTALL_DIR/.env" 2>/dev/null; then
+  info "Migrating .env: replacing /opt/ginbar paths with ${INSTALL_DIR}…"
+  sed -i "s|/opt/ginbar|${INSTALL_DIR}|g" "$INSTALL_DIR/.env"
+  # Re-source with updated values
+  set -a; source "$INSTALL_DIR/.env"; set +a
+  MEDIA_DIR="${MEDIA_DIR:-${INSTALL_DIR}/media}"
+  FRONTEND_DIR="${FRONTEND_DIR:-${INSTALL_DIR}/frontend}"
+  success ".env paths updated"
+fi
+
+# Migrate nginx vhost: rename ginbar* site files to the current domain name
+for OLD_VHOST in /etc/nginx/sites-available/ginbar*; do
+  [[ -e "$OLD_VHOST" ]] || continue
+  OLD_DOMAIN=$(grep -oP 'server_name \K[^;]+' "$OLD_VHOST" 2>/dev/null | head -1 | xargs || true)
+  NEW_VHOST="/etc/nginx/sites-available/${OLD_DOMAIN:-wallium}"
+  if [[ "$OLD_VHOST" != "$NEW_VHOST" ]]; then
+    info "Renaming nginx vhost: $(basename "$OLD_VHOST") → $(basename "$NEW_VHOST")…"
+    mv "$OLD_VHOST" "$NEW_VHOST"
+    # Fix dangling symlink in sites-enabled
+    OLD_LINK="/etc/nginx/sites-enabled/$(basename "$OLD_VHOST")"
+    [[ -L "$OLD_LINK" ]] && rm -f "$OLD_LINK"
+    ln -sf "$NEW_VHOST" "/etc/nginx/sites-enabled/$(basename "$NEW_VHOST")"
+    success "Nginx vhost renamed"
+  fi
+done
 
 # ── 2. Rebuild changed images ─────────────────────────────────────────────────
 info "Building images (only rebuilds layers that changed)…"
@@ -67,12 +105,24 @@ info "Installing systemd service unit…"
 sed "s|WorkingDirectory=.*|WorkingDirectory=${INSTALL_DIR}|" \
   "$INSTALL_DIR/wallium.service" > "$SERVICE_DEST"
 chmod 644 "$SERVICE_DEST"
+
+# One-time migration: stop and disable the old ginbar.service if it exists
+if [[ -f "/etc/systemd/system/ginbar.service" ]]; then
+  info "Disabling legacy ginbar.service…"
+  systemctl stop ginbar.service 2>/dev/null || true
+  systemctl disable ginbar.service 2>/dev/null || true
+  rm -f "/etc/systemd/system/ginbar.service"
+  success "ginbar.service removed"
+fi
+
 systemctl daemon-reload
+systemctl enable wallium.service
 success "wallium.service installed and daemon reloaded"
 
 # ── 5. Always overwrite the host nginx vhost and reload ──────────────────────
 DOMAIN=""
-VHOST_DEST=$(ls /etc/nginx/sites-available/wallium* 2>/dev/null | head -1 || true)
+# Accept both wallium* and any remaining ginbar* site files
+VHOST_DEST=$(ls /etc/nginx/sites-available/wallium* /etc/nginx/sites-available/ginbar* 2>/dev/null | head -1 || true)
 if [[ -n "$VHOST_DEST" ]]; then
   DOMAIN=$(grep -oP 'server_name \K[^;]+' "$VHOST_DEST" | head -1 | xargs)
   CERT_DIR_VHOST="/etc/nginx/certs/${DOMAIN}"
@@ -94,6 +144,10 @@ fi
 info "Restarting wallium service…"
 if systemctl is-active --quiet wallium.service; then
   systemctl restart wallium.service
+elif systemctl is-active --quiet ginbar.service; then
+  # Legacy service still running — stop it, start the new one
+  systemctl stop ginbar.service || true
+  systemctl start wallium.service
 else
   systemctl start wallium.service
 fi
