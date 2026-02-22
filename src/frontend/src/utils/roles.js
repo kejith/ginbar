@@ -33,29 +33,25 @@ export function roleName(level) {
 
 /**
  * Returns the filter options the user is allowed to choose in the feed selector.
+ * Each entry: { value, label, defaultOn }
  *
- * - guest:         only SFW (no selector shown)
- * - member:        SFW | NSFW  (NSFW covers both nsfp + nsfw)
- * - secret/admin:  SFW | NSFP | NSFW | Secret
- *
- * Each entry: { value, label }
- * value="" means "show all allowed content" (used as the NSFW option for members).
+ * - guest:         empty array (always SFW, no selector shown)
+ * - member:        SFW (on) | NSFP (on) | NSFW (off)
+ * - secret/admin:  SFW (on) | NSFP (on) | NSFW (off) | Secret (off)
  */
 export function feedFilterOptions(user) {
   if (!isMember(user)) return []; // guests get no choice — always SFW
   if (isSecret(user)) {
     return [
-      { value: "", label: "All" },
-      { value: "sfw", label: "SFW" },
-      { value: "nsfp", label: "NSFP" },
-      { value: "nsfw", label: "NSFW" },
-      { value: "secret", label: "Secret" },
+      { value: "nsfp", label: "NSFP", defaultOn: true },
+      { value: "nsfw", label: "NSFW", defaultOn: false },
+      { value: "secret", label: "Secret", defaultOn: false },
     ];
   }
-  // Normal members: coarse SFW / NSFW toggle only.
+  // Normal members.
   return [
-    { value: "sfw", label: "SFW" },
-    { value: "", label: "NSFW" }, // empty = all member-allowed content
+    { value: "nsfp", label: "NSFP", defaultOn: true },
+    { value: "nsfw", label: "NSFW", defaultOn: false },
   ];
 }
 

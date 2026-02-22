@@ -1,6 +1,10 @@
 package api
 
-import "github.com/gofiber/fiber/v3"
+import (
+	"strings"
+
+	"github.com/gofiber/fiber/v3"
+)
 
 // Role level constants.  The users.level column (default 1) carries these
 // values; higher values represent elevated permissions.
@@ -15,12 +19,11 @@ const (
 var AllFilters = []string{"sfw", "nsfp", "nsfw", "secret"}
 
 // allowedFilters returns the slice of filter values the given user may see,
-// optionally restricted to a single requested filter.
+// restricted to those present in the (comma-separated) requestedFilters param.
 //
-//   - requestedFilter = ""     → return everything the user level allows
-//   - requestedFilter = "nsfw" → members see nsfp+nsfw; secret/admin see nsfw only
-//   - any other value          → exact match, subject to level check
-func allowedFilters(requestedFilter string, userLevel int32) []string {
+//   - requestedFilters = ""            → return everything the user level allows
+//   - requestedFilters = "sfw,nsfp"   → intersection with what the user may see
+func allowedFilters(requestedFilters string, userLevel int32) []string {
 	// Build the full set this user can see.
 	allowed := []string{"sfw"}
 	if userLevel >= LevelMember {
@@ -30,23 +33,27 @@ func allowedFilters(requestedFilter string, userLevel int32) []string {
 		allowed = append(allowed, "secret")
 	}
 
-	if requestedFilter == "" {
+	if requestedFilters == "" {
 		return allowed
 	}
 
-	// For members using the coarse "nsfw" toggle, also include nsfp.
-	if requestedFilter == "nsfw" && userLevel >= LevelMember && userLevel < LevelSecret {
-		return []string{"nsfp", "nsfw"}
+	// Index the allowed set for fast lookup.
+	allowedSet := make(map[string]bool, len(allowed))
+	for _, f := range allowed {
+		allowedSet[f] = true
 	}
 
-	// Honour the exact request only when the user is allowed to see it.
-	for _, f := range allowed {
-		if f == requestedFilter {
-			return []string{requestedFilter}
+	// Return the intersection of requested and allowed, preserving order.
+	var result []string
+	seen := make(map[string]bool)
+	for _, f := range strings.Split(requestedFilters, ",") {
+		f = strings.TrimSpace(f)
+		if allowedSet[f] && !seen[f] {
+			result = append(result, f)
+			seen[f] = true
 		}
 	}
-	// Requested filter is above the user's level — return nothing visible.
-	return []string{}
+	return result
 }
 
 // requireAuth is a Fiber middleware that rejects non-logged-in requests.

@@ -19,13 +19,13 @@ const usePostStore = create((set, get) => ({
   listError: null,
 
   // ── filter state ─────────────────────────────────────────────────────────
-  // Empty string means "show all content the current user is allowed to see".
-  // Non-empty values: 'sfw' | 'nsfp' | 'nsfw' | 'secret'
-  activeFilter: "",
+  // Toggleable extra filters. SFW is always included automatically.
+  // Possible values: 'nsfp' | 'nsfw' | 'secret'
+  activeFilters: ["nsfp"],
 
-  /** Change the active feed filter and reset the post list. */
-  setFilter: (filter) =>
-    set({ activeFilter: filter, posts: [], page: 1, hasMore: true }),
+  /** Replace the active feed filters and reset the post list. */
+  setFilters: (filters) =>
+    set({ activeFilters: filters, posts: [], page: 1, hasMore: true }),
 
   // ── cursor-mode state (active when a direct /post/:id URL is opened) ──────
   // Replaces page-based pagination for the default feed. Both ends use the
@@ -47,8 +47,9 @@ const usePostStore = create((set, get) => ({
     try {
       const params = { page, limit };
       if (tag) params.tag = tag;
-      const { activeFilter } = usePostStore.getState();
-      if (activeFilter) params.filter = activeFilter;
+      const { activeFilters } = usePostStore.getState();
+      const filterParam = ["sfw", ...activeFilters].join(",");
+      if (filterParam) params.filter = filterParam;
       const { data } = await api.get("/post/", { params });
       const incoming = data.posts ?? [];
       set((s) => ({
@@ -73,8 +74,9 @@ const usePostStore = create((set, get) => ({
   fetchAroundPost: async (postId) => {
     set({ listLoading: true, listError: null, cursorMode: false });
     try {
-      const { activeFilter } = usePostStore.getState();
-      const params = activeFilter ? { filter: activeFilter } : undefined;
+      const { activeFilters } = usePostStore.getState();
+      const filterParam = ["sfw", ...activeFilters].join(",");
+      const params = filterParam ? { filter: filterParam } : undefined;
       const { data } = await api.get(`/post/around/${postId}`, { params });
       const incoming = data.posts ?? [];
       set({
@@ -99,9 +101,10 @@ const usePostStore = create((set, get) => ({
     const minId = Math.min(...posts.map((p) => p.id));
     set({ olderLoading: true });
     try {
-      const { activeFilter } = usePostStore.getState();
+      const { activeFilters } = usePostStore.getState();
       const cursorParams = { before_id: minId };
-      if (activeFilter) cursorParams.filter = activeFilter;
+      const filterParam = ["sfw", ...activeFilters].join(",");
+      if (filterParam) cursorParams.filter = filterParam;
       const { data } = await api.get("/post/cursor", { params: cursorParams });
       const incoming = data.posts ?? [];
       set((s) => ({
@@ -122,9 +125,10 @@ const usePostStore = create((set, get) => ({
     const maxId = Math.max(...posts.map((p) => p.id));
     set({ newerLoading: true });
     try {
-      const { activeFilter } = usePostStore.getState();
+      const { activeFilters } = usePostStore.getState();
       const cursorParams = { after_id: maxId };
-      if (activeFilter) cursorParams.filter = activeFilter;
+      const filterParam = ["sfw", ...activeFilters].join(",");
+      if (filterParam) cursorParams.filter = filterParam;
       const { data } = await api.get("/post/cursor", { params: cursorParams });
       const incoming = data.posts ?? [];
       set((s) => ({
@@ -144,10 +148,11 @@ const usePostStore = create((set, get) => ({
     set({ listLoading: true, listError: null });
     try {
       const encoded = encodeURIComponent(query.trim()).replace(/%20/g, "%20");
-      const { activeFilter } = usePostStore.getState();
+      const { activeFilters } = usePostStore.getState();
+      const filterParam = ["sfw", ...activeFilters].join(",");
       const params = {};
       if (username) params.user = username;
-      if (activeFilter) params.filter = activeFilter;
+      if (filterParam) params.filter = filterParam;
       const { data } = await api.get(`/post/search/${encoded}`, {
         params: Object.keys(params).length ? params : undefined,
       });

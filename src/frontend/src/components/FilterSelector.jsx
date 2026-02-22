@@ -3,39 +3,44 @@ import useAuthStore from "../stores/authStore.js";
 import { feedFilterOptions } from "../utils/roles.js";
 
 /**
- * FilterSelector — tab bar that lets members choose which content category
- * to display in the feed.
+ * FilterSelector — multi-toggle that lets members choose which content
+ * categories appear in the feed.  Intended for use inside the navbar.
  *
- * Guests get no selector (they always see SFW content).
- * Normal members see:   SFW | NSFW
- * Secret / admin see:   All | SFW | NSFP | NSFW | Secret
+ * Guests:          hidden (always SFW)
+ * Normal members:  SFW | NSFP | NSFW
+ * Secret / admin:  SFW | NSFP | NSFW | Secret
  *
- * Changing the filter resets the post list via postStore.setFilter().
+ * SFW and NSFP are on by default; NSFW and Secret start off.
  */
 export default function FilterSelector() {
   const user = useAuthStore((s) => s.user);
-  const activeFilter = usePostStore((s) => s.activeFilter);
-  const setFilter = usePostStore((s) => s.setFilter);
+  const activeFilters = usePostStore((s) => s.activeFilters);
+  const setFilters = usePostStore((s) => s.setFilters);
 
   const options = feedFilterOptions(user);
   if (options.length === 0) return null; // guests — don't render
 
+  function toggle(value) {
+    if (activeFilters.includes(value)) {
+      setFilters(activeFilters.filter((f) => f !== value));
+    } else {
+      setFilters([...activeFilters, value]);
+    }
+  }
+
   return (
-    <div className="flex items-center gap-1 px-3 py-2 border-b border-(--color-border) bg-(--color-surface)">
+    <div className="flex items-center gap-1">
       {options.map((opt) => {
-        const active = opt.value === activeFilter;
+        const active = activeFilters.includes(opt.value);
         return (
           <button
             key={opt.value}
-            onClick={() => {
-              if (!active) setFilter(opt.value);
-            }}
-            className={[
-              "rounded-md px-3 py-1 text-xs font-medium transition-colors",
+            onClick={() => toggle(opt.value)}
+            className={`h-6 rounded-sm px-2 text-xs ring-1 cursor-pointer transition-colors ${
               active
-                ? "bg-(--color-accent) text-(--color-accent-text)"
-                : "text-(--color-muted) hover:text-(--color-text) hover:bg-(--color-bg)",
-            ].join(" ")}
+                ? "bg-(--color-accent) text-(--color-bg) ring-(--color-accent)"
+                : "bg-(--color-bg) text-(--color-muted) ring-(--color-border) hover:ring-(--color-accent) hover:text-(--color-text)"
+            }`}
           >
             {opt.label}
           </button>

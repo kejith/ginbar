@@ -9,6 +9,7 @@ import useAuthStore from "../stores/authStore.js";
 import useMessageStore from "../stores/messageStore.js";
 import UploadModal from "./UploadModal.jsx";
 import ThemeSwitcher from "./ThemeSwitcher.jsx";
+import FilterSelector from "./FilterSelector.jsx";
 import { isAdmin } from "../utils/roles.js";
 
 export default function Nav() {
@@ -190,6 +191,9 @@ export default function Nav() {
           go
         </button>
       </form>
+
+      {/* Feed filter */}
+      <FilterSelector />
 
       {/* Theme switcher */}
       <ThemeSwitcher />
