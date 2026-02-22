@@ -488,6 +488,8 @@ func (s *Server) GetMyQueueStatus(c fiber.Ctx) error {
 	return c.JSON(fiber.Map{
 		"has_post":       true,
 		"post_id":        post.ID,
+		"dirty":          post.Dirty,
+		"needs_release":  !post.Released,
 		"queue_position": pos,
 		"eta_sec":        eta,
 	})
@@ -508,8 +510,14 @@ func (s *Server) GetPostQueueStatus(c fiber.Ctx) error {
 		return err
 	}
 	if !dirty {
+		// Check whether the post is awaiting release by its owner.
+		post, postErr := s.store.GetPostAdmin(ctx, int32(id))
+		if postErr != nil {
+			return postErr
+		}
 		resp := fiber.Map{
 			"dirty":          false,
+			"needs_release":  !post.Released,
 			"queue_position": 0,
 			"eta_sec":        0,
 		}

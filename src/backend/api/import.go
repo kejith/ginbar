@@ -362,7 +362,7 @@ for _, cand := range toProcess {
 if s.store == nil {
 break
 }
-post, insertErr := s.store.CreateDirtyPost(ctx, cand.imageURL, userName)
+post, insertErr := s.store.CreateDirtyPost(ctx, cand.imageURL, userName, "nsfw", true)
 if insertErr != nil {
 log.WarnContext(ctx, "failed to insert dirty post",
 slog.String("url", cand.imageURL),
@@ -500,7 +500,7 @@ return nil, "download failed: " + err.Error()
 }
 defer os.Remove(tmpPath)
 
-post, err := s.processAndInsertPostCtx(ctx, imageURL, tmpPath, userName)
+post, err := s.processAndInsertPostCtx(ctx, imageURL, tmpPath, userName, "nsfw")
 if err != nil {
 return nil, err.Error()
 }
@@ -821,7 +821,7 @@ func (s *Server) LoadNewFromPr0gramm(c fiber.Ctx) error {
 						skippedDedup++
 						continue
 					}
-					_, err = s.store.CreateDirtyPost(ctx, imageURL, userName)
+					_, err = s.store.CreateDirtyPost(ctx, imageURL, userName, "nsfw", true)
 					if err != nil {
 						s.log.WarnContext(ctx, "load-new: insert dirty post failed",
 							slog.String("url", imageURL), slog.Any("err", err))

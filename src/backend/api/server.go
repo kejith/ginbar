@@ -157,6 +157,7 @@ func NewServer(store *db.Store, rdb *redis.Client, sessionSecret string, log *sl
 	post.Post("/vote", srv.requireAuth, srv.VotePost)
 	post.Post("/create", srv.requireAuth, srv.CreatePost)
 	post.Post("/upload", srv.requireAuth, srv.UploadPost)
+	post.Post("/:post_id/release", srv.requireAuth, srv.ReleasePost)
 	// Import is restricted to admins.
 	post.Post("/import/pr0gramm", srv.requireAdmin, srv.ImportFromPr0gramm)
 

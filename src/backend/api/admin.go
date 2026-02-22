@@ -209,7 +209,9 @@ func (s *Server) AdminDeleteComment(c fiber.Ctx) error {
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
-// AdminDeleteTag hard-deletes a tag by id.
+// AdminDeleteTag hard-deletes a tag by id.  If the tag is a filter keyword
+// (nsfp / nsfw / secret), the filter of every post that carried it is
+// recalculated from the remaining tags.
 //
 // DELETE /api/admin/tags/:id
 func (s *Server) AdminDeleteTag(c fiber.Ctx) error {
@@ -217,9 +219,28 @@ func (s *Server) AdminDeleteTag(c fiber.Ctx) error {
 	if err != nil || id == 0 {
 		return fiber.NewError(fiber.StatusBadRequest, "invalid tag id")
 	}
+
+	// Look up the tag first so we know its name.
+	tag, err := s.store.GetTag(c.Context(), int32(id))
+	if err != nil {
+		return err
+	}
+
+	// Collect posts affected by this delete before the FK cascade removes them.
+	var affectedPostIDs []int32
+	if filterTagPriority(tag.Name) >= 0 {
+		affectedPostIDs, _ = s.store.GetPostIDsWithTagID(c.Context(), int32(id))
+	}
+
 	if err := s.store.DeleteTag(c.Context(), int32(id)); err != nil {
 		return err
 	}
+
+	// Recalculate filter for every post that lost a filter-keyword tag.
+	for _, postID := range affectedPostIDs {
+		_ = s.recalcPostFilter(c.Context(), postID)
+	}
+
 	return c.SendStatus(fiber.StatusNoContent)
 }
 
