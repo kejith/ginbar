@@ -2,11 +2,14 @@ package api
 
 import (
 	"context"
+	"fmt"
+	"math"
 	"mime"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"wallium/cache"
 	walliumdb "wallium/db"
@@ -279,11 +282,22 @@ func (s *Server) VotePost(c fiber.Ctx) error {
 	return c.SendStatus(fiber.StatusOK)
 }
 
-// CreatePost downloads a file from a URL, processes it, and inserts a post.
+// CreatePost queues a URL-based post for asynchronous processing.
+// The URL is stored as a dirty post; the background queue downloads + processes it.
+// Returns immediately with queue placement info instead of waiting for the pipeline.
 func (s *Server) CreatePost(c fiber.Ctx) error {
 	u, err := s.sessionUser(c)
 	if err != nil || u == nil || u.ID == 0 {
 		return fiber.NewError(fiber.StatusUnauthorized, "not logged in")
+	}
+
+	// Block if the user already has a post waiting in the queue.
+	existing, err := s.store.GetUserDirtyPost(c.Context(), u.Name)
+	if err != nil {
+		return err
+	}
+	if existing != nil {
+		return fiber.NewError(fiber.StatusConflict, "you already have a post in the queue — wait for it to finish")
 	}
 
 	form := new(postURLForm)
@@ -294,24 +308,40 @@ func (s *Server) CreatePost(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "URL is required")
 	}
 
-	tmpPath, err := utils.DownloadFile(form.URL, s.dirs.Tmp)
-	if err != nil {
-		return fiber.NewError(fiber.StatusBadRequest, "could not download file: "+err.Error())
-	}
-	defer os.Remove(tmpPath)
-
-	post, err := s.processAndInsertPost(c, form.URL, tmpPath, u.Name)
+	post, err := s.store.CreateDirtyPost(c.Context(), form.URL, u.Name)
 	if err != nil {
 		return err
 	}
-	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"status": "postCreated", "posts": []dbgen.Post{*post}})
+
+	s.queue.Notify()
+
+	pos, _ := s.store.CountDirtyPostsBeforeID(c.Context(), post.ID)
+	eta := queueETA(s.queue.Snapshot(), pos)
+
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
+		"status":         "queued",
+		"post_id":        post.ID,
+		"queue_position": pos,
+		"eta_sec":        eta,
+	})
 }
 
-// UploadPost saves a multipart file, processes it, and inserts a post.
+// UploadPost queues a file-upload post for asynchronous processing.
+// The file is saved to the uploads directory and a dirty post row is inserted;
+// the background queue processes it once resources are available.
 func (s *Server) UploadPost(c fiber.Ctx) error {
 	u, err := s.sessionUser(c)
 	if err != nil || u == nil || u.ID == 0 {
 		return fiber.NewError(fiber.StatusUnauthorized, "not logged in")
+	}
+
+	// Block if the user already has a post waiting in the queue.
+	existing, err := s.store.GetUserDirtyPost(c.Context(), u.Name)
+	if err != nil {
+		return err
+	}
+	if existing != nil {
+		return fiber.NewError(fiber.StatusConflict, "you already have a post in the queue — wait for it to finish")
 	}
 
 	fh, err := c.FormFile("file")
@@ -319,17 +349,43 @@ func (s *Server) UploadPost(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusBadRequest, "file field missing: "+err.Error())
 	}
 
-	tmpPath := filepath.Join(s.dirs.Tmp, filepath.Base(fh.Filename))
-	if err := c.SaveFile(fh, tmpPath); err != nil {
+	// Save uploaded file to the uploads directory with a unique name so
+	// concurrent uploads don't overwrite each other.
+	uniqueName := fmt.Sprintf("upload_%d_%s", time.Now().UnixNano(), filepath.Base(fh.Filename))
+	savedPath := filepath.Join(s.dirs.Upload, uniqueName)
+	if err := c.SaveFile(fh, savedPath); err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "could not save upload: "+err.Error())
 	}
-	defer os.Remove(tmpPath)
 
-	post, err := s.processAndInsertPost(c, "", tmpPath, u.Name)
+	post, err := s.store.CreateDirtyPostWithUpload(c.Context(), "", u.Name, savedPath)
 	if err != nil {
+		_ = os.Remove(savedPath)
 		return err
 	}
-	return c.Status(fiber.StatusCreated).JSON(fiber.Map{"status": "postCreated", "posts": []dbgen.Post{*post}})
+
+	s.queue.Notify()
+
+	pos, _ := s.store.CountDirtyPostsBeforeID(c.Context(), post.ID)
+	eta := queueETA(s.queue.Snapshot(), pos)
+
+	return c.Status(fiber.StatusCreated).JSON(fiber.Map{
+		"status":         "queued",
+		"post_id":        post.ID,
+		"queue_position": pos,
+		"eta_sec":        eta,
+	})
+}
+
+// queueETA returns an estimated seconds-to-complete given the current queue
+// snapshot and how many items are ahead of the caller's post.
+func queueETA(snap QueueSnapshot, pos int) int {
+	if snap.RatePerSec <= 0 {
+		return -1
+	}
+	if pos <= 0 {
+		return snap.ETASec
+	}
+	return int(math.Ceil(float64(pos) / snap.RatePerSec))
 }
 
 // processAndInsertPost is shared by CreatePost and UploadPost.

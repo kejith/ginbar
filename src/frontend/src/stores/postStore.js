@@ -228,36 +228,43 @@ const usePostStore = create((set, get) => ({
   },
 
   // ── createPost (URL-based) ────────────────────────────────────────────────
+  // Returns { status: "queued", post_id, queue_position, eta_sec }.
+  // Poll getPostQueueStatus(post_id) until dirty=false to know when it is done.
   createPost: async (url) => {
     const { data } = await api.post("/post/create", { URL: url });
-    const post = data.posts?.[0];
-    if (post) set((s) => ({ posts: [post, ...s.posts] }));
-    return data;
+    return data; // { status, post_id, queue_position, eta_sec }
   },
 
   // ── uploadPost (file) ─────────────────────────────────────────────────────
+  // Returns { status: "queued", post_id, queue_position, eta_sec }.
   uploadPost: async (file) => {
     const form = new FormData();
     form.append("file", file);
     const { data } = await api.post("/post/upload", form, {
       headers: { "Content-Type": "multipart/form-data" },
     });
-    const post = data.posts?.[0];
-    if (post) set((s) => ({ posts: [post, ...s.posts] }));
+    return data; // { status, post_id, queue_position, eta_sec }
+  },
+
+  // ── getPostQueueStatus ────────────────────────────────────────────────────
+  // Returns { dirty, queue_position, eta_sec }.
+  // dirty=false means the post was finalized (or deleted on failure).
+  getPostQueueStatus: async (postId) => {
+    const { data } = await api.get(`/post/queue/${postId}`);
     return data;
   },
 
   // ── importFromPr0gramm ────────────────────────────────────────────────────
-  // Streams the multi-phase pr0gramm import over SSE.
+  // Streams the page-fetch phase of a pr0gramm import over SSE.
+  // Processing is handled by the background queue worker (visible in admin panel).
   //
   //   params     = { tags: string, flags: number, maxPages: number }
   //   onProgress = (event) => void
   //     event shapes (keyed by `phase`):
-  //       { phase: 'fetching',    page, max_pages, total_read, at_end }
-  //       { phase: 'inserted',    total, skipped_dedup }
-  //       { phase: 'processing',  total, processed, imported, failed }
-  //       { phase: 'done',        total, imported, failed }
-  //       { phase: 'error',       message }
+  //       { phase: 'fetching',  page, max_pages, total_read, at_end }
+  //       { phase: 'inserted',  total, filtered_ext, skipped_dedup, insert_errors }
+  //       { phase: 'done',      total, imported: 0, failed: 0 }
+  //       { phase: 'error',     message }
   //
   // Resolves with the final `done` event when the stream closes.
   // Rejects with an Error on network failure or if an `error` SSE event arrives.

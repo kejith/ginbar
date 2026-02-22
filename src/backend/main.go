@@ -73,10 +73,13 @@ func main() {
 
 	srv := api.NewServer(store, rdb, sessionSecret, log)
 
-	// ── Flush worker ──────────────────────────────────────────────────────────
+	// ── Flush worker + queue processor ───────────────────────────────────────
 	// workerCtx is cancelled during graceful shutdown, triggering a final flush.
 	workerCtx, workerCancel := context.WithCancel(context.Background())
 	flushDone := cache.StartFlushWorker(workerCtx, rdb, pool, 3*time.Second, log)
+
+	// Start the dirty-post processing queue.
+	srv.Start(workerCtx)
 
 	// ── Graceful shutdown ─────────────────────────────────────────────────────
 	quit := make(chan os.Signal, 1)

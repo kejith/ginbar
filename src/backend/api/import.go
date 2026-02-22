@@ -7,14 +7,14 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"mime"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"wallium/db"
@@ -75,6 +75,13 @@ Image    string `json:"image"`
 // Must match the constant referenced in import_test.go.
 const importConcurrency = 16
 
+// pr0grammPageDelay is the minimum pause between successive API page requests
+// to avoid triggering rate limiting.
+const pr0grammPageDelay = 500 * time.Millisecond
+
+// pr0grammMaxRetries is the number of times a page fetch is retried on HTTP 429.
+const pr0grammMaxRetries = 4
+
 // ── SSE event shapes ──────────────────────────────────────────────────────────
 
 type ssePhase string
@@ -88,17 +95,21 @@ phError      ssePhase = "error"
 )
 
 type sseFetchingEvent struct {
-Phase     ssePhase `json:"phase"`
-Page      int      `json:"page"`
-MaxPages  int      `json:"max_pages"`
-TotalRead int      `json:"total_read"`
-AtEnd     bool     `json:"at_end"`
+Phase        ssePhase `json:"phase"`
+Page         int      `json:"page"`
+MaxPages     int      `json:"max_pages"`
+TotalRead    int      `json:"total_read"`
+AtEnd        bool     `json:"at_end"`
+SuccessPages int      `json:"success_pages"`
+FailedPages  int      `json:"failed_pages"`
 }
 
 type sseInsertedEvent struct {
-Phase        ssePhase `json:"phase"`
-Total        int      `json:"total"`
-SkippedDedup int      `json:"skipped_dedup"`
+Phase         ssePhase `json:"phase"`
+Total         int      `json:"total"`
+FilteredExt   int      `json:"filtered_ext"`   // unsupported file extension
+SkippedDedup  int      `json:"skipped_dedup"`  // URL already in DB
+InsertErrors  int      `json:"insert_errors"`  // CreateDirtyPost failures
 }
 
 type sseProcessingEvent struct {
@@ -197,34 +208,52 @@ slog.String("user", userName),
 var allItems []pr0grammItem
 older := int64(0)
 
+successPages := 0
+failedPages := 0
+
 for page := 1; page <= maxPages; page++ {
 resp, fetchErr := fetchPr0grammPage(tags, flags, older)
 if fetchErr != nil {
+failedPages++
 log.ErrorContext(ctx, "pr0gramm page fetch failed",
-slog.Int("page", page), slog.Any("err", fetchErr))
-writeSSE(w, sseErrorEvent{
-Phase:   phError,
-Message: "pr0gramm API error: " + fetchErr.Error(),
+slog.Int("page", page),
+slog.Int("success_pages_so_far", successPages),
+slog.Int("failed_pages_so_far", failedPages),
+slog.Any("err", fetchErr))
+writeSSE(w, sseFetchingEvent{
+Phase:        phFetching,
+Page:         page,
+MaxPages:     maxPages,
+TotalRead:    len(allItems),
+AtEnd:        false,
+SuccessPages: successPages,
+FailedPages:  failedPages,
 })
-return
+// Do not abort — continue to next page so one bad page doesn't kill the import.
+continue
 }
 
+successPages++
 allItems = append(allItems, resp.Items...)
 older = minPromoted(resp.Items)
 atEnd := resp.AtEnd || len(resp.Items) == 0
 
 writeSSE(w, sseFetchingEvent{
-Phase:     phFetching,
-Page:      page,
-MaxPages:  maxPages,
-TotalRead: len(allItems),
-AtEnd:     atEnd,
+Phase:        phFetching,
+Page:         page,
+MaxPages:     maxPages,
+TotalRead:    len(allItems),
+AtEnd:        atEnd,
+SuccessPages: successPages,
+FailedPages:  failedPages,
 })
 
 log.InfoContext(ctx, "pr0gramm page fetched",
 slog.Int("page", page),
 slog.Int("items_this_page", len(resp.Items)),
 slog.Int("total_so_far", len(allItems)),
+slog.Int("success_pages", successPages),
+slog.Int("failed_pages", failedPages),
 slog.Bool("api_at_end", resp.AtEnd),
 slog.Bool("at_end", atEnd),
 )
@@ -232,6 +261,8 @@ slog.Bool("at_end", atEnd),
 if atEnd {
 log.InfoContext(ctx, "pr0gramm fetch stopped",
 slog.Int("page", page),
+slog.Int("success_pages", successPages),
+slog.Int("failed_pages", failedPages),
 slog.String("reason", func() string {
 if resp.AtEnd {
 return "pr0gramm API returned atEnd=true"
@@ -243,6 +274,12 @@ break
 }
 }
 
+log.InfoContext(ctx, "pr0gramm fetch phase complete",
+slog.Int("success_pages", successPages),
+slog.Int("failed_pages", failedPages),
+slog.Int("total_items", len(allItems)),
+)
+
 // ── Phase 2: Filter, batch dedup, insert dirty rows ───────────────────
 type candidate struct {
 item     pr0grammItem
@@ -250,9 +287,11 @@ imageURL string
 }
 
 // Drop non-image extensions immediately.
+filteredExt := 0
 var candidates []candidate
 for _, item := range allItems {
 if item.Image == "" {
+filteredExt++
 continue
 }
 ext := strings.ToLower(filepath.Ext(item.Image))
@@ -260,6 +299,11 @@ switch ext {
 case ".jxl", ".avif", ".webp", ".jpg", ".gif":
 // supported
 default:
+log.DebugContext(ctx, "pr0gramm item skipped: unsupported extension",
+slog.String("image", item.Image),
+slog.String("ext", ext),
+)
+filteredExt++
 continue
 }
 candidates = append(candidates, candidate{
@@ -267,6 +311,11 @@ item:     item,
 imageURL: pr0grammImgBase + item.Image,
 })
 }
+log.InfoContext(ctx, "pr0gramm extension filter",
+slog.Int("raw_items", len(allItems)),
+slog.Int("filtered_ext", filteredExt),
+slog.Int("candidates", len(candidates)),
+)
 
 allURLs := make([]string, len(candidates))
 for i, c := range candidates {
@@ -294,6 +343,11 @@ toProcess = append(toProcess, c)
 } else {
 toProcess = candidates
 }
+log.InfoContext(ctx, "pr0gramm dedup",
+slog.Int("candidates", len(candidates)),
+slog.Int("skipped_dedup", skippedDedup),
+slog.Int("to_process", len(toProcess)),
+)
 
 // Insert placeholder dirty rows (one per new URL).
 type dirtyEntry struct {
@@ -302,6 +356,7 @@ item     pr0grammItem
 imageURL string
 }
 
+insertErrors := 0
 var dirtyPosts []dirtyEntry
 for _, cand := range toProcess {
 if s.store == nil {
@@ -312,7 +367,7 @@ if insertErr != nil {
 log.WarnContext(ctx, "failed to insert dirty post",
 slog.String("url", cand.imageURL),
 slog.Any("err", insertErr))
-skippedDedup++
+insertErrors++
 continue
 }
 dirtyPosts = append(dirtyPosts, dirtyEntry{
@@ -326,76 +381,33 @@ total := len(dirtyPosts)
 writeSSE(w, sseInsertedEvent{
 Phase:        phInserted,
 Total:        total,
+FilteredExt:  filteredExt,
 SkippedDedup: skippedDedup,
+InsertErrors: insertErrors,
 })
 
 log.InfoContext(ctx, "pr0gramm dirty posts inserted",
-slog.Int("total", total),
+slog.Int("total_queued", total),
+slog.Int("filtered_ext", filteredExt),
 slog.Int("skipped_dedup", skippedDedup),
+slog.Int("insert_errors", insertErrors),
 )
 
-// ── Phase 3: Download + process concurrently ──────────────────────────
-var (
-processed atomic.Int32
-imported  atomic.Int32
-failed    atomic.Int32
-)
-
-sem := make(chan struct{}, importConcurrency)
-var wg sync.WaitGroup
-var mu sync.Mutex
-
-for _, dp := range dirtyPosts {
-wg.Add(1)
-dp := dp
-sem <- struct{}{}
-go func() {
-defer wg.Done()
-defer func() { <-sem }()
-
-finalizeErr := s.processAndFinalizeDirtyPost(ctx, dp.postID, dp.imageURL)
-proc := int(processed.Add(1))
-if finalizeErr != nil {
-failed.Add(1)
-log.DebugContext(ctx, "failed to finalize dirty post",
-slog.Int("post_id", int(dp.postID)),
-slog.Any("err", finalizeErr),
-)
-} else {
-imported.Add(1)
-log.DebugContext(ctx, "dirty post finalized",
-slog.Int("post_id", int(dp.postID)),
-)
-}
-
-mu.Lock()
-writeSSE(w, sseProcessingEvent{
-Phase:     phProcessing,
-Total:     total,
-Processed: proc,
-Imported:  int(imported.Load()),
-Failed:    int(failed.Load()),
-})
-mu.Unlock()
-}()
-}
-wg.Wait()
-
-finalImported := int(imported.Load())
-finalFailed := int(failed.Load())
+// ── Hand off to background process queue ──────────────────────────────
+s.queue.Notify()
 
 writeSSE(w, sseDoneEvent{
 Phase:    phDone,
 Total:    total,
-Imported: finalImported,
-Failed:   finalFailed,
+Imported: 0,
+Failed:   0,
 })
 
-log.InfoContext(ctx, "pr0gramm import complete",
-slog.Int("total", total),
-slog.Int("imported", finalImported),
-slog.Int("failed", finalFailed),
+log.InfoContext(ctx, "pr0gramm import: dirty posts queued",
+slog.Int("total_queued", total),
+slog.Int("filtered_ext", filteredExt),
 slog.Int("skipped_dedup", skippedDedup),
+slog.Int("insert_errors", insertErrors),
 )
 })
 	return nil
@@ -504,41 +516,85 @@ Image:    item.Image,
 
 // fetchPr0grammPage calls the pr0gramm items API.  When older > 0 the cursor
 // is included so the API returns items older than that promoted ID.
+// The function automatically retries up to pr0grammMaxRetries times when the
+// server responds with HTTP 429, honouring the Retry-After header when present
+// and falling back to exponential backoff otherwise.
 func fetchPr0grammPage(tags string, flags int, older int64) (*pr0grammResponse, error) {
-params := url.Values{}
-params.Set("tags", tags)
-params.Set("flags", fmt.Sprintf("%d", flags))
-params.Set("promoted", "1")
-params.Set("show_junk", "0")
-if older > 0 {
-params.Set("older", fmt.Sprintf("%d", older))
+	params := url.Values{}
+	params.Set("tags", tags)
+	params.Set("flags", fmt.Sprintf("%d", flags))
+	params.Set("promoted", "1")
+	params.Set("show_junk", "0")
+	if older > 0 {
+		params.Set("older", fmt.Sprintf("%d", older))
+	}
+
+	apiURL := pr0grammAPIBase + "?" + params.Encode()
+
+	for attempt := 0; attempt <= pr0grammMaxRetries; attempt++ {
+		req, err := http.NewRequest(http.MethodGet, apiURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; wallium-importer/1.0)")
+		req.Header.Set("Accept", "application/json")
+
+		resp, err := pr0grammClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("GET %s: %w", apiURL, err)
+		}
+
+		if resp.StatusCode == http.StatusTooManyRequests {
+			// Determine how long to wait before the next attempt.
+			wait := rateLimitBackoff(resp, attempt)
+			_ = resp.Body.Close()
+			if attempt == pr0grammMaxRetries {
+				return nil, fmt.Errorf("pr0gramm API rate limit exceeded after %d retries", pr0grammMaxRetries)
+			}
+			time.Sleep(wait)
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+			_ = resp.Body.Close()
+			return nil, fmt.Errorf("pr0gramm API returned HTTP %d: %s", resp.StatusCode, body)
+		}
+
+		var result pr0grammResponse
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			_ = resp.Body.Close()
+			return nil, fmt.Errorf("decode response: %w", err)
+		}
+		_ = resp.Body.Close()
+		return &result, nil
+	}
+
+	// Unreachable, but keeps the compiler happy.
+	return nil, fmt.Errorf("pr0gramm API rate limit exceeded after %d retries", pr0grammMaxRetries)
 }
 
-apiURL := pr0grammAPIBase + "?" + params.Encode()
-
-req, err := http.NewRequest(http.MethodGet, apiURL, nil)
-if err != nil {
-return nil, err
-}
-req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; wallium-importer/1.0)")
-req.Header.Set("Accept", "application/json")
-
-resp, err := pr0grammClient.Do(req)
-if err != nil {
-return nil, fmt.Errorf("GET %s: %w", apiURL, err)
-}
-defer resp.Body.Close()
-
-if resp.StatusCode != http.StatusOK {
-body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
-return nil, fmt.Errorf("pr0gramm API returned HTTP %d: %s", resp.StatusCode, body)
-}
-
-var result pr0grammResponse
-if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-return nil, fmt.Errorf("decode response: %w", err)
-}
-return &result, nil
+// rateLimitBackoff returns how long to wait after a 429 response.
+// It reads the Retry-After header first; if absent it uses exponential backoff
+// starting at 2 s and capped at 60 s.
+func rateLimitBackoff(resp *http.Response, attempt int) time.Duration {
+	if ra := resp.Header.Get("Retry-After"); ra != "" {
+		// Retry-After can be a delay-seconds integer or an HTTP-date; try integer first.
+		if secs, err := strconv.Atoi(ra); err == nil && secs > 0 {
+			return time.Duration(secs) * time.Second
+		}
+		if t, err := http.ParseTime(ra); err == nil {
+			if d := time.Until(t); d > 0 {
+				return d
+			}
+		}
+	}
+	// Exponential backoff: 2s, 4s, 8s, 16s … capped at 60s.
+	backoff := time.Duration(math.Pow(2, float64(attempt+1))) * time.Second
+	if backoff > 60*time.Second {
+		backoff = 60 * time.Second
+	}
+	return backoff
 }
 
 // downloadPr0grammFile downloads a file from the pr0gramm image CDN into dir.

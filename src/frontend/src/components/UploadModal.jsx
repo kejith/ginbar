@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { createPortal } from "react-dom";
 import usePostStore from "../stores/postStore.js";
 import useAuthStore from "../stores/authStore.js";
@@ -12,6 +12,8 @@ const TABS = [
   { id: "pr0gramm", label: "pr0gramm" },
 ];
 
+const QUEUE_TAB = { id: "queue", label: "In Queue" };
+
 const FLAGS_OPTIONS = [
   { value: 1, label: "SFW only" },
   { value: 3, label: "SFW + NSFW" },
@@ -19,8 +21,24 @@ const FLAGS_OPTIONS = [
   { value: 2, label: "NSFW only" },
 ];
 
+function fmtETA(sec) {
+  if (sec < 0 || sec == null) return null;
+  if (sec === 0) return "any moment";
+  if (sec < 60) return `~${sec}s`;
+  if (sec < 3600) return `~${Math.floor(sec / 60)}m ${sec % 60}s`;
+  return `~${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`;
+}
+
 /**
  * UploadModal — three-tab modal: URL download, file upload, or pr0gramm import.
+ *
+ * Uploads are now asynchronous: the backend creates a dirty post and the
+ * background queue picks it up.  The modal shows live queue position + ETA
+ * and auto-closes once the post is finalized.
+ *
+ * Members can only have one post in the queue at a time.  The pr0gramm import
+ * is admin-only and can always be triggered regardless of the queue state.
+ *
  * Props:
  *   onClose()      — called when the modal should be dismissed
  *   initialFile    — File object to pre-fill in the "File upload" tab
@@ -33,23 +51,25 @@ export default function UploadModal({
 }) {
   const [tab, setTab] = useState(initialFile ? "file" : "url");
 
-  // url / file state
+  // ── URL / File state ──────────────────────────────────────────────────────
   const [url, setUrl] = useState(initialUrl);
   const [file, setFile] = useState(initialFile);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [success, setSuccess] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  // Once the post is queued, queueInfo is set and we poll for completion.
+  const [queueInfo, setQueueInfo] = useState(null); // { post_id, queue_position, eta_sec }
+  const [queueDone, setQueueDone] = useState(false);
   const fileRef = useRef(null);
+  const pollRef = useRef(null);
 
-  // pr0gramm import state
+  // ── Pr0gramm state ────────────────────────────────────────────────────────
   const [prTags, setPrTags] = useState("");
   const [prFlags, setPrFlags] = useState(1);
   const [prMaxPages, setPrMaxPages] = useState(5);
   // prProgress holds the latest SSE event — shape varies by `phase`:
-  //   { phase:'fetching',    page, max_pages, total_read, at_end }
-  //   { phase:'inserted',    total, skipped_dedup }
-  //   { phase:'processing',  total, processed, imported, failed }
-  //   { phase:'done',        total, imported, failed }
+  //   { phase:'fetching',  page, max_pages, total_read, at_end, success_pages, failed_pages }
+  //   { phase:'inserted',  total, filtered_ext, skipped_dedup, insert_errors }
+  //   { phase:'done',      total }
   const [prProgress, setPrProgress] = useState(null);
   const [prError, setPrError] = useState(null);
 
@@ -58,33 +78,77 @@ export default function UploadModal({
 
   const createPost = usePostStore((s) => s.createPost);
   const uploadPost = usePostStore((s) => s.uploadPost);
+  const getPostQueueStatus = usePostStore((s) => s.getPostQueueStatus);
   const importFromPr0gramm = usePostStore((s) => s.importFromPr0gramm);
 
-  const visibleTabs = admin ? TABS : TABS.filter((t) => t.id !== "pr0gramm");
+  const visibleTabs = [
+    ...(admin ? TABS : TABS.filter((t) => t.id !== "pr0gramm")),
+    ...(queueInfo ? [QUEUE_TAB] : []),
+  ];
 
-  // ── url / file submit ──────────────────────────────────────────────────────
+  // Auto-switch to the queue tab as soon as a post enters the queue.
+  useEffect(() => {
+    if (queueInfo) setTab("queue");
+  }, [queueInfo?.post_id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Queue polling effect ──────────────────────────────────────────────────
+  // Polls every 2 s while this user's post is waiting in the queue.
+  // Stops (and auto-closes) once dirty=false (post finalized or failed).
+  useEffect(() => {
+    if (!queueInfo || queueDone) return;
+
+    const poll = async () => {
+      try {
+        const status = await getPostQueueStatus(queueInfo.post_id);
+        if (!status.dirty) {
+          setQueueDone(true);
+          clearInterval(pollRef.current);
+          setTimeout(onClose, 1500);
+        } else {
+          setQueueInfo((prev) => ({
+            ...prev,
+            queue_position: status.queue_position,
+            eta_sec: status.eta_sec,
+          }));
+        }
+      } catch (_) {
+        // ignore transient errors; keep polling
+      }
+    };
+
+    poll(); // immediate first check
+    pollRef.current = setInterval(poll, 2000);
+    return () => clearInterval(pollRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queueInfo?.post_id, queueDone]);
+
+  // ── URL / File submit ─────────────────────────────────────────────────────
   async function handleSubmit(e) {
     e.preventDefault();
     setError(null);
-    setLoading(true);
+    setSubmitting(true);
     try {
+      let result;
       if (tab === "url") {
         if (!url.trim()) throw new Error("URL is required");
-        await createPost(url.trim());
+        result = await createPost(url.trim());
       } else {
         if (!file) throw new Error("Please pick a file");
-        await uploadPost(file);
+        result = await uploadPost(file);
       }
-      setSuccess(true);
-      setTimeout(onClose, 800);
+      setQueueInfo({
+        post_id: result.post_id,
+        queue_position: result.queue_position,
+        eta_sec: result.eta_sec,
+      });
     } catch (err) {
-      setError(err.response?.data?.error ?? err.message);
+      setError(err.response?.data?.error ?? err.message ?? "Upload failed");
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
   }
 
-  // ── pr0gramm import submit ─────────────────────────────────────────────────
+  // ── Pr0gramm import submit ─────────────────────────────────────────────────
   async function handlePr0grammImport(e) {
     e.preventDefault();
     if (!prTags.trim()) {
@@ -111,17 +175,18 @@ export default function UploadModal({
     }
   }
 
-  // Close on backdrop click (blocked while an import is running)
+  // Close on backdrop click — blocked while a member post is in the queue
+  // or a pr0gramm import is actively fetching pages.
   function handleBackdrop(e) {
     if (e.target !== e.currentTarget) return;
-    if (isImporting) return;
+    if (isImporting || queueInfo) return;
     onClose();
   }
 
   const isImporting =
     prProgress !== null && prProgress.phase !== "done" && !prError;
 
-  // Phase 1: fetching JSON pages
+  // Phase-1 page-fetch progress
   const isFetchingPhase =
     prProgress?.phase === "fetching" || prProgress?.phase === "inserted";
   const fetchPct = prProgress
@@ -134,23 +199,6 @@ export default function UploadModal({
         ),
       )
     : 0;
-
-  // Phase 2: processing posts
-  const isProcessingPhase =
-    prProgress?.phase === "processing" || prProgress?.phase === "done";
-  const processPct =
-    prProgress?.total > 0
-      ? Math.min(
-          100,
-          Math.round(
-            ((prProgress.processed ?? prProgress.total ?? 0) /
-              prProgress.total) *
-              100,
-          ),
-        )
-      : prProgress?.phase === "done"
-        ? 100
-        : 0;
 
   return createPortal(
     <div className="fixed inset-0 z-100 overflow-y-auto bg-black/60 backdrop-blur-sm">
@@ -223,20 +271,64 @@ export default function UploadModal({
                   {error}
                 </p>
               )}
-              {success && (
-                <p className="text-sm font-medium text-(--color-accent)">
-                  ✓ Post created!
-                </p>
-              )}
 
               <button
                 type="submit"
-                disabled={loading || success}
+                disabled={submitting}
                 className="rounded-lg bg-(--color-accent) py-2 text-sm font-semibold text-(--color-accent-text) disabled:opacity-50"
               >
-                {loading ? "Uploading…" : "Upload"}
+                {submitting ? "Submitting…" : "Upload"}
               </button>
             </form>
+          )}
+
+          {/* ── Queue status tab ──────────────────────────────────────── */}
+          {tab === "queue" && queueInfo && (
+            <div className="flex flex-col gap-4">
+              {!queueDone ? (
+                <>
+                  <div className="flex flex-col gap-3 rounded-lg bg-(--color-bg) p-4">
+                    <div className="flex items-center gap-2 text-sm text-(--color-muted)">
+                      <span className="animate-pulse text-(--color-accent)">
+                        ●
+                      </span>
+                      <span>Processing your post…</span>
+                    </div>
+                    <ProgressBar value={0} status="active" />
+                    <div className="flex justify-between text-sm">
+                      <span className="text-(--color-muted)">
+                        Queue position:{" "}
+                        <span className="font-semibold text-(--color-text)">
+                          {queueInfo.queue_position > 0
+                            ? `#${queueInfo.queue_position}`
+                            : "up next"}
+                        </span>
+                      </span>
+                      {fmtETA(queueInfo.eta_sec) && (
+                        <span className="text-(--color-muted)">
+                          ETA:{" "}
+                          <span className="font-semibold text-(--color-text)">
+                            {fmtETA(queueInfo.eta_sec)}
+                          </span>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <p className="text-center text-xs text-(--color-muted)">
+                    You can close this dialog — your post will continue
+                    processing in the background.
+                  </p>
+                </>
+              ) : (
+                <div className="flex flex-col items-center gap-3 py-6">
+                  <span className="text-4xl">✓</span>
+                  <p className="text-sm font-semibold text-(--color-accent)">
+                    Post added!
+                  </p>
+                  <p className="text-xs text-(--color-muted)">Closing…</p>
+                </div>
+              )}
+            </div>
           )}
 
           {/* ── Pr0gramm import tab ─────────────────────────────────────── */}
@@ -301,15 +393,12 @@ export default function UploadModal({
                 </div>
               </div>
 
-              {/* Progress section — shown once import starts */}
+              {/* Fetch progress — shown once import starts */}
               {prProgress !== null && (
                 <div className="flex flex-col gap-3 rounded-lg bg-(--color-bg) p-3">
-                  {/* ── Phase 1: fetching pages ───────────────────────────── */}
                   <div className="flex flex-col gap-1">
                     <div className="flex justify-between text-xs text-(--color-muted)">
-                      <span className="font-medium">
-                        Phase 1 — Fetching pages
-                      </span>
+                      <span className="font-medium">Fetching pages</span>
                       <span>
                         {prProgress.page ?? prProgress.max_pages ?? prMaxPages}{" "}
                         / {prProgress.max_pages ?? prMaxPages}
@@ -317,12 +406,14 @@ export default function UploadModal({
                     </div>
                     <ProgressBar
                       value={
-                        isProcessingPhase || prProgress.phase === "done"
+                        prProgress.phase === "done" ||
+                        prProgress.phase === "inserted"
                           ? 100
                           : fetchPct
                       }
                       status={
-                        isProcessingPhase || prProgress.phase === "done"
+                        prProgress.phase === "done" ||
+                        prProgress.phase === "inserted"
                           ? "success"
                           : prError
                             ? "error"
@@ -330,57 +421,61 @@ export default function UploadModal({
                       }
                     />
                     {isFetchingPhase && (
-                      <span className="text-xs text-(--color-muted)">
-                        {prProgress.total_read ?? 0} items read
-                      </span>
+                      <div className="flex gap-3 text-xs">
+                        <span className="text-(--color-muted)">
+                          {prProgress.total_read ?? 0} items read
+                        </span>
+                        {(prProgress.success_pages ?? 0) > 0 && (
+                          <span className="text-(--color-accent)">
+                            ✓ {prProgress.success_pages} ok
+                          </span>
+                        )}
+                        {(prProgress.failed_pages ?? 0) > 0 && (
+                          <span className="text-(--color-danger)">
+                            ✗ {prProgress.failed_pages} failed
+                          </span>
+                        )}
+                      </div>
                     )}
                     {prProgress.phase === "inserted" && (
-                      <span className="text-xs text-(--color-accent)">
-                        {prProgress.total} new posts registered
-                        {prProgress.skipped_dedup > 0
-                          ? `, ${prProgress.skipped_dedup} already exist`
-                          : ""}
-                      </span>
+                      <div className="flex flex-col gap-1">
+                        <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs">
+                          <span className="text-(--color-accent) font-medium">
+                            ✓ {prProgress.total} queued
+                          </span>
+                          {(prProgress.skipped_dedup ?? 0) > 0 && (
+                            <span className="text-(--color-muted)">
+                              {prProgress.skipped_dedup} already exist
+                            </span>
+                          )}
+                          {(prProgress.filtered_ext ?? 0) > 0 && (
+                            <span className="text-(--color-muted)">
+                              {prProgress.filtered_ext} unsupported format
+                            </span>
+                          )}
+                          {(prProgress.insert_errors ?? 0) > 0 && (
+                            <span className="text-(--color-danger)">
+                              ✗ {prProgress.insert_errors} insert error
+                              {prProgress.insert_errors !== 1 ? "s" : ""}
+                            </span>
+                          )}
+                        </div>
+                        {(prProgress.failed_pages ?? 0) > 0 && (
+                          <span className="text-xs text-(--color-danger)">
+                            ✗ {prProgress.failed_pages} page
+                            {prProgress.failed_pages !== 1 ? "s" : ""} failed to
+                            download
+                          </span>
+                        )}
+                      </div>
                     )}
                   </div>
 
-                  {/* ── Phase 2: processing images ────────────────────────── */}
-                  {isProcessingPhase && (
-                    <div className="flex flex-col gap-1">
-                      <div className="flex justify-between text-xs text-(--color-muted)">
-                        <span className="font-medium">
-                          Phase 2 — Downloading &amp; processing
-                        </span>
-                        <span>
-                          {prProgress.processed ?? prProgress.total ?? 0} /{" "}
-                          {prProgress.total ?? 0}
-                        </span>
-                      </div>
-                      <ProgressBar
-                        value={processPct}
-                        status={
-                          prError
-                            ? "error"
-                            : prProgress.phase === "done"
-                              ? "success"
-                              : "active"
-                        }
-                      />
-                      <div className="flex gap-4 text-sm">
-                        <span className="text-(--color-accent)">
-                          ✓ {prProgress.imported ?? 0} imported
-                        </span>
-                        <span className="text-(--color-muted)">
-                          ✗ {prProgress.failed ?? 0} failed
-                        </span>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Done message */}
+                  {/* Done — processing continues in the background queue */}
                   {prProgress.phase === "done" && !prError && (
                     <p className="text-xs font-medium text-(--color-success)">
-                      Import complete!
+                      Import queued! Processing continues in the background —
+                      check the admin panel for progress.
                     </p>
                   )}
                 </div>
@@ -401,11 +496,7 @@ export default function UploadModal({
                   className="flex-1 rounded-lg bg-(--color-accent) py-2 text-sm font-semibold text-(--color-accent-text) disabled:opacity-50"
                 >
                   {isImporting
-                    ? prProgress?.phase === "fetching"
-                      ? `Fetching page ${prProgress.page}…`
-                      : prProgress?.phase === "inserted"
-                        ? `Starting downloads…`
-                        : `Processing… (${prProgress?.processed ?? 0}/${prProgress?.total ?? 0})`
+                    ? `Fetching page ${prProgress.page}…`
                     : prProgress?.phase === "done"
                       ? "Done"
                       : "Start import"}
@@ -420,7 +511,7 @@ export default function UploadModal({
                     }}
                     className="rounded-lg bg-(--color-border) px-4 py-2 text-sm font-medium text-(--color-text)"
                   >
-                    Reset
+                    New import
                   </button>
                 )}
               </div>
