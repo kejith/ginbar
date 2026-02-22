@@ -44,7 +44,8 @@ func ProcessImage(inputFilePath string, dirs Directories) (*ImageProcessResult, 
 
 	go func() {
 		// CRF 18 / preset 8 — visually lossless at ~2× the speed of preset 4.
-		avifCh <- avifRes{ConvertImageToAvif(inputFilePath, outputFilePath, 18, 8)}
+		// Scale down to at most 920 px wide to keep file sizes reasonable.
+		avifCh <- avifRes{ConvertImageToAvif(inputFilePath, outputFilePath, 18, 8, 920)}
 	}()
 	go func() {
 		p, err := NormalizeImageToJPEG(inputFilePath, filepath.Join(dirs.Tmp, "thumbnails"))
@@ -76,14 +77,21 @@ func ProcessImage(inputFilePath string, dirs Directories) (*ImageProcessResult, 
 		return nil, fmt.Errorf("thumbnail: %w", err)
 	}
 
-	bounds := (*img).Bounds()
+	// Read actual dimensions from the encoded AVIF, which may be narrower than
+	// the source after the 920 px max-width scale step.
+	outW, outH, _ := GetVideoDimensions(outputFilePath)
+	if outW == 0 || outH == 0 {
+		// Fallback to source bounds if ffprobe fails for any reason.
+		b := (*img).Bounds()
+		outW, outH = b.Dx(), b.Dy()
+	}
 	return &ImageProcessResult{
 		Filename:          filepath.Base(outputFilePath),
 		ThumbnailFilename: filepath.Base(outputThumbnailFilePath),
 		UploadedFilename:  filepath.Base(inputFilePath),
 		PerceptionHash:    hash,
-		Width:             bounds.Dx(),
-		Height:            bounds.Dy(),
+		Width:             outW,
+		Height:            outH,
 	}, nil
 }
 
@@ -141,7 +149,8 @@ func CreateThumbnailFromImage(img *image.Image, dstFilePath string, dirs Directo
 	defer os.Remove(tmpPath)
 
 	// CRF 30 / preset 6: great quality for 150 px, fast encode.
-	if err = ConvertImageToAvif(tmpPath, dstFilePath, 30, 6); err != nil {
+	// maxWidth=0: smartcrop already cropped to 150×150, no further resize needed.
+	if err = ConvertImageToAvif(tmpPath, dstFilePath, 30, 6, 0); err != nil {
 		return fmt.Errorf("convert thumbnail to avif: %w", err)
 	}
 	return nil
@@ -158,13 +167,26 @@ const (
 // ffmpeg.  SVT-AV1 (libsvtav1) is used when the source fits within its
 // 8192×8704 px limit; oversized images fall back to libaom-av1.
 //
-//   crf    quality: 0 = lossless, 63 = worst; 18 ≈ visually lossless,
-//                   30 = excellent for small thumbnails.
-//   preset SVT-AV1 speed knob (0 = slowest, 13 = fastest).  Ignored when
-//          falling back to libaom-av1 (a fixed cpu-used=4 is used instead).
+//   crf      quality: 0 = lossless, 63 = worst; 18 ≈ visually lossless,
+//                     30 = excellent for small thumbnails.
+//   preset   SVT-AV1 speed knob (0 = slowest, 13 = fastest).  Ignored when
+//            falling back to libaom-av1 (a fixed cpu-used=4 is used instead).
+//   maxWidth if > 0, the output is scaled down so that its width does not
+//            exceed maxWidth pixels (height is adjusted proportionally).
+//            Pass 0 to disable scaling.
 //
-// The crop filter ensures even dimensions required by YUV 4:2:0.
-func ConvertImageToAvif(inputFilePath, outputFilePath string, crf, preset int) error {
+// The crop/scale filter ensures even dimensions required by YUV 4:2:0.
+func ConvertImageToAvif(inputFilePath, outputFilePath string, crf, preset, maxWidth int) error {
+	// Build the -vf filter chain:
+	//   • optional scale-down to maxWidth (no upscaling)
+	//   • crop to even dimensions required by YUV 4:2:0
+	vf := "crop=trunc(iw/2)*2:trunc(ih/2)*2"
+	if maxWidth > 0 {
+		// scale='min(MW,iw)':-2  →  shrink if wider than MW, keep AR, even height
+		// The trailing crop handles any residual odd pixel from the scale.
+		vf = fmt.Sprintf("scale='min(%d,iw)':-2,crop=trunc(iw/2)*2:trunc(ih/2)*2", maxWidth)
+	}
+
 	// Probe dimensions to decide which encoder to use.
 	w, h, _ := GetVideoDimensions(inputFilePath)
 	useSVT := (w == 0 && h == 0) || (w <= svtMaxWidth && h <= svtMaxHeight)
@@ -175,8 +197,7 @@ func ConvertImageToAvif(inputFilePath, outputFilePath string, crf, preset int) e
 			"-y",
 			"-i", inputFilePath,
 			"-frames:v", "1",
-			// Crop to even w×h; at most 1 px trimmed per axis.
-			"-vf", "crop=trunc(iw/2)*2:trunc(ih/2)*2",
+			"-vf", vf,
 			"-c:v", "libsvtav1",
 			"-crf", strconv.Itoa(crf),
 			"-preset", strconv.Itoa(preset),
@@ -191,7 +212,7 @@ func ConvertImageToAvif(inputFilePath, outputFilePath string, crf, preset int) e
 			"-y",
 			"-i", inputFilePath,
 			"-frames:v", "1",
-			"-vf", "crop=trunc(iw/2)*2:trunc(ih/2)*2",
+			"-vf", vf,
 			"-c:v", "libaom-av1",
 			"-crf", strconv.Itoa(crf),
 			"-b:v", "0",

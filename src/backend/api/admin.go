@@ -27,10 +27,18 @@ type diskUsage struct {
 	Files int64  `json:"files"`
 }
 
-func dirUsage(root, label string) diskUsage {
+func dirUsage(root, label string, excludeDirs ...string) diskUsage {
 	d := diskUsage{Path: root, Label: label}
-	_ = filepath.WalkDir(root, func(_ string, e fs.DirEntry, err error) error {
-		if err != nil || e.IsDir() {
+	_ = filepath.WalkDir(root, func(path string, e fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if e.IsDir() {
+			for _, excl := range excludeDirs {
+				if path == excl {
+					return fs.SkipDir
+				}
+			}
 			return nil
 		}
 		info, statErr := e.Info()
@@ -74,7 +82,8 @@ func (s *Server) GetAdminStats(c fiber.Ctx) error {
 
 	disk := []diskUsage{
 		dirUsage(s.dirs.Upload, "uploads"),
-		dirUsage(s.dirs.Image, "images"),
+		// Exclude the thumbnails subdirectory so it is counted separately.
+		dirUsage(s.dirs.Image, "post images", s.dirs.Thumbnail),
 		dirUsage(s.dirs.Thumbnail, "thumbnails"),
 		dirUsage(s.dirs.Video, "videos"),
 	}
@@ -392,8 +401,8 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 				newFilePath := filepath.Join(dirs.Image, newFilename)
 				newThumbPath := filepath.Join(dirs.Thumbnail, newThumbFilename)
 
-				// Full-res encode: CRF 18 / preset 4 (≈ visually lossless).
-				if encErr := utils.ConvertImageToAvif(srcPath, newFilePath, 18, 4); encErr != nil {
+				// Full-res encode: CRF 18 / preset 4 (≈ visually lossless), max 920 px wide.
+				if encErr := utils.ConvertImageToAvif(srcPath, newFilePath, 18, 4, 920); encErr != nil {
 					log.WarnContext(ctx, "regenerate: encode failed", "post", p.ID, "err", encErr)
 					failed.Add(1)
 					current.Add(1)

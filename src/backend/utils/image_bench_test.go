@@ -59,7 +59,7 @@ func BenchmarkConvertImageToAvif_FullRes(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				dst := filepath.Join(dirs.Image, fmt.Sprintf("out_%d.avif", i))
-				if err := ConvertImageToAvif(tc.path, dst, 18, 4); err != nil {
+				if err := ConvertImageToAvif(tc.path, dst, 18, 4, 0); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -76,7 +76,7 @@ func BenchmarkConvertImageToAvif_Thumbnail(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				dst := filepath.Join(dirs.Thumbnail, fmt.Sprintf("out_%d.avif", i))
-				if err := ConvertImageToAvif(tc.path, dst, 30, 6); err != nil {
+				if err := ConvertImageToAvif(tc.path, dst, 30, 6, 0); err != nil {
 					b.Fatal(err)
 				}
 			}
@@ -166,7 +166,7 @@ func BenchmarkConvertImageToAvif_PresetComparison(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				dst := filepath.Join(dirs.Image, fmt.Sprintf("out_%d.avif", i))
-				if err := ConvertImageToAvif(tc.path, dst, 18, preset); err != nil {
+				if err := ConvertImageToAvif(tc.path, dst, 18, preset, 0); err != nil {
 					b.Fatal(err)
 				}
 			}
