@@ -3,6 +3,7 @@ import api, { ssePost } from "../utils/api.js";
 import { roleName, LEVEL_MEMBER, LEVEL_ADMIN } from "../utils/roles.js";
 import Tabs from "../components/Tabs.jsx";
 import ProgressBar from "../components/ProgressBar.jsx";
+import UserLink from "../components/UserLink.jsx";
 
 // ── tiny helpers ─────────────────────────────────────────────────────────────
 
@@ -306,7 +307,8 @@ function ContentSection() {
                 )}
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm text-(--color-text)">
-                    #{p.id} — {p.user_name}
+                    #{p.id} —{" "}
+                    <UserLink name={p.user_name} className="text-sm" />
                   </p>
                   <p className="truncate text-xs text-(--color-muted)">
                     {p.content_type} · score {p.score}
@@ -340,7 +342,8 @@ function ContentSection() {
               >
                 <div className="min-w-0 flex-1">
                   <p className="text-xs text-(--color-muted) mb-0.5">
-                    #{c.id} · post #{c.post_id} · {c.user_name}
+                    #{c.id} · post #{c.post_id} ·{" "}
+                    <UserLink name={c.user_name} className="text-xs" />
                   </p>
                   <p className="text-sm text-(--color-text) line-clamp-2">
                     {c.content}
