@@ -59,6 +59,7 @@ export default function UploadModal({
   // Once the post is queued, queueInfo is set and we poll for completion.
   const [queueInfo, setQueueInfo] = useState(null); // { post_id, queue_position, eta_sec }
   const [queueDone, setQueueDone] = useState(false);
+  const [duplicates, setDuplicates] = useState(null); // [{id, thumbnail_filename, hamming_distance}]
   const fileRef = useRef(null);
   const pollRef = useRef(null);
 
@@ -133,9 +134,14 @@ export default function UploadModal({
       try {
         const status = await getPostQueueStatus(queueInfo.post_id);
         if (!status.dirty) {
-          setQueueDone(true);
           clearInterval(pollRef.current);
-          setTimeout(onClose, 1500);
+          if (status.duplicates?.length > 0) {
+            setDuplicates(status.duplicates);
+            // Don't auto-close — user needs to inspect duplicates
+          } else {
+            setQueueDone(true);
+            setTimeout(onClose, 1500);
+          }
         } else {
           setQueueInfo((prev) => ({
             ...prev,
@@ -211,7 +217,7 @@ export default function UploadModal({
   // or a pr0gramm import is actively fetching pages.
   function handleBackdrop(e) {
     if (e.target !== e.currentTarget) return;
-    if (isImporting || queueInfo) return;
+    if (isImporting || (queueInfo && !queueDone && !duplicates)) return;
     onClose();
   }
 
@@ -344,7 +350,62 @@ export default function UploadModal({
           {/* ── Queue status tab ──────────────────────────────────────── */}
           {!checkingQueue && tab === "queue" && queueInfo && (
             <div className="flex flex-col gap-4">
-              {!queueDone ? (
+              {duplicates ? (
+                /* ── Duplicate detected ───────────────────────────────── */
+                <div className="flex flex-col gap-3">
+                  <div className="flex items-center gap-2 rounded-lg bg-(--color-bg) px-3 py-2 text-sm text-(--color-danger)">
+                    <span className="text-base">⚠</span>
+                    <span>
+                      This image is a potential duplicate of{" "}
+                      {duplicates.length === 1
+                        ? "an existing post"
+                        : `${duplicates.length} existing posts`}
+                      .
+                    </span>
+                  </div>
+                  <div
+                    className={`grid gap-2 ${
+                      duplicates.length === 1 ? "grid-cols-1" : "grid-cols-3"
+                    }`}
+                  >
+                    {duplicates.map((dup) => (
+                      <a
+                        key={dup.id}
+                        href={`/?post=${dup.id}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="group relative block overflow-hidden rounded-lg ring-1 ring-(--color-border) hover:ring-(--color-accent) transition-all"
+                      >
+                        {dup.thumbnail_filename ? (
+                          <img
+                            src={`/images/thumbnails/${dup.thumbnail_filename}`}
+                            alt={`Post #${dup.id}`}
+                            className="aspect-square w-full object-cover"
+                          />
+                        ) : (
+                          <div className="flex aspect-square w-full items-center justify-center bg-(--color-bg) text-xs text-(--color-muted)">
+                            #{dup.id}
+                          </div>
+                        )}
+                        <div className="absolute inset-x-0 bottom-0 bg-black/60 px-1.5 py-0.5 text-center text-xs text-white opacity-0 group-hover:opacity-100 transition-opacity">
+                          View #{dup.id}
+                        </div>
+                      </a>
+                    ))}
+                  </div>
+                  <p className="text-center text-xs text-(--color-muted)">
+                    Your upload was not saved. Click a thumbnail to inspect the
+                    existing post.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={onClose}
+                    className="rounded-lg bg-(--color-border) py-2 text-sm font-medium text-(--color-text)"
+                  >
+                    Close
+                  </button>
+                </div>
+              ) : !queueDone ? (
                 <>
                   <div className="flex flex-col gap-3 rounded-lg bg-(--color-bg) p-4">
                     <div className="flex items-center gap-2 text-sm text-(--color-muted)">

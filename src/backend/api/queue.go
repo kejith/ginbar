@@ -27,6 +27,15 @@ import (
 // the common fast-path).
 const queuePollInterval = 5 * time.Second
 
+// DuplicateEntry holds minimal info about an existing post that is a
+// near-duplicate of a rejected upload, returned to the frontend so the user
+// can inspect the matching posts.
+type DuplicateEntry struct {
+	ID                int32  `json:"id"`
+	ThumbnailFilename string `json:"thumbnail_filename"`
+	HammingDistance   int32  `json:"hamming_distance"`
+}
+
 // QueueSnapshot is the JSON-serialisable state of the processing queue.
 // Sent via SSE to the admin panel and returned by the per-post status endpoint.
 type QueueSnapshot struct {
@@ -67,6 +76,11 @@ type ProcessQueue struct {
 	// rate estimation.
 	rateMu     sync.Mutex
 	batchStart time.Time
+
+	// dupCache maps dirty post ID → potential duplicate entries for posts that
+	// were rejected by the perceptual-hash dedup check.  Entries are evicted
+	// automatically after 15 minutes so the map doesn't grow unboundedly.
+	dupCache sync.Map // int32 -> []DuplicateEntry
 }
 
 func newProcessQueue(srv *Server, log *slog.Logger) *ProcessQueue {
@@ -324,6 +338,38 @@ func (q *ProcessQueue) processQueuedPost(ctx context.Context, post dbgen.Post) e
 
 		h := res.PerceptionHash.GetHash()
 		if store != nil {
+			// Perceptual-hash duplicate check — only against finalized (non-dirty) posts.
+			dups, _ := store.GetPossibleDuplicatePosts(ctx, dbgen.GetPossibleDuplicatePostsParams{
+				Column1: int64(h[0]),
+				Column2: int64(h[1]),
+				Column3: int64(h[2]),
+				Column4: int64(h[3]),
+			})
+			var entries []DuplicateEntry
+			for _, d := range dups {
+				if d.ID == post.ID || d.Dirty {
+					continue
+				}
+				entries = append(entries, DuplicateEntry{
+					ID:                d.ID,
+					ThumbnailFilename: d.ThumbnailFilename,
+					HammingDistance:   d.HammingDistance,
+				})
+			}
+			if len(entries) > 0 {
+				// Clean up the files that were already written to disk.
+				_ = os.Remove(filepath.Join(dirs.Image, res.Filename))
+				_ = os.Remove(filepath.Join(dirs.Thumbnail, res.ThumbnailFilename))
+				// Cache the duplicate info so the status endpoint can return it.
+				q.dupCache.Store(post.ID, entries)
+				go func(id int32) {
+					time.Sleep(15 * time.Minute)
+					q.dupCache.Delete(id)
+				}(post.ID)
+				_ = store.DeleteDirtyPost(ctx, post.ID)
+				return fmt.Errorf("duplicate: found %d similar post(s)", len(entries))
+			}
+
 			if err := store.FinalizePost(ctx, db.FinalizePostParams{
 				ID:                post.ID,
 				Filename:          res.Filename,
@@ -462,11 +508,15 @@ func (s *Server) GetPostQueueStatus(c fiber.Ctx) error {
 		return err
 	}
 	if !dirty {
-		return c.JSON(fiber.Map{
+		resp := fiber.Map{
 			"dirty":          false,
 			"queue_position": 0,
 			"eta_sec":        0,
-		})
+		}
+		if v, ok := s.queue.dupCache.Load(int32(id)); ok {
+			resp["duplicates"] = v
+		}
+		return c.JSON(resp)
 	}
 
 	pos, _ := s.store.CountDirtyPostsBeforeID(ctx, int32(id))
