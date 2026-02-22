@@ -10,7 +10,7 @@ export default function RequireAdmin({ children }) {
   const user = useAuthStore((s) => s.user);
 
   if (user === null) {
-    return <div className="p-4 text-zinc-500">loading…</div>;
+    return <div className="p-4 text-(--color-muted)">loading…</div>;
   }
   if (!isAdmin(user)) {
     return <Navigate to="/" replace />;

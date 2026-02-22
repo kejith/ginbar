@@ -19,7 +19,9 @@ export default function App() {
     hydrate();
   }, [hydrate]);
   return (
-    <Suspense fallback={<div className="p-4 text-zinc-500">loading…</div>}>
+    <Suspense
+      fallback={<div className="p-4 text-(--color-muted)">loading…</div>}
+    >
       <Nav />
       <Routes>
         <Route path="/" element={<Home />} />

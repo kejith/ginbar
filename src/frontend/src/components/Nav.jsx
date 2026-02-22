@@ -110,7 +110,7 @@ export default function Nav() {
             {isAdmin(user) && (
               <Link
                 to="/admin"
-                className="rounded bg-amber-600 px-2.5 py-1 text-xs font-semibold text-white"
+                className="rounded bg-(--color-admin) px-2.5 py-1 text-xs font-semibold text-white"
                 title="Admin panel"
               >
                 admin

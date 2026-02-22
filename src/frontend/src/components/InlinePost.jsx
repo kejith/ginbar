@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import CommentItem from "./CommentItem.jsx";
 import CommentForm from "./CommentForm.jsx";
+import TagChip from "./TagChip.jsx";
+import VoteButtons from "./VoteButtons.jsx";
 import useAuthStore from "../stores/authStore.js";
 import usePostStore from "../stores/postStore.js";
 import useCommentStore from "../stores/commentStore.js";
@@ -221,187 +223,221 @@ export default function InlinePost({
   return (
     <div
       ref={panelRef}
-      className="w-full border-t border-b border-(--color-border) bg-(--color-surface)"
+      className="w-full border-y border-(--color-border) bg-(--color-surface)"
     >
       {postError && (
-        <div className="flex h-32 items-center justify-center text-sm text-red-400">
+        <div className="flex h-32 items-center justify-center text-sm text-(--color-danger)">
           {postError}
         </div>
       )}
 
       {!postError && (
-        <div className="relative mx-auto max-w-230 pb-4 space-y-3">
-          {/* ── Overlay nav arrows ── */}
-          <button
-            onClick={onNewer}
-            disabled={!canGoNewer}
-            className="absolute left-2 top-50 z-10 flex h-10 w-10 items-center justify-center rounded-full bg-black/50 text-white transition-opacity hover:bg-black/70 disabled:opacity-0 disabled:pointer-events-none"
-            aria-label="Newer"
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="h-5 w-5"
+        <div className="mx-auto max-w-5xl lg:grid lg:grid-cols-[1fr_300px]">
+          {/* ── LEFT: Media column ─────────────────────────────────────────── */}
+          {/* On lg the column is sticky so it pins to the top of the PostGrid
+              scroll container while the sidebar (comments) scrolls past it. */}
+          <div className="relative bg-black lg:sticky lg:top-0 lg:self-start lg:max-h-[calc(100vh-var(--nav-height))] lg:flex lg:items-center lg:justify-center lg:overflow-hidden">
+            {/* Nav arrows — centred vertically on the media */}
+            <button
+              onClick={onNewer}
+              disabled={!canGoNewer}
+              className="absolute left-2 top-1/2 -translate-y-1/2 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-black/50 text-white backdrop-blur-sm transition-opacity hover:bg-black/70 disabled:opacity-0 disabled:pointer-events-none"
+              aria-label="Newer"
             >
-              <polyline points="15 18 9 12 15 6" />
-            </svg>
-          </button>
-          <button
-            onClick={onOlder}
-            disabled={!canGoOlder}
-            className="absolute right-2 top-50 z-10 flex h-10 w-10 items-center justify-center rounded-full bg-black/50 text-white transition-opacity hover:bg-black/70 disabled:opacity-0 disabled:pointer-events-none"
-            aria-label="Older"
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2.5"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              className="h-5 w-5"
-            >
-              <polyline points="9 18 15 12 9 6" />
-            </svg>
-          </button>
-          {/* ── Media ── Always rendered so the thumbnail can show immediately
-               and the full image can be preloaded before the fetch completes.
-               When dimensions are known the aspect-ratio style reserves the
-               exact height on first paint (zero CLS). When unknown the
-               container grows with the content. */}
-          <div
-            className={`rounded-lg bg-black ${
-              hasKnownDimensions ? "overflow-hidden relative" : ""
-            }`}
-            style={mediaContainerStyle}
-          >
-            {/* Blurred thumbnail placeholder.
-                 - hasKnownDimensions: absolutely positioned, cross-fades out
-                   (opacity-50 → opacity-0 with transition) as the full-res
-                   image fades in. Both layers are inset-0 inside the
-                   aspect-ratio container — zero layout shift.
-                 - Legacy posts: in-flow, hidden via display:none once the
-                   full-res image finishes loading. */}
-            {!listIsVideo && thumbUrl && (
-              <img
-                src={thumbUrl}
-                alt=""
-                aria-hidden
-                className={`blur-sm transition-opacity duration-300 ${
-                  hasKnownDimensions
-                    ? `absolute inset-0 w-full h-full object-contain ${
-                        imgReady
-                          ? "opacity-0 pointer-events-none"
-                          : "opacity-50"
-                      }`
-                    : `w-full object-contain ${
-                        imgReady ? "hidden" : "opacity-50"
-                      }`
-                }`}
-              />
-            )}
-
-            {/* Fallback spinner when there is no thumbnail and no preload URL */}
-            {postLoading && !thumbUrl && !listMediaSrc && (
-              <div
-                className={`flex items-center justify-center text-sm text-(--color-muted) animate-pulse ${
-                  hasKnownDimensions ? "absolute inset-0" : "h-48"
-                }`}
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="h-5 w-5"
               >
+                <polyline points="15 18 9 12 15 6" />
+              </svg>
+            </button>
+            <button
+              onClick={onOlder}
+              disabled={!canGoOlder}
+              className="absolute right-2 top-1/2 -translate-y-1/2 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-black/50 text-white backdrop-blur-sm transition-opacity hover:bg-black/70 disabled:opacity-0 disabled:pointer-events-none"
+              aria-label="Older"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="h-5 w-5"
+              >
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
+            </button>
+
+            {/* ── Media ── Always rendered so the thumbnail can show immediately
+                 and the full image can be preloaded before the fetch completes.
+                 When dimensions are known the aspect-ratio style reserves the
+                 exact height on first paint (zero CLS). When unknown the
+                 container grows with the content. */}
+            <div
+              className={`w-full ${hasKnownDimensions ? "relative overflow-hidden" : ""}`}
+              style={mediaContainerStyle}
+            >
+              {/* Blurred thumbnail placeholder.
+                   - hasKnownDimensions: absolutely positioned, cross-fades out
+                     (opacity-50 → opacity-0 with transition) as the full-res
+                     image fades in. Both layers are inset-0 inside the
+                     aspect-ratio container — zero layout shift.
+                   - Legacy posts: in-flow, hidden via display:none once the
+                     full-res image finishes loading. */}
+              {!listIsVideo && thumbUrl && (
+                <img
+                  src={thumbUrl}
+                  alt=""
+                  aria-hidden
+                  className={`blur-sm transition-opacity duration-300 ${
+                    hasKnownDimensions
+                      ? `absolute inset-0 w-full h-full object-contain ${
+                          imgReady
+                            ? "opacity-0 pointer-events-none"
+                            : "opacity-50"
+                        }`
+                      : `w-full object-contain ${
+                          imgReady ? "hidden" : "opacity-50"
+                        }`
+                  }`}
+                />
+              )}
+
+              {/* Fallback spinner when there is no thumbnail and no preload URL */}
+              {postLoading && !thumbUrl && !listMediaSrc && (
+                <div
+                  className={`flex items-center justify-center text-sm text-(--color-muted) animate-pulse ${
+                    hasKnownDimensions ? "absolute inset-0" : "h-48"
+                  }`}
+                >
+                  loading…
+                </div>
+              )}
+
+              {/* Full-resolution image (hasKnownDimensions path).
+                   Rendered immediately from listPost — no API round-trip needed.
+                   Starts at opacity-0, fades in once onLoad fires while the
+                   thumbnail simultaneously fades out. */}
+              {hasKnownDimensions && !listIsVideo && listMediaSrc && (
+                <img
+                  key={postId}
+                  src={listMediaSrc}
+                  alt=""
+                  onClick={onClose}
+                  onLoad={() => setImgReady(true)}
+                  className={`cursor-pointer transition-opacity duration-300 ${mediaChildCls} ${
+                    imgReady ? "opacity-100" : "opacity-0"
+                  }`}
+                />
+              )}
+
+              {/* Full-resolution image (legacy / no-dimensions path).
+                   Still waits for isReady so we don't disturb the in-flow
+                   layout that determines the container height. */}
+              {!hasKnownDimensions && isReady && !isVideo && mediaSrc && (
+                <img
+                  key={mediaSrc}
+                  src={mediaSrc}
+                  alt=""
+                  onClick={onClose}
+                  onLoad={() => setImgReady(true)}
+                  className={`cursor-pointer transition-opacity duration-300 ${mediaChildCls} ${
+                    imgReady ? "opacity-100" : "opacity-0"
+                  }`}
+                />
+              )}
+
+              {/* Video — always waits for isReady (we have no usable preload src) */}
+              {isReady && isVideo && mediaSrc && (
+                <video
+                  key={mediaSrc}
+                  src={mediaSrc}
+                  controls
+                  className={mediaChildCls}
+                />
+              )}
+
+              {/* No media at all */}
+              {isReady && !mediaSrc && !listMediaSrc && (
+                <div
+                  className={`flex items-center justify-center text-sm text-(--color-muted) ${
+                    hasKnownDimensions ? "absolute inset-0" : "h-48"
+                  }`}
+                >
+                  no media
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ── RIGHT: Sidebar ─────────────────────────────────────────────── */}
+          <div className="flex flex-col border-t border-(--color-border) lg:border-t-0 lg:border-l lg:border-(--color-border)">
+            {/* Loading skeleton — visible before post data arrives */}
+            {!isReady && (
+              <div className="flex h-24 items-center justify-center text-sm text-(--color-muted) animate-pulse">
                 loading…
               </div>
             )}
 
-            {/* Full-resolution image (hasKnownDimensions path).
-                 Rendered immediately from listPost — no API round-trip needed.
-                 Starts at opacity-0, fades in once onLoad fires while the
-                 thumbnail simultaneously fades out. */}
-            {hasKnownDimensions && !listIsVideo && listMediaSrc && (
-              <img
-                key={postId}
-                src={listMediaSrc}
-                alt=""
-                onClick={onClose}
-                onLoad={() => setImgReady(true)}
-                className={`cursor-pointer transition-opacity duration-300 ${mediaChildCls} ${
-                  imgReady ? "opacity-100" : "opacity-0"
-                }`}
-              />
-            )}
+            {isReady && (
+              <>
+                {/* ── Author + close ── */}
+                <div className="flex items-center justify-between gap-3 border-b border-(--color-border) px-4 py-3">
+                  <div className="flex min-w-0 items-center gap-2 text-sm">
+                    <Link
+                      to={`/user/${post.user_name}`}
+                      className="truncate font-semibold text-(--color-accent) hover:opacity-75"
+                    >
+                      {post.user_name}
+                    </Link>
+                    {timeStr && (
+                      <span className="shrink-0 text-xs text-(--color-muted)">
+                        {timeStr}
+                      </span>
+                    )}
+                  </div>
+                  <button
+                    onClick={onClose}
+                    aria-label="Close"
+                    className="shrink-0 text-xl leading-none text-(--color-muted) hover:text-(--color-text) transition-colors"
+                  >
+                    ×
+                  </button>
+                </div>
 
-            {/* Full-resolution image (legacy / no-dimensions path).
-                 Still waits for isReady so we don't disturb the in-flow
-                 layout that determines the container height. */}
-            {!hasKnownDimensions && isReady && !isVideo && mediaSrc && (
-              <img
-                key={mediaSrc}
-                src={mediaSrc}
-                alt=""
-                onClick={onClose}
-                onLoad={() => setImgReady(true)}
-                className={`cursor-pointer transition-opacity duration-300 ${mediaChildCls} ${
-                  imgReady ? "opacity-100" : "opacity-0"
-                }`}
-              />
-            )}
-
-            {/* Video — always waits for isReady (we have no usable preload src) */}
-            {isReady && isVideo && mediaSrc && (
-              <video
-                key={mediaSrc}
-                src={mediaSrc}
-                controls
-                className={mediaChildCls}
-              />
-            )}
-
-            {/* No media at all */}
-            {isReady && !mediaSrc && !listMediaSrc && (
-              <div
-                className={`flex items-center justify-center text-sm text-(--color-muted) ${
-                  hasKnownDimensions ? "absolute inset-0" : "h-48"
-                }`}
-              >
-                no media
-              </div>
-            )}
-          </div>
-
-          {/* ── Controls + comments — only once the post data is loaded ── */}
-          {isReady && (
-            <>
-              {/* ── Controls panel ── */}
-              <div className="rounded-lg border border-(--color-border) bg-(--color-bg) divide-y divide-(--color-border)">
-                {/* Row 1: votes + meta */}
-                <div className="flex items-center gap-4 px-4 py-3">
-                  {/* Vote buttons */}
-                  <div className="flex items-center gap-2 shrink-0">
+                {/* ── Vote + action links ── */}
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-(--color-border) px-4 py-2.5">
+                  {/* Inline ▲ score ▼ */}
+                  <div className="flex items-center gap-1.5 select-none shrink-0">
                     <button
                       onClick={() =>
                         user && votePost(postId, post.vote === 1 ? 0 : 1)
                       }
                       disabled={!user}
-                      title="Upvote"
-                      className={`flex h-7 w-7 items-center justify-center rounded-full border text-sm font-bold leading-none transition-colors disabled:opacity-40 ${
+                      aria-label="upvote"
+                      className={`text-sm leading-none transition-colors disabled:opacity-40 ${
                         post.vote === 1
-                          ? "border-(--color-accent) text-(--color-accent)"
-                          : "border-(--color-border) text-(--color-muted) hover:border-(--color-text) hover:text-(--color-text)"
+                          ? "text-(--color-accent)"
+                          : "text-(--color-muted) hover:text-(--color-text)"
                       }`}
                     >
-                      +
+                      ▲
                     </button>
                     <span
                       className={`w-6 text-center text-sm font-mono tabular-nums ${
                         post.vote === 1
                           ? "text-(--color-accent)"
                           : post.vote === -1
-                            ? "text-blue-400"
+                            ? "text-(--color-down)"
                             : "text-(--color-muted)"
                       }`}
                     >
@@ -412,157 +448,89 @@ export default function InlinePost({
                         user && votePost(postId, post.vote === -1 ? 0 : -1)
                       }
                       disabled={!user}
-                      title="Downvote"
-                      className={`flex h-7 w-7 items-center justify-center rounded-full border text-sm font-bold leading-none transition-colors disabled:opacity-40 ${
+                      aria-label="downvote"
+                      className={`text-sm leading-none transition-colors disabled:opacity-40 ${
                         post.vote === -1
-                          ? "border-blue-400 text-blue-400"
-                          : "border-(--color-border) text-(--color-muted) hover:border-(--color-text) hover:text-(--color-text)"
+                          ? "text-(--color-down)"
+                          : "text-(--color-muted) hover:text-(--color-text)"
                       }`}
                     >
-                      −
+                      ▼
                     </button>
                   </div>
 
-                  {/* Divider */}
-                  <div className="h-6 w-px bg-(--color-border) shrink-0" />
-
-                  {/* Time + author */}
-                  <div className="flex min-w-0 flex-1 items-center gap-1.5 text-sm">
-                    {timeStr && (
-                      <span className="text-(--color-muted) shrink-0">
-                        {timeStr}
-                      </span>
+                  {/* Action links */}
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-(--color-accent)">
+                    {!isVideo && mediaSrc && (
+                      <a
+                        href={`https://imgops.com${mediaSrc}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="hover:opacity-75"
+                      >
+                        imgops
+                      </a>
                     )}
-                    <span className="text-(--color-muted) shrink-0">by</span>
-                    <Link
-                      to={`/user/${post.user_name}`}
-                      className="font-semibold text-(--color-text) hover:text-(--color-accent) truncate"
-                    >
-                      {post.user_name}
+                    {mediaSrc && (
+                      <a
+                        href={mediaSrc}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="hover:opacity-75"
+                      >
+                        original
+                      </a>
+                    )}
+                    <button onClick={handleShare} className="hover:opacity-75">
+                      {copied ? "copied!" : "share"}
+                    </button>
+                    {mediaSrc && (
+                      <a
+                        href={mediaSrc}
+                        download={post.filename}
+                        className="hover:opacity-75"
+                      >
+                        download
+                      </a>
+                    )}
+                    <Link to={`/post/${post.id}`} className="hover:opacity-75">
+                      permalink
                     </Link>
-                    <span className="inline-block h-2 w-2 shrink-0 rounded-full bg-(--color-accent) opacity-60" />
                   </div>
-                </div>
 
-                {/* Row 2: action links */}
-                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 text-xs text-(--color-muted)">
-                  {!isVideo && mediaSrc && (
-                    <a
-                      href={`https://imgops.com${mediaSrc}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="hover:text-(--color-text)"
-                    >
-                      ImgOps
-                    </a>
-                  )}
-                  {mediaSrc && (
-                    <a
-                      href={mediaSrc}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="hover:text-(--color-text)"
-                    >
-                      original
-                    </a>
-                  )}
-                  <button
-                    onClick={handleShare}
-                    className="hover:text-(--color-text)"
-                  >
-                    {copied ? "copied!" : "share"}
-                  </button>
-                  {mediaSrc && (
-                    <a
-                      href={mediaSrc}
-                      download={post.filename}
-                      className="hover:text-(--color-text)"
-                    >
-                      download
-                    </a>
-                  )}
-                  <Link
-                    to={`/post/${post.id}`}
-                    className="hover:text-(--color-text)"
-                  >
-                    permalink
-                  </Link>
                   {admin && (
                     <button
                       disabled={deletingPost}
                       onClick={handleDeletePost}
-                      className="ml-auto rounded bg-red-700 px-2 py-0.5 text-xs text-white disabled:opacity-50"
+                      className="ml-auto rounded bg-(--color-danger) px-2 py-0.5 text-xs text-white disabled:opacity-50"
                     >
                       {deletingPost ? "deleting…" : "delete post"}
                     </button>
                   )}
                 </div>
 
-                {/* Row 3: tags */}
-                <div className="px-4 py-3 space-y-2">
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    {visibleTags.map((t) => {
-                      const name =
-                        typeof t.name === "object" ? t.name.String : t.name;
-                      return (
-                        <span
-                          key={t.id}
-                          className="inline-flex items-center gap-1 rounded border border-(--color-border) bg-(--color-surface) px-2 py-0.5 text-xs"
-                        >
-                          <Link
-                            to={`/?q=${encodeURIComponent(name)}`}
-                            className="truncate max-w-[16ch] text-(--color-text) hover:text-(--color-accent)"
-                            title={name}
-                          >
-                            {name}
-                          </Link>
-                          {user && (
-                            <span className="ml-0.5 flex gap-0.5">
-                              <button
-                                onClick={() =>
-                                  voteTag(postId, t.id, t.vote === 1 ? 0 : 1)
-                                }
-                                title="upvote tag"
-                                className={`text-[11px] font-bold leading-none ${
-                                  t.vote === 1
-                                    ? "text-(--color-accent)"
-                                    : "text-(--color-muted) hover:text-(--color-text)"
-                                }`}
-                              >
-                                +
-                              </button>
-                              <button
-                                onClick={() =>
-                                  voteTag(postId, t.id, t.vote === -1 ? 0 : -1)
-                                }
-                                title="downvote tag"
-                                className={`text-[11px] font-bold leading-none ${
-                                  t.vote === -1
-                                    ? "text-blue-400"
-                                    : "text-(--color-muted) hover:text-(--color-text)"
-                                }`}
-                              >
-                                −
-                              </button>
-                            </span>
-                          )}
-                          {admin && (
-                            <button
-                              disabled={deletingTag === t.id}
-                              onClick={() => handleDeleteTag(t.id)}
-                              title="delete tag"
-                              className="text-[11px] font-bold leading-none text-red-500 hover:text-red-400 disabled:opacity-40"
-                            >
-                              ×
-                            </button>
-                          )}
-                        </span>
-                      );
-                    })}
+                {/* ── Tags ── */}
+                <div className="border-b border-(--color-border) px-4 py-3 space-y-2">
+                  <div className="flex flex-wrap gap-1.5">
+                    {visibleTags.map((t) => (
+                      <TagChip
+                        key={t.id}
+                        tag={t}
+                        onVote={
+                          user
+                            ? (tagId, v) => voteTag(postId, tagId, v)
+                            : undefined
+                        }
+                        onDelete={
+                          admin ? (tagId) => handleDeleteTag(tagId) : undefined
+                        }
+                        deleting={deletingTag === t.id}
+                      />
+                    ))}
                   </div>
 
                   {/* Show more / add tag controls */}
-                  <div className="flex items-center gap-3 text-xs text-(--color-muted)">
+                  <div className="flex flex-wrap items-center gap-3 text-xs text-(--color-muted)">
                     {!showAllTags && hiddenCount > 0 && (
                       <button
                         onClick={() => setShowAllTags(true)}
@@ -597,7 +565,7 @@ export default function InlinePost({
                           value={tagInput}
                           onChange={(e) => setTagInput(e.target.value)}
                           placeholder="tag name"
-                          className="w-28 rounded border border-(--color-border) bg-(--color-surface) px-2 py-0.5 text-xs text-(--color-text) outline-none focus:border-(--color-accent)"
+                          className="w-28 rounded border border-(--color-border) bg-(--color-bg) px-2 py-0.5 text-xs text-(--color-text) outline-none focus:border-(--color-accent)"
                         />
                         <button
                           type="submit"
@@ -616,37 +584,39 @@ export default function InlinePost({
                           cancel
                         </button>
                         {tagError && (
-                          <span className="text-red-400">{tagError}</span>
+                          <span className="text-(--color-danger)">
+                            {tagError}
+                          </span>
                         )}
                       </form>
                     )}
                   </div>
                 </div>
-              </div>
 
-              {/* Comments */}
-              <section>
-                <h2 className="mb-2 text-xs font-semibold uppercase tracking-wide text-(--color-muted)">
-                  comments
-                  {(comments ?? []).length > 0
-                    ? ` (${(comments ?? []).length})`
-                    : ""}
-                </h2>
-                <CommentForm postId={postId} />
-                {(comments ?? []).map((c) => (
-                  <CommentItem
-                    key={c.id}
-                    comment={c}
-                    postId={postId}
-                    onDelete={
-                      admin ? () => handleDeleteComment(c.id) : undefined
-                    }
-                    deleting={deletingComment === c.id}
-                  />
-                ))}
-              </section>
-            </>
-          )}
+                {/* ── Comments ── */}
+                <section className="flex-1 px-4 py-3">
+                  <h2 className="mb-3 text-xs font-semibold uppercase tracking-wide text-(--color-muted)">
+                    comments
+                    {(comments ?? []).length > 0
+                      ? ` (${(comments ?? []).length})`
+                      : ""}
+                  </h2>
+                  <CommentForm postId={postId} />
+                  {(comments ?? []).map((c) => (
+                    <CommentItem
+                      key={c.id}
+                      comment={c}
+                      postId={postId}
+                      onDelete={
+                        admin ? () => handleDeleteComment(c.id) : undefined
+                      }
+                      deleting={deletingComment === c.id}
+                    />
+                  ))}
+                </section>
+              </>
+            )}
+          </div>
         </div>
       )}
     </div>

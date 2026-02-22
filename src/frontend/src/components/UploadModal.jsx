@@ -3,6 +3,8 @@ import { createPortal } from "react-dom";
 import usePostStore from "../stores/postStore.js";
 import useAuthStore from "../stores/authStore.js";
 import { isAdmin } from "../utils/roles.js";
+import Tabs from "./Tabs.jsx";
+import ProgressBar from "./ProgressBar.jsx";
 
 const TABS = [
   { id: "url", label: "From URL" },
@@ -150,50 +152,32 @@ export default function UploadModal({ onClose }) {
         className="flex min-h-full items-center justify-center p-4"
         onClick={handleBackdrop}
       >
-        <div
-          className="w-full max-w-md rounded-xl p-6 shadow-2xl"
-          style={{
-            background: "var(--color-surface)",
-            border: "1px solid var(--color-border)",
-          }}
-        >
+        <div className="w-full max-w-md rounded-xl border border-(--color-border) bg-(--color-surface) p-6 shadow-2xl">
           {/* Header */}
           <div className="mb-4 flex items-center justify-between">
-            <h2 className="text-base font-semibold text-(--color-text)">
+            <h2 className="text-base font-semibold text-(--color-accent)">
               Upload post
             </h2>
             <button
               onClick={onClose}
-              className="text-lg leading-none text-(--color-muted) hover:text-(--color-text)"
+              aria-label="Close"
+              className="text-xl leading-none text-(--color-muted) hover:text-(--color-text) transition-colors"
             >
               ×
             </button>
           </div>
 
           {/* Tabs */}
-          <div
-            className="mb-5 flex gap-1 rounded-lg p-1"
-            style={{ background: "var(--color-bg)" }}
-          >
-            {visibleTabs.map((t) => (
-              <button
-                key={t.id}
-                onClick={() => {
-                  setTab(t.id);
-                  setError(null);
-                  setPrError(null);
-                }}
-                className="flex-1 rounded-md py-1.5 text-sm font-medium transition-colors"
-                style={{
-                  background:
-                    tab === t.id ? "var(--color-accent)" : "transparent",
-                  color: tab === t.id ? "#fff" : "var(--color-muted)",
-                }}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
+          <Tabs
+            tabs={visibleTabs}
+            active={tab}
+            onChange={(id) => {
+              setTab(id);
+              setError(null);
+              setPrError(null);
+            }}
+            className="mb-5"
+          />
 
           {/* ── URL / File tabs ─────────────────────────────────────────── */}
           {(tab === "url" || tab === "file") && (
@@ -204,20 +188,12 @@ export default function UploadModal({ onClose }) {
                   placeholder="https://example.com/image.jpg"
                   value={url}
                   onChange={(e) => setUrl(e.target.value)}
-                  className="w-full rounded-lg px-3 py-2 text-sm outline-none ring-1 ring-(--color-border) focus:ring-(--color-accent)"
-                  style={{
-                    background: "var(--color-bg)",
-                    color: "var(--color-text)",
-                  }}
+                  className="w-full rounded-lg bg-(--color-bg) px-3 py-2 text-sm text-(--color-text) outline-none ring-1 ring-(--color-border) focus:ring-(--color-accent)"
                   autoFocus
                 />
               ) : (
                 <div
-                  className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg py-8 text-sm ring-1 ring-(--color-border) ring-dashed hover:ring-(--color-accent)"
-                  style={{
-                    background: "var(--color-bg)",
-                    color: "var(--color-muted)",
-                  }}
+                  className="flex cursor-pointer flex-col items-center justify-center gap-2 rounded-lg bg-(--color-bg) py-8 text-sm text-(--color-muted) ring-1 ring-(--color-border) ring-dashed hover:ring-(--color-accent)"
                   onClick={() => fileRef.current?.click()}
                 >
                   <span className="text-2xl">📎</span>
@@ -237,18 +213,12 @@ export default function UploadModal({ onClose }) {
               )}
 
               {error && (
-                <p
-                  className="rounded-lg px-3 py-2 text-sm text-red-400"
-                  style={{ background: "var(--color-bg)" }}
-                >
+                <p className="rounded-lg bg-(--color-bg) px-3 py-2 text-sm text-(--color-danger)">
                   {error}
                 </p>
               )}
               {success && (
-                <p
-                  className="text-sm font-medium"
-                  style={{ color: "var(--color-accent)" }}
-                >
+                <p className="text-sm font-medium text-(--color-accent)">
                   ✓ Post created!
                 </p>
               )}
@@ -256,8 +226,7 @@ export default function UploadModal({ onClose }) {
               <button
                 type="submit"
                 disabled={loading || success}
-                className="rounded-lg py-2 text-sm font-semibold disabled:opacity-50"
-                style={{ background: "var(--color-accent)", color: "#fff" }}
+                className="rounded-lg bg-(--color-accent) py-2 text-sm font-semibold text-white disabled:opacity-50"
               >
                 {loading ? "Uploading…" : "Upload"}
               </button>
@@ -281,11 +250,7 @@ export default function UploadModal({ onClose }) {
                   value={prTags}
                   onChange={(e) => setPrTags(e.target.value)}
                   disabled={isImporting}
-                  className="w-full rounded-lg px-3 py-2 text-sm outline-none ring-1 ring-(--color-border) focus:ring-(--color-accent) disabled:opacity-50"
-                  style={{
-                    background: "var(--color-bg)",
-                    color: "var(--color-text)",
-                  }}
+                  className="w-full rounded-lg bg-(--color-bg) px-3 py-2 text-sm text-(--color-text) outline-none ring-1 ring-(--color-border) focus:ring-(--color-accent) disabled:opacity-50"
                   autoFocus
                 />
               </div>
@@ -300,11 +265,7 @@ export default function UploadModal({ onClose }) {
                     value={prFlags}
                     onChange={(e) => setPrFlags(Number(e.target.value))}
                     disabled={isImporting}
-                    className="w-full rounded-lg px-3 py-2 text-sm outline-none ring-1 ring-(--color-border) focus:ring-(--color-accent) disabled:opacity-50"
-                    style={{
-                      background: "var(--color-bg)",
-                      color: "var(--color-text)",
-                    }}
+                    className="w-full rounded-lg bg-(--color-bg) px-3 py-2 text-sm text-(--color-text) outline-none ring-1 ring-(--color-border) focus:ring-(--color-accent) disabled:opacity-50"
                   >
                     {FLAGS_OPTIONS.map((o) => (
                       <option key={o.value} value={o.value}>
@@ -329,21 +290,14 @@ export default function UploadModal({ onClose }) {
                       )
                     }
                     disabled={isImporting}
-                    className="w-full rounded-lg px-3 py-2 text-sm outline-none ring-1 ring-(--color-border) focus:ring-(--color-accent) disabled:opacity-50"
-                    style={{
-                      background: "var(--color-bg)",
-                      color: "var(--color-text)",
-                    }}
+                    className="w-full rounded-lg bg-(--color-bg) px-3 py-2 text-sm text-(--color-text) outline-none ring-1 ring-(--color-border) focus:ring-(--color-accent) disabled:opacity-50"
                   />
                 </div>
               </div>
 
               {/* Progress section — shown once import starts */}
               {prProgress !== null && (
-                <div
-                  className="flex flex-col gap-3 rounded-lg p-3"
-                  style={{ background: "var(--color-bg)" }}
-                >
+                <div className="flex flex-col gap-3 rounded-lg bg-(--color-bg) p-3">
                   {/* ── Phase 1: fetching pages ───────────────────────────── */}
                   <div className="flex flex-col gap-1">
                     <div className="flex justify-between text-xs text-(--color-muted)">
@@ -355,37 +309,27 @@ export default function UploadModal({ onClose }) {
                         / {prProgress.max_pages ?? prMaxPages}
                       </span>
                     </div>
-                    <div
-                      className="h-1.5 w-full overflow-hidden rounded-full"
-                      style={{ background: "var(--color-border)" }}
-                    >
-                      <div
-                        className="h-full rounded-full transition-all duration-300 ease-out"
-                        style={{
-                          width: `${
-                            isProcessingPhase || prProgress.phase === "done"
-                              ? 100
-                              : fetchPct
-                          }%`,
-                          background:
-                            isProcessingPhase || prProgress.phase === "done"
-                              ? "#4ade80"
-                              : prError
-                                ? "#f87171"
-                                : "var(--color-accent)",
-                        }}
-                      />
-                    </div>
+                    <ProgressBar
+                      value={
+                        isProcessingPhase || prProgress.phase === "done"
+                          ? 100
+                          : fetchPct
+                      }
+                      status={
+                        isProcessingPhase || prProgress.phase === "done"
+                          ? "success"
+                          : prError
+                            ? "error"
+                            : "active"
+                      }
+                    />
                     {isFetchingPhase && (
                       <span className="text-xs text-(--color-muted)">
                         {prProgress.total_read ?? 0} items read
                       </span>
                     )}
                     {prProgress.phase === "inserted" && (
-                      <span
-                        className="text-xs"
-                        style={{ color: "var(--color-accent)" }}
-                      >
+                      <span className="text-xs text-(--color-accent)">
                         {prProgress.total} new posts registered
                         {prProgress.skipped_dedup > 0
                           ? `, ${prProgress.skipped_dedup} already exist`
@@ -406,24 +350,18 @@ export default function UploadModal({ onClose }) {
                           {prProgress.total ?? 0}
                         </span>
                       </div>
-                      <div
-                        className="h-1.5 w-full overflow-hidden rounded-full"
-                        style={{ background: "var(--color-border)" }}
-                      >
-                        <div
-                          className="h-full rounded-full transition-all duration-300 ease-out"
-                          style={{
-                            width: `${processPct}%`,
-                            background: prError
-                              ? "#f87171"
-                              : prProgress.phase === "done"
-                                ? "#4ade80"
-                                : "var(--color-accent)",
-                          }}
-                        />
-                      </div>
+                      <ProgressBar
+                        value={processPct}
+                        status={
+                          prError
+                            ? "error"
+                            : prProgress.phase === "done"
+                              ? "success"
+                              : "active"
+                        }
+                      />
                       <div className="flex gap-4 text-sm">
-                        <span style={{ color: "var(--color-accent)" }}>
+                        <span className="text-(--color-accent)">
                           ✓ {prProgress.imported ?? 0} imported
                         </span>
                         <span className="text-(--color-muted)">
@@ -435,10 +373,7 @@ export default function UploadModal({ onClose }) {
 
                   {/* Done message */}
                   {prProgress.phase === "done" && !prError && (
-                    <p
-                      className="text-xs font-medium"
-                      style={{ color: "#4ade80" }}
-                    >
+                    <p className="text-xs font-medium text-(--color-success)">
                       Import complete!
                     </p>
                   )}
@@ -447,10 +382,7 @@ export default function UploadModal({ onClose }) {
 
               {/* Error */}
               {prError && (
-                <p
-                  className="rounded-lg px-3 py-2 text-sm text-red-400"
-                  style={{ background: "var(--color-bg)" }}
-                >
+                <p className="rounded-lg bg-(--color-bg) px-3 py-2 text-sm text-(--color-danger)">
                   {prError}
                 </p>
               )}
@@ -460,8 +392,7 @@ export default function UploadModal({ onClose }) {
                 <button
                   type="submit"
                   disabled={isImporting || prProgress?.phase === "done"}
-                  className="flex-1 rounded-lg py-2 text-sm font-semibold disabled:opacity-50"
-                  style={{ background: "var(--color-accent)", color: "#fff" }}
+                  className="flex-1 rounded-lg bg-(--color-accent) py-2 text-sm font-semibold text-white disabled:opacity-50"
                 >
                   {isImporting
                     ? prProgress?.phase === "fetching"
@@ -481,11 +412,7 @@ export default function UploadModal({ onClose }) {
                       setPrProgress(null);
                       setPrError(null);
                     }}
-                    className="rounded-lg px-4 py-2 text-sm font-medium"
-                    style={{
-                      background: "var(--color-border)",
-                      color: "var(--color-text)",
-                    }}
+                    className="rounded-lg bg-(--color-border) px-4 py-2 text-sm font-medium text-(--color-text)"
                   >
                     Reset
                   </button>

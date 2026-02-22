@@ -1,6 +1,8 @@
 import { useEffect, useState, useCallback, useRef } from "react";
 import api, { ssePost } from "../utils/api.js";
 import { roleName, LEVEL_MEMBER, LEVEL_ADMIN } from "../utils/roles.js";
+import Tabs from "../components/Tabs.jsx";
+import ProgressBar from "../components/ProgressBar.jsx";
 
 // ── tiny helpers ─────────────────────────────────────────────────────────────
 
@@ -25,7 +27,7 @@ function RoleBadge({ level }) {
   const name = roleName(level);
   const color =
     level >= LEVEL_ADMIN
-      ? "bg-amber-600 text-white"
+      ? "bg-(--color-admin) text-white"
       : level >= LEVEL_MEMBER
         ? "bg-(--color-accent) text-white"
         : "bg-(--color-border) text-(--color-muted)";
@@ -49,7 +51,7 @@ function StatsSection() {
       .catch((e) => setError(e.message));
   }, []);
 
-  if (error) return <p className="text-red-400 text-sm">{error}</p>;
+  if (error) return <p className="text-(--color-danger) text-sm">{error}</p>;
   if (!stats) return <p className="text-(--color-muted) text-sm">loading…</p>;
 
   const { counts, disk } = stats;
@@ -141,7 +143,7 @@ function UsersSection() {
     }
   }
 
-  if (error) return <p className="text-red-400 text-sm">{error}</p>;
+  if (error) return <p className="text-(--color-danger) text-sm">{error}</p>;
   if (!users) return <p className="text-(--color-muted) text-sm">loading…</p>;
 
   return (
@@ -178,7 +180,7 @@ function UsersSection() {
                     <button
                       disabled={busy === u.id}
                       onClick={() => setLevel(u.id, LEVEL_ADMIN)}
-                      className="rounded bg-amber-600 px-2 py-0.5 text-xs text-white disabled:opacity-50"
+                      className="rounded bg-(--color-admin) px-2 py-0.5 text-xs text-white disabled:opacity-50"
                     >
                       promote
                     </button>
@@ -194,7 +196,7 @@ function UsersSection() {
                   <button
                     disabled={busy === u.id}
                     onClick={() => deleteUser(u.id, u.name)}
-                    className="rounded bg-red-700 px-2 py-0.5 text-xs text-white disabled:opacity-50"
+                    className="rounded bg-(--color-danger) px-2 py-0.5 text-xs text-white disabled:opacity-50"
                   >
                     delete
                   </button>
@@ -269,30 +271,18 @@ function ContentSection() {
     }
   }
 
-  const tabClass = (t) =>
-    `px-3 py-1.5 text-sm font-medium rounded-t border-b-2 ${
-      tab === t
-        ? "border-(--color-accent) text-(--color-accent)"
-        : "border-transparent text-(--color-muted) hover:text-(--color-text)"
-    }`;
+  const contentTabs = [
+    { id: "posts", label: posts ? `posts (${posts.length})` : "posts" },
+    {
+      id: "comments",
+      label: comments ? `comments (${comments.length})` : "comments",
+    },
+    { id: "tags", label: tags ? `tags (${tags.length})` : "tags" },
+  ];
 
   return (
     <div>
-      {/* Tabs */}
-      <div className="flex gap-1 border-b border-(--color-border)">
-        <button className={tabClass("posts")} onClick={() => setTab("posts")}>
-          posts {posts && `(${posts.length})`}
-        </button>
-        <button
-          className={tabClass("comments")}
-          onClick={() => setTab("comments")}
-        >
-          comments {comments && `(${comments.length})`}
-        </button>
-        <button className={tabClass("tags")} onClick={() => setTab("tags")}>
-          tags {tags && `(${tags.length})`}
-        </button>
-      </div>
+      <Tabs tabs={contentTabs} active={tab} onChange={setTab} />
 
       {/* Posts tab */}
       {tab === "posts" && (
@@ -325,7 +315,7 @@ function ContentSection() {
                 <button
                   disabled={busy === `post-${p.id}`}
                   onClick={() => deletePost(p.id)}
-                  className="shrink-0 rounded bg-red-700 px-2 py-0.5 text-xs text-white disabled:opacity-50"
+                  className="shrink-0 rounded bg-(--color-danger) px-2 py-0.5 text-xs text-white disabled:opacity-50"
                 >
                   delete
                 </button>
@@ -359,7 +349,7 @@ function ContentSection() {
                 <button
                   disabled={busy === `comment-${c.id}`}
                   onClick={() => deleteComment(c.id)}
-                  className="shrink-0 rounded bg-red-700 px-2 py-0.5 text-xs text-white disabled:opacity-50"
+                  className="shrink-0 rounded bg-(--color-danger) px-2 py-0.5 text-xs text-white disabled:opacity-50"
                 >
                   delete
                 </button>
@@ -387,7 +377,7 @@ function ContentSection() {
                   <button
                     disabled={busy === `tag-${t.id}`}
                     onClick={() => deleteTag(t.id, t.name)}
-                    className="text-red-500 hover:text-red-400 disabled:opacity-50"
+                    className="text-(--color-danger) hover:opacity-80 disabled:opacity-50"
                     title="delete tag"
                   >
                     ×
@@ -509,13 +499,7 @@ function JobCard({ job }) {
       {/* Progress bar — only rendered when the job calls onProgress */}
       {state === "running" && progress !== null && (
         <div className="space-y-1">
-          {/* Bar */}
-          <div className="h-2 w-full overflow-hidden rounded-full bg-(--color-border)">
-            <div
-              className="h-full rounded-full bg-(--color-accent) transition-all duration-300"
-              style={{ width: `${pct ?? 0}%` }}
-            />
-          </div>
+          <ProgressBar value={pct ?? 0} status="active" height="md" />
           <div className="flex justify-between text-xs text-(--color-muted)">
             <span>{progress.message ?? ""}</span>
             <span>
@@ -528,9 +512,7 @@ function JobCard({ job }) {
 
       {/* Running — no incremental progress available */}
       {state === "running" && progress === null && (
-        <div className="h-1.5 w-full overflow-hidden rounded-full bg-(--color-border)">
-          <div className="h-full w-full rounded-full bg-(--color-accent) origin-left animate-pulse opacity-60" />
-        </div>
+        <ProgressBar value={100} status="pulse" height="sm" />
       )}
 
       {/* Result */}
@@ -547,7 +529,7 @@ function JobCard({ job }) {
 
       {/* Error */}
       {state === "error" && (
-        <p className="rounded bg-red-950 border border-red-800 px-3 py-2 text-sm text-red-400">
+        <p className="rounded border border-(--color-danger)/50 bg-(--color-danger)/10 px-3 py-2 text-sm text-(--color-danger)">
           {errorMsg}
         </p>
       )}
@@ -580,10 +562,13 @@ const MAINTENANCE_JOBS = [
           Updated <strong>{r.updated}</strong> of <strong>{r.total}</strong>{" "}
           posts.
           {r.failed > 0 && (
-            <span className="text-red-400"> {r.failed} failed.</span>
+            <span className="text-(--color-danger)"> {r.failed} failed.</span>
           )}
           {remaining <= 0 ? (
-            <span className="text-green-400"> All posts have dimensions ✓</span>
+            <span className="text-(--color-success)">
+              {" "}
+              All posts have dimensions ✓
+            </span>
           ) : (
             <span className="text-(--color-muted)">
               {" "}
@@ -619,7 +604,7 @@ const MAINTENANCE_JOBS = [
         Re-encoded <strong>{r.updated}</strong> of <strong>{r.total}</strong>{" "}
         images.
         {r.failed > 0 && (
-          <span className="text-red-400"> {r.failed} failed.</span>
+          <span className="text-(--color-danger)"> {r.failed} failed.</span>
         )}
         {r.skipped > 0 && (
           <span className="text-(--color-muted)">
@@ -628,7 +613,10 @@ const MAINTENANCE_JOBS = [
           </span>
         )}
         {r.failed === 0 && r.skipped === 0 && r.updated === r.total && (
-          <span className="text-green-400"> All images regenerated ✓</span>
+          <span className="text-(--color-success)">
+            {" "}
+            All images regenerated ✓
+          </span>
         )}
       </span>
     ),
@@ -653,12 +641,12 @@ function MaintenanceSection() {
 export default function Admin() {
   const [section, setSection] = useState("stats");
 
-  const navClass = (s) =>
-    `px-4 py-2 text-sm font-medium rounded ${
-      section === s
-        ? "bg-(--color-accent) text-white"
-        : "text-(--color-muted) hover:text-(--color-text)"
-    }`;
+  const SECTIONS = [
+    { id: "stats", label: "stats" },
+    { id: "users", label: "users" },
+    { id: "content", label: "content" },
+    { id: "maintenance", label: "maintenance" },
+  ];
 
   return (
     <main className="mx-auto max-w-5xl px-4 py-6">
@@ -667,32 +655,12 @@ export default function Admin() {
       </h1>
 
       {/* Section nav */}
-      <div className="mb-6 flex flex-wrap gap-2">
-        <button
-          className={navClass("stats")}
-          onClick={() => setSection("stats")}
-        >
-          stats
-        </button>
-        <button
-          className={navClass("users")}
-          onClick={() => setSection("users")}
-        >
-          users
-        </button>
-        <button
-          className={navClass("content")}
-          onClick={() => setSection("content")}
-        >
-          content
-        </button>
-        <button
-          className={navClass("maintenance")}
-          onClick={() => setSection("maintenance")}
-        >
-          maintenance
-        </button>
-      </div>
+      <Tabs
+        tabs={SECTIONS}
+        active={section}
+        onChange={setSection}
+        className="mb-6"
+      />
 
       {/* Section content */}
       {section === "stats" && <StatsSection />}

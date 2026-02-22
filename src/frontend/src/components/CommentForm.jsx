@@ -41,7 +41,7 @@ export default function CommentForm({ postId }) {
         placeholder="Write a comment…"
         className="w-full rounded bg-(--color-bg) p-2 text-sm text-(--color-text) placeholder:text-(--color-muted) ring-1 ring-(--color-border) focus:outline-none focus:ring-(--color-accent) resize-none"
       />
-      {error && <p className="mt-1 text-xs text-red-400">{error}</p>}
+      {error && <p className="mt-1 text-xs text-(--color-danger)">{error}</p>}
       <div className="mt-2 flex justify-end">
         <button
           type="submit"

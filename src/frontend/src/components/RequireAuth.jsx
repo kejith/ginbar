@@ -11,7 +11,7 @@ export default function RequireAuth({ children }) {
 
   if (user === null) {
     // Still hydrating — render nothing until we know auth state.
-    return <div className="p-4 text-zinc-500">loading…</div>;
+    return <div className="p-4 text-(--color-muted)">loading…</div>;
   }
   if (user === false) {
     return <Navigate to="/login" replace />;

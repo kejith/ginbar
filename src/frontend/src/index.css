@@ -3,12 +3,22 @@
 
 /* Global tokens */
 :root {
+  /* Layout */
+  --nav-height: 3rem;
+
+  /* Core palette */
   --color-bg: #0f0f10;
   --color-surface: #1a1a1d;
   --color-border: #2a2a2e;
   --color-text: #e4e4e7;
   --color-muted: #71717a;
   --color-accent: #f97316; /* orange-500 — brand colour */
+
+  /* Semantic role colours */
+  --color-danger: #ef4444; /* red-500 — destructive actions, error text   */
+  --color-admin: #d97706; /* amber-600 — admin-level badge / action       */
+  --color-down: #60a5fa; /* blue-400 — downvote indicator                */
+  --color-success: #4ade80; /* green-400 — success states                   */
 }
 
 html {

@@ -19,14 +19,11 @@ export default function TagChip({ tag, onVote, onDelete, deleting }) {
     <span className="inline-flex items-center gap-1 rounded-full border border-(--color-border) bg-(--color-surface) px-2 py-0.5 text-xs">
       <button
         onClick={() => navigate(`/?q=${encodeURIComponent(name)}`)}
-        className="text-(--color-text) hover:text-(--color-accent) truncate max-w-[12ch]"
+        className="text-(--color-text) hover:text-(--color-accent) truncate max-w-[14ch]"
         title={name}
       >
         {name}
       </button>
-      <span className="text-(--color-muted) tabular-nums font-mono">
-        {tag.score}
-      </span>
       {onVote && (
         <span className="flex gap-0.5">
           <button
@@ -37,7 +34,7 @@ export default function TagChip({ tag, onVote, onDelete, deleting }) {
           </button>
           <button
             onClick={() => onVote(tag.id, tag.vote === -1 ? 0 : -1)}
-            className={`text-[10px] leading-none ${tag.vote === -1 ? "text-blue-400" : "text-(--color-muted) hover:text-(--color-text)"}`}
+            className={`text-[10px] leading-none ${tag.vote === -1 ? "text-(--color-down)" : "text-(--color-muted) hover:text-(--color-text)"}`}
           >
             −
           </button>
@@ -47,7 +44,7 @@ export default function TagChip({ tag, onVote, onDelete, deleting }) {
         <button
           disabled={deleting}
           onClick={() => onDelete(tag.id)}
-          className="text-red-500 hover:text-red-400 disabled:opacity-40 text-[10px] leading-none"
+          className="text-(--color-danger) hover:opacity-80 disabled:opacity-40 text-[10px] leading-none"
           title="delete tag"
         >
           ×

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import useAuthStore from "../stores/authStore.js";
+import FormField, { inputCls } from "../components/FormField.jsx";
 
 export default function Login() {
   const { login, loading, error, clearError } = useAuthStore();
@@ -26,19 +27,17 @@ export default function Login() {
     <main className="mx-auto mt-16 max-w-sm px-4">
       <h1 className="mb-6 text-xl font-bold text-(--color-text)">sign in</h1>
       <form onSubmit={submit} className="flex flex-col gap-3">
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-(--color-muted)">username</span>
+        <FormField label="username">
           <input
             name="name"
             value={form.name}
             onChange={change}
             autoComplete="username"
             required
-            className="rounded bg-(--color-bg) px-3 py-2 text-(--color-text) ring-1 ring-(--color-border) focus:outline-none focus:ring-(--color-accent)"
+            className={inputCls}
           />
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-(--color-muted)">password</span>
+        </FormField>
+        <FormField label="password">
           <input
             name="password"
             type="password"
@@ -46,10 +45,10 @@ export default function Login() {
             onChange={change}
             autoComplete="current-password"
             required
-            className="rounded bg-(--color-bg) px-3 py-2 text-(--color-text) ring-1 ring-(--color-border) focus:outline-none focus:ring-(--color-accent)"
+            className={inputCls}
           />
-        </label>
-        {error && <p className="text-xs text-red-400">{error}</p>}
+        </FormField>
+        {error && <p className="text-xs text-(--color-danger)">{error}</p>}
         <button
           type="submit"
           disabled={loading}

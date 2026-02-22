@@ -46,7 +46,7 @@ export default function CommentItem({ comment, postId, onDelete, deleting }) {
         <button
           disabled={deleting}
           onClick={onDelete}
-          className="self-start mt-1 shrink-0 rounded bg-red-700 px-2 py-0.5 text-xs text-white disabled:opacity-50"
+          className="self-start mt-1 shrink-0 rounded bg-(--color-danger) px-2 py-0.5 text-xs text-white disabled:opacity-50"
           title="delete comment"
         >
           {deleting ? "…" : "del"}

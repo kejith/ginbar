@@ -36,7 +36,7 @@ export default function VoteButtons({ score = 0, vote = 0, onVote, disabled }) {
           isUp
             ? "text-(--color-accent)"
             : isDown
-              ? "text-blue-400"
+              ? "text-(--color-down)"
               : "text-(--color-muted)"
         }`}
       >
@@ -48,7 +48,7 @@ export default function VoteButtons({ score = 0, vote = 0, onVote, disabled }) {
         aria-label="downvote"
         className={`text-base leading-none transition-colors ${
           isDown
-            ? "text-blue-400"
+            ? "text-(--color-down)"
             : "text-(--color-muted) hover:text-(--color-text)"
         } disabled:opacity-40`}
       >

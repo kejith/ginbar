@@ -51,39 +51,39 @@ export default function UserGrid() {
   }
 
   return (
-    <div className="flex flex-col" style={{ height: "calc(100vh - 3rem)" }}>
+    <div
+      className="flex flex-col"
+      style={{ height: "calc(100vh - var(--nav-height))" }}
+    >
       {/* Breadcrumb */}
-      <div
-        className="flex items-center gap-1.5 border-b px-3 py-2 text-sm"
-        style={{ borderColor: "var(--color-border)" }}
-      >
+      <div className="flex items-center gap-1.5 border-b border-(--color-border) px-3 py-2 text-sm">
         <Link
           to={`/user/${name}`}
-          className="hover:opacity-80"
-          style={{ color: "var(--color-accent)" }}
+          className="text-(--color-accent) hover:opacity-80"
         >
           {name}
         </Link>
-        <span style={{ color: "var(--color-border)" }}>/</span>
+        <span className="text-(--color-border)">/</span>
         {tagsFilter ? (
           <>
             <Link
               to={`/user/${name}/posts`}
-              className="hover:opacity-80"
-              style={{ color: "var(--color-muted)" }}
+              className="text-(--color-muted) hover:opacity-80"
             >
               posts
             </Link>
-            <span style={{ color: "var(--color-border)" }}>/</span>
-            <span style={{ color: "var(--color-text)" }}>{tagsFilter}</span>
+            <span className="text-(--color-border)">/</span>
+            <span className="text-(--color-text)">{tagsFilter}</span>
           </>
         ) : (
-          <span style={{ color: "var(--color-text)" }}>posts</span>
+          <span className="text-(--color-text)">posts</span>
         )}
       </div>
 
       {listError && (
-        <p className="px-3 pt-2 pb-1 text-sm text-red-400">{listError}</p>
+        <p className="px-3 pt-2 pb-1 text-sm text-(--color-danger)">
+          {listError}
+        </p>
       )}
 
       <PostGrid

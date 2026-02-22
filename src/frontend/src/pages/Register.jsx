@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useNavigate, useSearchParams, Link } from "react-router-dom";
 import useAuthStore from "../stores/authStore.js";
 import useInviteStore from "../stores/inviteStore.js";
+import FormField, { inputCls } from "../components/FormField.jsx";
 
 /**
  * /register?invite=<token>
@@ -109,8 +110,7 @@ export default function Register() {
       </p>
 
       <form onSubmit={submit} className="flex flex-col gap-3">
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-(--color-muted)">username</span>
+        <FormField label="username">
           <input
             name="name"
             value={form.name}
@@ -118,12 +118,11 @@ export default function Register() {
             autoComplete="username"
             minLength={4}
             required
-            className="rounded bg-(--color-bg) px-3 py-2 text-(--color-text) ring-1 ring-(--color-border) focus:outline-none focus:ring-(--color-accent)"
+            className={inputCls}
           />
-        </label>
+        </FormField>
 
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-(--color-muted)">email</span>
+        <FormField label="email">
           <input
             name="email"
             type="email"
@@ -131,12 +130,11 @@ export default function Register() {
             onChange={change}
             autoComplete="email"
             required
-            className="rounded bg-(--color-bg) px-3 py-2 text-(--color-text) ring-1 ring-(--color-border) focus:outline-none focus:ring-(--color-accent)"
+            className={inputCls}
           />
-        </label>
+        </FormField>
 
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-(--color-muted)">password</span>
+        <FormField label="password">
           <input
             name="password"
             type="password"
@@ -145,11 +143,13 @@ export default function Register() {
             autoComplete="new-password"
             minLength={6}
             required
-            className="rounded bg-(--color-bg) px-3 py-2 text-(--color-text) ring-1 ring-(--color-border) focus:outline-none focus:ring-(--color-accent)"
+            className={inputCls}
           />
-        </label>
+        </FormField>
 
-        {authError && <p className="text-xs text-red-400">{authError}</p>}
+        {authError && (
+          <p className="text-xs text-(--color-danger)">{authError}</p>
+        )}
 
         <button
           type="submit"

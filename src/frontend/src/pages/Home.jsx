@@ -62,7 +62,10 @@ export default function Home() {
   }
 
   return (
-    <div className="flex flex-col" style={{ height: "calc(100vh - 3rem)" }}>
+    <div
+      className="flex flex-col"
+      style={{ height: "calc(100vh - var(--nav-height))" }}
+    >
       {(query || tag) && (
         <p className="px-3 pt-2 pb-1 text-sm text-(--color-muted)">
           {query ? `results for "${query}"` : `tag: ${tag}`}
@@ -70,7 +73,9 @@ export default function Home() {
       )}
 
       {listError && (
-        <p className="px-3 pt-2 pb-1 text-sm text-red-400">{listError}</p>
+        <p className="px-3 pt-2 pb-1 text-sm text-(--color-danger)">
+          {listError}
+        </p>
       )}
 
       <PostGrid
