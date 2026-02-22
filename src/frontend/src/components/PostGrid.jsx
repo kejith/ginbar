@@ -219,6 +219,10 @@ export default function PostGrid({
     return () => {
       ids.forEach(clearTimeout);
       scrollRetryIds.current = [];
+      // rows changed while retries were still pending → the virtualizer has
+      // re-measured and the layout is now stable.  Mark settled so the
+      // near-top trigger can fire, otherwise scrollSettled stays false forever.
+      scrollSettled.current = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows]);
