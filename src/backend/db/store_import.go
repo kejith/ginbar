@@ -42,15 +42,15 @@ func (s *Store) FilterExistingURLs(ctx context.Context, urls []string) (map[stri
 // filename, thumbnail_filename, content_type, and phashes are left at their
 // zero values; they will be filled in by FinalizePost once the image has been
 // downloaded and processed.
-func (s *Store) CreateDirtyPost(ctx context.Context, url, userName string) (dbgen.Post, error) {
+func (s *Store) CreateDirtyPost(ctx context.Context, url, userName, filter string, released bool) (dbgen.Post, error) {
 	const q = `
-INSERT INTO posts (url, user_name, filename, thumbnail_filename, content_type, dirty)
-VALUES ($1, $2, '', '', 'image', TRUE)
+INSERT INTO posts (url, user_name, filename, thumbnail_filename, content_type, dirty, filter, released)
+VALUES ($1, $2, '', '', 'image', TRUE, $3, $4)
 RETURNING id, url, uploaded_filename, filename, thumbnail_filename, content_type,
-          score, user_level, p_hash_0, p_hash_1, p_hash_2, p_hash_3,
-          user_name, created_at, deleted_at, dirty, width, height
+          score, user_level, filter, p_hash_0, p_hash_1, p_hash_2, p_hash_3,
+          user_name, created_at, deleted_at, dirty, width, height, released
 `
-	row := s.Pool.QueryRow(ctx, q, url, userName)
+	row := s.Pool.QueryRow(ctx, q, url, userName, filter, released)
 	var p dbgen.Post
 	err := row.Scan(
 		&p.ID,
@@ -61,6 +61,7 @@ RETURNING id, url, uploaded_filename, filename, thumbnail_filename, content_type
 		&p.ContentType,
 		&p.Score,
 		&p.UserLevel,
+		&p.Filter,
 		&p.PHash0,
 		&p.PHash1,
 		&p.PHash2,
@@ -71,6 +72,7 @@ RETURNING id, url, uploaded_filename, filename, thumbnail_filename, content_type
 		&p.Dirty,
 		&p.Width,
 		&p.Height,
+		&p.Released,
 	)
 	return p, err
 }
@@ -136,8 +138,8 @@ func (s *Store) DeleteDirtyPost(ctx context.Context, id int32) error {
 func (s *Store) GetDirtyPosts(ctx context.Context) ([]dbgen.Post, error) {
 	const q = `
 SELECT id, url, uploaded_filename, filename, thumbnail_filename, content_type,
-       score, user_level, p_hash_0, p_hash_1, p_hash_2, p_hash_3,
-       user_name, created_at, deleted_at, dirty, width, height
+       score, user_level, filter, p_hash_0, p_hash_1, p_hash_2, p_hash_3,
+       user_name, created_at, deleted_at, dirty, width, height, released
 FROM posts WHERE dirty = TRUE AND deleted_at IS NULL ORDER BY id
 `
 	rows, err := s.Pool.Query(ctx, q)
@@ -151,10 +153,10 @@ FROM posts WHERE dirty = TRUE AND deleted_at IS NULL ORDER BY id
 		var p dbgen.Post
 		if err := rows.Scan(
 			&p.ID, &p.Url, &p.UploadedFilename, &p.Filename, &p.ThumbnailFilename,
-			&p.ContentType, &p.Score, &p.UserLevel,
+			&p.ContentType, &p.Score, &p.UserLevel, &p.Filter,
 			&p.PHash0, &p.PHash1, &p.PHash2, &p.PHash3,
 			&p.UserName, &p.CreatedAt, &p.DeletedAt, &p.Dirty,
-			&p.Width, &p.Height,
+			&p.Width, &p.Height, &p.Released,
 		); err != nil {
 			return nil, err
 		}
@@ -166,21 +168,21 @@ FROM posts WHERE dirty = TRUE AND deleted_at IS NULL ORDER BY id
 // CreateDirtyPostWithUpload inserts a placeholder dirty post that already has
 // a locally-saved file (member file-upload path). The uploadedFilename is the
 // absolute path on disk; the queue worker reads it instead of downloading the URL.
-func (s *Store) CreateDirtyPostWithUpload(ctx context.Context, url, userName, uploadedFilename string) (dbgen.Post, error) {
+func (s *Store) CreateDirtyPostWithUpload(ctx context.Context, url, userName, uploadedFilename, filter string, released bool) (dbgen.Post, error) {
 	const q = `
-INSERT INTO posts (url, user_name, uploaded_filename, filename, thumbnail_filename, content_type, dirty)
-VALUES ($1, $2, $3, '', '', 'image', TRUE)
+INSERT INTO posts (url, user_name, uploaded_filename, filename, thumbnail_filename, content_type, dirty, filter, released)
+VALUES ($1, $2, $3, '', '', 'image', TRUE, $4, $5)
 RETURNING id, url, uploaded_filename, filename, thumbnail_filename, content_type,
-          score, user_level, p_hash_0, p_hash_1, p_hash_2, p_hash_3,
-          user_name, created_at, deleted_at, dirty, width, height
+          score, user_level, filter, p_hash_0, p_hash_1, p_hash_2, p_hash_3,
+          user_name, created_at, deleted_at, dirty, width, height, released
 `
-	row := s.Pool.QueryRow(ctx, q, url, userName, uploadedFilename)
+	row := s.Pool.QueryRow(ctx, q, url, userName, uploadedFilename, filter, released)
 	var p dbgen.Post
 	err := row.Scan(
 		&p.ID, &p.Url, &p.UploadedFilename, &p.Filename, &p.ThumbnailFilename,
-		&p.ContentType, &p.Score, &p.UserLevel,
+		&p.ContentType, &p.Score, &p.UserLevel, &p.Filter,
 		&p.PHash0, &p.PHash1, &p.PHash2, &p.PHash3,
-		&p.UserName, &p.CreatedAt, &p.DeletedAt, &p.Dirty, &p.Width, &p.Height,
+		&p.UserName, &p.CreatedAt, &p.DeletedAt, &p.Dirty, &p.Width, &p.Height, &p.Released,
 	)
 	return p, err
 }
@@ -216,18 +218,18 @@ func (s *Store) CountDirtyPostsBeforeID(ctx context.Context, postID int32) (int,
 func (s *Store) GetUserDirtyPost(ctx context.Context, userName string) (*dbgen.Post, error) {
 	const q = `
 SELECT id, url, uploaded_filename, filename, thumbnail_filename, content_type,
-       score, user_level, p_hash_0, p_hash_1, p_hash_2, p_hash_3,
-       user_name, created_at, deleted_at, dirty, width, height
-FROM posts WHERE dirty = TRUE AND deleted_at IS NULL AND user_name = $1
+       score, user_level, filter, p_hash_0, p_hash_1, p_hash_2, p_hash_3,
+       user_name, created_at, deleted_at, dirty, width, height, released
+FROM posts WHERE (dirty = TRUE OR released = FALSE) AND deleted_at IS NULL AND user_name = $1
 ORDER BY id LIMIT 1
 `
 	row := s.Pool.QueryRow(ctx, q, userName)
 	var p dbgen.Post
 	err := row.Scan(
 		&p.ID, &p.Url, &p.UploadedFilename, &p.Filename, &p.ThumbnailFilename,
-		&p.ContentType, &p.Score, &p.UserLevel,
+		&p.ContentType, &p.Score, &p.UserLevel, &p.Filter,
 		&p.PHash0, &p.PHash1, &p.PHash2, &p.PHash3,
-		&p.UserName, &p.CreatedAt, &p.DeletedAt, &p.Dirty, &p.Width, &p.Height,
+		&p.UserName, &p.CreatedAt, &p.DeletedAt, &p.Dirty, &p.Width, &p.Height, &p.Released,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

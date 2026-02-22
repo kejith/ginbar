@@ -34,6 +34,7 @@ type Querier interface {
 	GetComment(ctx context.Context, id int32) (Comment, error)
 	GetComments(ctx context.Context) ([]Comment, error)
 	GetCommentsByPost(ctx context.Context, postID int32) ([]Comment, error)
+	GetFilterTagNamesByPost(ctx context.Context, postID int32) ([]string, error)
 	GetNewerPosts(ctx context.Context, arg GetNewerPostsParams) ([]Post, error)
 	GetNotificationsEnriched(ctx context.Context, arg GetNotificationsEnrichedParams) ([]GetNotificationsEnrichedRow, error)
 	GetOlderPosts(ctx context.Context, arg GetOlderPostsParams) ([]Post, error)
@@ -61,10 +62,12 @@ type Querier interface {
 	MarkMessageRead(ctx context.Context, arg MarkMessageReadParams) error
 	PostURLExists(ctx context.Context, url string) (bool, error)
 	RemoveTagFromPost(ctx context.Context, arg RemoveTagFromPostParams) error
-	Search(ctx context.Context, dollar_1 []string) ([]Post, error)
+	Search(ctx context.Context, arg SearchParams) ([]Post, error)
 	SearchByUser(ctx context.Context, arg SearchByUserParams) ([]Post, error)
 	UpdatePostFiles(ctx context.Context, arg UpdatePostFilesParams) error
+	UpdatePostFilter(ctx context.Context, arg UpdatePostFilterParams) error
 	UpdatePostHashes(ctx context.Context, arg UpdatePostHashesParams) error
+	UpdatePostReleased(ctx context.Context, arg UpdatePostReleasedParams) error
 	UpdateUserEmail(ctx context.Context, arg UpdateUserEmailParams) error
 	UpdateUserLevel(ctx context.Context, arg UpdateUserLevelParams) (User, error)
 	UpsertCommentVote(ctx context.Context, arg UpsertCommentVoteParams) error

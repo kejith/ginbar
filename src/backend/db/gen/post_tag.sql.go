@@ -122,3 +122,30 @@ func (q *Queries) RemoveTagFromPost(ctx context.Context, arg RemoveTagFromPostPa
 	_, err := q.db.Exec(ctx, removeTagFromPost, arg.TagID, arg.PostID)
 	return err
 }
+
+const getFilterTagNamesByPost = `-- name: GetFilterTagNamesByPost :many
+SELECT t.name
+FROM post_tags pt
+JOIN tags t ON t.id = pt.tag_id
+WHERE pt.post_id = $1 AND t.name IN ('nsfp', 'nsfw', 'secret')
+`
+
+func (q *Queries) GetFilterTagNamesByPost(ctx context.Context, postID int32) ([]string, error) {
+	rows, err := q.db.Query(ctx, getFilterTagNamesByPost, postID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		items = append(items, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

@@ -55,6 +55,7 @@ type Post struct {
 	ContentType       string             `json:"content_type"`
 	Score             int32              `json:"score"`
 	UserLevel         int32              `json:"user_level"`
+	Filter            string             `json:"filter"`
 	PHash0            int64              `json:"p_hash_0"`
 	PHash1            int64              `json:"p_hash_1"`
 	PHash2            int64              `json:"p_hash_2"`
@@ -63,6 +64,7 @@ type Post struct {
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	DeletedAt         pgtype.Timestamptz `json:"deleted_at"`
 	Dirty             bool               `json:"dirty"`
+	Released          bool               `json:"released"`
 	Width             int32              `json:"width"`
 	Height            int32              `json:"height"`
 }

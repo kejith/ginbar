@@ -76,8 +76,8 @@ func (s *Store) EnsureAdminUser(ctx context.Context, password string, log *slog.
 func (s *Store) GetPostsMissingDimensions(ctx context.Context) ([]gen.Post, error) {
 	const q = `
 SELECT id, url, uploaded_filename, filename, thumbnail_filename, content_type,
-       score, user_level, p_hash_0, p_hash_1, p_hash_2, p_hash_3,
-       user_name, created_at, deleted_at, dirty, width, height
+       score, user_level, filter, p_hash_0, p_hash_1, p_hash_2, p_hash_3,
+       user_name, created_at, deleted_at, dirty, width, height, released
 FROM posts
 WHERE (width = 0 OR height = 0) AND deleted_at IS NULL AND dirty = FALSE
 ORDER BY id
@@ -93,10 +93,10 @@ ORDER BY id
 		var p gen.Post
 		if err := rows.Scan(
 			&p.ID, &p.Url, &p.UploadedFilename, &p.Filename, &p.ThumbnailFilename,
-			&p.ContentType, &p.Score, &p.UserLevel,
+			&p.ContentType, &p.Score, &p.UserLevel, &p.Filter,
 			&p.PHash0, &p.PHash1, &p.PHash2, &p.PHash3,
 			&p.UserName, &p.CreatedAt, &p.DeletedAt, &p.Dirty,
-			&p.Width, &p.Height,
+			&p.Width, &p.Height, &p.Released,
 		); err != nil {
 			return nil, err
 		}
@@ -119,8 +119,8 @@ func (s *Store) UpdatePostDimensions(ctx context.Context, id, width, height int3
 func (s *Store) GetAllImagePosts(ctx context.Context) ([]gen.Post, error) {
 	const q = `
 SELECT id, url, uploaded_filename, filename, thumbnail_filename, content_type,
-       score, user_level, p_hash_0, p_hash_1, p_hash_2, p_hash_3,
-       user_name, created_at, deleted_at, dirty, width, height
+       score, user_level, filter, p_hash_0, p_hash_1, p_hash_2, p_hash_3,
+       user_name, created_at, deleted_at, dirty, width, height, released
 FROM posts
 WHERE content_type = 'image' AND deleted_at IS NULL AND dirty = FALSE
 ORDER BY id
@@ -136,10 +136,10 @@ ORDER BY id
 		var p gen.Post
 		if err := rows.Scan(
 			&p.ID, &p.Url, &p.UploadedFilename, &p.Filename, &p.ThumbnailFilename,
-			&p.ContentType, &p.Score, &p.UserLevel,
+			&p.ContentType, &p.Score, &p.UserLevel, &p.Filter,
 			&p.PHash0, &p.PHash1, &p.PHash2, &p.PHash3,
 			&p.UserName, &p.CreatedAt, &p.DeletedAt, &p.Dirty,
-			&p.Width, &p.Height,
+			&p.Width, &p.Height, &p.Released,
 		); err != nil {
 			return nil, err
 		}

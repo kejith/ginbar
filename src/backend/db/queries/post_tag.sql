@@ -12,6 +12,12 @@ LEFT JOIN post_tag_votes ptv ON ptv.post_tag_id = pt.id AND ptv.user_id = $1
 WHERE pt.post_id = $2
 ORDER BY pt.score DESC;
 
+-- name: GetFilterTagNamesByPost :many
+SELECT t.name
+FROM post_tags pt
+JOIN tags t ON t.id = pt.tag_id
+WHERE pt.post_id = $1 AND t.name IN ('nsfp', 'nsfw', 'secret');
+
 -- name: GetPostTag :one
 SELECT * FROM post_tags WHERE id = $1;
 
