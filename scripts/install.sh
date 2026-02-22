@@ -287,6 +287,45 @@ chmod -R 755 "$MEDIA_DIR"
 chmod -R o+rX "$FRONTEND_DIR"
 success "Media directories ready at $MEDIA_DIR"
 
+# ── Migrate legacy ginbar PostgreSQL role/database if volume already exists ──
+# On a clean server the volume doesn't exist yet and Postgres will initialise
+# correctly with POSTGRES_USER=wallium.  On a server that previously ran the
+# ginbar deployment the volume is reused and those env vars are ignored — the
+# old ginbar role persists and goose can't connect as wallium.
+info "Starting postgres to check for legacy ginbar role…"
+docker compose up -d postgres
+for _i in $(seq 1 30); do
+  docker compose exec -T postgres pg_isready -q 2>/dev/null && break
+  sleep 1
+done
+
+if docker compose exec -T postgres psql -U ginbar -d postgres -c "" >/dev/null 2>&1; then
+  _WALLIUM=$(docker compose exec -T postgres psql -U ginbar -d postgres -tAc \
+    "SELECT 1 FROM pg_roles WHERE rolname='wallium';" 2>/dev/null | tr -d '[:space:]' || true)
+
+  if [[ "$_WALLIUM" != "1" ]]; then
+    info "Legacy ginbar role detected — migrating to wallium…"
+    [[ -f "$ENV_FILE" ]] && { set -a; source "$ENV_FILE"; set +a; }
+    _PG_PASS="${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}"
+    docker compose exec -T postgres psql -U ginbar -d postgres \
+      -c "CREATE ROLE wallium SUPERUSER LOGIN PASSWORD '${_PG_PASS}';"
+    docker compose exec -T postgres psql -U ginbar -d postgres \
+      -c "ALTER DATABASE ginbar RENAME TO wallium;"
+    success "PostgreSQL role and database migrated to wallium"
+  else
+    _GINBAR_DB=$(docker compose exec -T postgres psql -U wallium -d postgres -tAc \
+      "SELECT 1 FROM pg_database WHERE datname='ginbar';" 2>/dev/null | tr -d '[:space:]' || true)
+    if [[ "$_GINBAR_DB" == "1" ]]; then
+      info "Renaming ginbar database to wallium…"
+      docker compose exec -T postgres psql -U wallium -d postgres \
+        -c "ALTER DATABASE ginbar RENAME TO wallium;"
+      success "PostgreSQL database renamed to wallium"
+    fi
+  fi
+else
+  success "PostgreSQL volume is clean — no legacy migration needed"
+fi
+
 info "Running database migrations…"
 docker compose run --rm migrate
 
