@@ -194,6 +194,7 @@ func NewServer(store *db.Store, rdb *redis.Client, sessionSecret string, log *sl
 	admin.Delete("/tags/:id", srv.AdminDeleteTag)
 	admin.Post("/posts/backfill-dimensions", srv.BackfillPostDimensions)
 	admin.Post("/posts/regenerate-images", srv.RegenerateImages)
+	admin.Post("/posts/load-new", srv.LoadNewFromPr0gramm)
 	admin.Post("/message/broadcast", srv.BroadcastMessage)
 
 	// Static — SPA fallback (frontend served separately in dev via Vite proxy)

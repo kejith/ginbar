@@ -649,3 +649,212 @@ m = item.Promoted
 }
 return m
 }
+
+// minItemID returns the minimum item ID from a slice — used as the "older"
+// cursor for the non-promoted ("new") pr0gramm feed.
+func minItemID(items []pr0grammItem) int64 {
+	if len(items) == 0 {
+		return 0
+	}
+	m := items[0].ID
+	for _, item := range items[1:] {
+		if item.ID < m {
+			m = item.ID
+		}
+	}
+	return m
+}
+
+// fetchPr0grammNewPage fetches one page of the non-promoted ("new") feed.
+// It differs from fetchPr0grammPage in two ways:
+//   - promoted=1 is NOT added
+//   - olderID is used as the cursor (item ID, not promoted score)
+func fetchPr0grammNewPage(flags int, olderID int64) (*pr0grammResponse, error) {
+	params := url.Values{}
+	params.Set("flags", fmt.Sprintf("%d", flags))
+	params.Set("show_junk", "0")
+	if olderID > 0 {
+		params.Set("older", fmt.Sprintf("%d", olderID))
+	}
+
+	apiURL := pr0grammAPIBase + "?" + params.Encode()
+
+	for attempt := 0; attempt <= pr0grammMaxRetries; attempt++ {
+		req, err := http.NewRequest(http.MethodGet, apiURL, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; wallium-importer/1.0)")
+		req.Header.Set("Accept", "application/json")
+
+		resp, err := pr0grammClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("GET %s: %w", apiURL, err)
+		}
+
+		if resp.StatusCode == http.StatusTooManyRequests {
+			wait := rateLimitBackoff(resp, attempt)
+			_ = resp.Body.Close()
+			if attempt == pr0grammMaxRetries {
+				return nil, fmt.Errorf("pr0gramm API rate limit exceeded after %d retries", pr0grammMaxRetries)
+			}
+			time.Sleep(wait)
+			continue
+		}
+
+		if resp.StatusCode != http.StatusOK {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+			_ = resp.Body.Close()
+			return nil, fmt.Errorf("pr0gramm API returned HTTP %d: %s", resp.StatusCode, body)
+		}
+
+		var result pr0grammResponse
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			_ = resp.Body.Close()
+			return nil, fmt.Errorf("decode response: %w", err)
+		}
+		_ = resp.Body.Close()
+		return &result, nil
+	}
+	return nil, fmt.Errorf("pr0gramm API rate limit exceeded after %d retries", pr0grammMaxRetries)
+}
+
+// SSE event types for the LoadNewFromPr0gramm handler.
+
+type sseLoadNewProgress struct {
+	Phase        ssePhase `json:"phase"`
+	Page         int      `json:"page"`
+	Inserted     int      `json:"inserted_so_far"`
+	SkippedDedup int      `json:"skipped_dedup"`
+	FilteredExt  int      `json:"filtered_ext"`
+	TotalRead    int      `json:"total_read"`
+}
+
+type sseLoadNewDone struct {
+	Phase        ssePhase `json:"phase"`
+	Total        int      `json:"total"`
+	SkippedDedup int      `json:"skipped_dedup"`
+	FilteredExt  int      `json:"filtered_ext"`
+	PagesRead    int      `json:"pages_read"`
+	TotalRead    int      `json:"total_read"`
+}
+
+// LoadNewFromPr0gramm is an admin maintenance handler that bulk-loads posts
+// from the pr0gramm "new" feed (flags=9, non-promoted) until at least 500 new
+// dirty posts have been inserted into the database, then hands off to the
+// background process queue.  Progress is streamed as SSE.
+//
+// POST /api/admin/posts/load-new
+func (s *Server) LoadNewFromPr0gramm(c fiber.Ctx) error {
+	const targetDirty = 500
+	const newFlags = 9
+
+	ctx := context.Background()
+
+	c.Set("Content-Type", "text/event-stream")
+	c.Set("Cache-Control", "no-cache")
+	c.Set("Connection", "keep-alive")
+	c.Set("X-Accel-Buffering", "no")
+
+	c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
+		var (
+			page         int
+			totalRead    int
+			inserted     int
+			skippedDedup int
+			filteredExt  int
+			olderID      int64
+		)
+
+		for inserted < targetDirty {
+			page++
+			resp, err := fetchPr0grammNewPage(newFlags, olderID)
+			if err != nil {
+				s.log.ErrorContext(ctx, "load-new: page fetch failed",
+					slog.Int("page", page), slog.Any("err", err))
+				// Emit final done event with what we have so far and stop.
+				writeSSE(w, sseLoadNewDone{
+					Phase:        phDone,
+					Total:        inserted,
+					SkippedDedup: skippedDedup,
+					FilteredExt:  filteredExt,
+					PagesRead:    page - 1,
+					TotalRead:    totalRead,
+				})
+				return
+			}
+
+			if len(resp.Items) == 0 {
+				// Feed exhausted.
+				break
+			}
+
+			totalRead += len(resp.Items)
+			olderID = minItemID(resp.Items)
+
+			// Filter & dedup, insert dirty rows.
+			for _, item := range resp.Items {
+				if item.Image == "" {
+					filteredExt++
+					continue
+				}
+				ext := strings.ToLower(filepath.Ext(item.Image))
+				switch ext {
+				case ".jxl", ".avif", ".webp", ".jpg", ".gif":
+					// supported
+				default:
+					filteredExt++
+					continue
+				}
+
+				imageURL := pr0grammImgBase + item.Image
+
+				if s.store != nil {
+					exists, err := s.store.PostURLExists(ctx, imageURL)
+					if err == nil && exists {
+						skippedDedup++
+						continue
+					}
+					_, err = s.store.CreateDirtyPost(ctx, imageURL, "")
+					if err != nil {
+						s.log.WarnContext(ctx, "load-new: insert dirty post failed",
+							slog.String("url", imageURL), slog.Any("err", err))
+						continue
+					}
+					inserted++
+				}
+			}
+
+			writeSSE(w, sseLoadNewProgress{
+				Phase:        "progress",
+				Page:         page,
+				Inserted:     inserted,
+				SkippedDedup: skippedDedup,
+				FilteredExt:  filteredExt,
+				TotalRead:    totalRead,
+			})
+
+			if resp.AtEnd {
+				break
+			}
+
+			// Brief pause between pages to be a polite API consumer.
+			time.Sleep(pr0grammPageDelay)
+		}
+
+		// Notify background worker.
+		if inserted > 0 {
+			s.queue.Notify()
+		}
+
+		writeSSE(w, sseLoadNewDone{
+			Phase:        phDone,
+			Total:        inserted,
+			SkippedDedup: skippedDedup,
+			FilteredExt:  filteredExt,
+			PagesRead:    page,
+			TotalRead:    totalRead,
+		})
+	})
+	return nil
+}
