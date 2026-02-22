@@ -14,6 +14,12 @@ function fmtBytes(bytes) {
   return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
 }
 
+function fmtDuration(sec) {
+  if (sec < 60) return `${sec}s`;
+  if (sec < 3600) return `${Math.floor(sec / 60)}m ${sec % 60}s`;
+  return `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m`;
+}
+
 function StatCard({ label, value, sub }) {
   return (
     <div className="rounded-[var(--radius-sm)] border border-(--color-border) bg-(--color-surface) p-4">
@@ -33,9 +39,111 @@ function RoleBadge({ level }) {
         ? "bg-(--color-accent) text-(--color-accent-text)"
         : "bg-(--color-border) text-(--color-muted)";
   return (
-    <span className={`rounded-[var(--radius-sm)] px-2 py-0.5 text-xs font-semibold ${color}`}>
+    <span
+      className={`rounded-[var(--radius-sm)] px-2 py-0.5 text-xs font-semibold ${color}`}
+    >
       {name} ({level})
     </span>
+  );
+}
+
+// ── Process Queue card ────────────────────────────────────────────────────────
+// Connects to the admin SSE stream and shows a live view of the processing queue.
+// Always active — no button required.
+
+function ProcessQueueCard() {
+  const [snap, setSnap] = useState(null);
+  const esRef = useRef(null);
+
+  useEffect(() => {
+    let retryTimer = null;
+
+    function connect() {
+      const es = new EventSource("/api/admin/queue/stream", {
+        withCredentials: true,
+      });
+      esRef.current = es;
+
+      es.addEventListener("message", (e) => {
+        try {
+          setSnap(JSON.parse(e.data));
+        } catch (_) {}
+      });
+
+      es.addEventListener("error", () => {
+        es.close();
+        retryTimer = setTimeout(connect, 5000);
+      });
+    }
+
+    connect();
+    return () => {
+      esRef.current?.close();
+      clearTimeout(retryTimer);
+    };
+  }, []);
+
+  const total = snap?.total ?? 0;
+  const processed = snap?.processed ?? 0;
+  const pending = snap?.pending ?? 0;
+  const active = snap?.active ?? 0;
+  const pct =
+    total > 0 ? Math.round((processed / total) * 100) : snap?.running ? 0 : 100;
+
+  return (
+    <div className="rounded-[var(--radius-sm)] border border-(--color-border) bg-(--color-surface) p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <p className="text-sm font-semibold text-(--color-text)">
+          Process Queue
+        </p>
+        <span
+          className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+            snap?.running
+              ? "bg-(--color-accent)/20 text-(--color-accent)"
+              : "bg-(--color-border) text-(--color-muted)"
+          }`}
+        >
+          {snap == null ? "connecting…" : snap.running ? "● active" : "○ idle"}
+        </span>
+      </div>
+
+      {snap != null && (snap.running || total > 0) ? (
+        <div className="space-y-2">
+          <ProgressBar
+            value={pct}
+            status={snap.running ? "active" : "success"}
+          />
+
+          <div className="flex justify-between text-xs text-(--color-muted)">
+            <span>
+              {processed} / {total} processed
+            </span>
+            <span>{pending + active} remaining</span>
+          </div>
+
+          <div className="flex flex-wrap gap-3 text-xs">
+            <span className="text-(--color-accent)">
+              ✓ {snap.imported ?? 0} imported
+            </span>
+            <span className="text-(--color-danger)">
+              ✗ {snap.failed ?? 0} failed
+            </span>
+            {snap.running && snap.rate_per_sec > 0 && (
+              <span className="text-(--color-muted)">
+                {snap.rate_per_sec.toFixed(1)}/s
+              </span>
+            )}
+            {snap.running && snap.eta_sec >= 0 && (
+              <span className="text-(--color-muted)">
+                ~{fmtDuration(snap.eta_sec)} left
+              </span>
+            )}
+          </div>
+        </div>
+      ) : snap != null ? (
+        <p className="text-xs text-(--color-muted)">Queue is empty.</p>
+      ) : null}
+    </div>
   );
 }
 
@@ -70,6 +178,9 @@ function StatsSection() {
           sub="dirty posts"
         />
       </div>
+
+      {/* Live process queue */}
+      <ProcessQueueCard />
 
       {/* Disk usage */}
       <div className="rounded-[var(--radius-sm)] border border-(--color-border) bg-(--color-surface) p-4">
@@ -583,6 +694,48 @@ function JobCard({ job }) {
 // the array. If the task can stream progress via SSE, call onProgress inside
 // run(); if it's a single request, simply ignore onProgress.
 const MAINTENANCE_JOBS = [
+  {
+    id: "load-new-pr0gramm",
+    label: "Load 500 new posts from New",
+    description:
+      'Fetches the pr0gramm "New" feed (flags=1) page by page and inserts ' +
+      "posts as dirty rows for the background queue to process. Stops once " +
+      "500 new posts have been queued (or the feed is exhausted). " +
+      "Duplicate URLs are skipped automatically.",
+    run: async (onProgress) => {
+      return ssePost("/admin/posts/load-new", {}, (event) => {
+        if (event.phase === "progress") {
+          onProgress({
+            current: event.inserted_so_far,
+            total: 500,
+            message: `page ${event.page} · ${event.skipped_dedup} skipped · ${event.total_read} read`,
+          });
+        }
+      });
+    },
+    formatResult: (r) => (
+      <span>
+        Queued <strong>{r.total}</strong> new post{r.total !== 1 ? "s" : ""}{" "}
+        across <strong>{r.pages_read}</strong> page
+        {r.pages_read !== 1 ? "s" : ""} ({r.total_read} items read).
+        {r.skipped_dedup > 0 && (
+          <span className="text-(--color-muted)">
+            {" "}
+            {r.skipped_dedup} already exist.
+          </span>
+        )}
+        {r.filtered_ext > 0 && (
+          <span className="text-(--color-muted)">
+            {" "}
+            {r.filtered_ext} unsupported format.
+          </span>
+        )}
+        {r.total >= 500 && (
+          <span className="text-(--color-success)"> Target reached ✓</span>
+        )}
+      </span>
+    ),
+  },
   {
     id: "backfill-dimensions",
     label: "Backfill post dimensions",

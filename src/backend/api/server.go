@@ -38,6 +38,7 @@ type Server struct {
 	sessions *session.Store
 	log      *slog.Logger
 	dirs     utils.Directories
+	queue    *ProcessQueue
 }
 
 // NewServer wires up the Fiber v3 application.
@@ -107,6 +108,7 @@ func NewServer(store *db.Store, rdb *redis.Client, sessionSecret string, log *sl
 		log:      log,
 		dirs:     dirs,
 	}
+	srv.queue = newProcessQueue(srv, log)
 
 	// ── Global middleware ─────────────────────────────────────────────────────
 	// requestIDMiddleware first — all subsequent middleware/handlers can read it.
@@ -147,6 +149,9 @@ func NewServer(store *db.Store, rdb *redis.Client, sessionSecret string, log *sl
 	post.Get("/position/:post_id", srv.GetPostPosition)
 	post.Get("/around/:post_id", srv.GetPostsAround)
 	post.Get("/cursor", srv.GetPostsCursor)
+	// Queue status — must be before /:post_id to avoid param capture
+	post.Get("/my-queue", srv.requireAuth, srv.GetMyQueueStatus)
+	post.Get("/queue/:post_id", srv.requireAuth, srv.GetPostQueueStatus)
 	post.Get("/:post_id", srv.GetPost)
 	post.Get("/*", srv.GetPosts)
 	post.Post("/vote", srv.requireAuth, srv.VotePost)
@@ -179,6 +184,7 @@ func NewServer(store *db.Store, rdb *redis.Client, sessionSecret string, log *sl
 	// ── Admin routes (all require level >= LevelAdmin) ────────────────────────
 	admin := api.Group("/admin", srv.requireAdmin)
 	admin.Get("/stats", srv.GetAdminStats)
+	admin.Get("/queue/stream", srv.AdminQueueStream)
 	admin.Get("/users", srv.ListUsers)
 	admin.Get("/comments", srv.AdminListComments)
 	admin.Patch("/users/:id/level", srv.AdminUpdateUserLevel)
@@ -188,6 +194,7 @@ func NewServer(store *db.Store, rdb *redis.Client, sessionSecret string, log *sl
 	admin.Delete("/tags/:id", srv.AdminDeleteTag)
 	admin.Post("/posts/backfill-dimensions", srv.BackfillPostDimensions)
 	admin.Post("/posts/regenerate-images", srv.RegenerateImages)
+	admin.Post("/posts/load-new", srv.LoadNewFromPr0gramm)
 	admin.Post("/message/broadcast", srv.BroadcastMessage)
 
 	// Static — SPA fallback (frontend served separately in dev via Vite proxy)
@@ -197,6 +204,12 @@ func NewServer(store *db.Store, rdb *redis.Client, sessionSecret string, log *sl
 }
 
 // ── Session helpers ───────────────────────────────────────────────────────────
+
+// Start launches background workers (queue processor).  Call once after
+// NewServer, passing a context that is cancelled during graceful shutdown.
+func (s *Server) Start(ctx context.Context) {
+	go s.queue.Run(ctx)
+}
 
 func (s *Server) sessionGet(c fiber.Ctx) (*session.Session, error) {
 	return s.sessions.Get(c)
