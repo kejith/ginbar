@@ -153,7 +153,7 @@ export default function Nav() {
                 <path d="m22 7-10 7L2 7" />
               </svg>
               {unread > 0 && (
-                <span className="absolute -top-1.5 -right-1.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-(--color-accent) px-0.5 text-[9px] font-bold leading-none text-white">
+                <span className="absolute -top-1.5 -right-1.5 flex h-4 min-w-4 items-center justify-center rounded-full bg-(--color-accent) px-0.5 text-[9px] font-bold leading-none text-white">
                   {unread > 99 ? "99+" : unread}
                 </span>
               )}
