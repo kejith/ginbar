@@ -1,0 +1,10 @@
+# Test artifacts — any image/video files produced by processAndInsertPostCtx
+# when tests run without a full directory setup should never be committed.
+*.avif
+*.webp
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.mp4
+*.webm

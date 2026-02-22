@@ -23,6 +23,31 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
+// newTestDirs creates a throwaway Directories tree under t.TempDir() so that
+// any files produced by processAndInsertPostCtx (avif images, thumbnails, etc.)
+// are always written inside the OS-managed temporary directory and are never
+// left behind in the source tree.
+func newTestDirs(tb testing.TB) utils.Directories {
+	tb.Helper()
+	root := tb.TempDir()
+	dirs := utils.Directories{
+		Image:     filepath.Join(root, "images"),
+		Thumbnail: filepath.Join(root, "thumbnails"),
+		Video:     filepath.Join(root, "videos"),
+		Tmp:       filepath.Join(root, "tmp"),
+		Upload:    filepath.Join(root, "upload"),
+	}
+	for _, d := range []string{
+		dirs.Image, dirs.Thumbnail, dirs.Video,
+		dirs.Tmp, filepath.Join(dirs.Tmp, "thumbnails"), dirs.Upload,
+	} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			tb.Fatalf("newTestDirs: mkdir %s: %v", d, err)
+		}
+	}
+	return dirs
+}
+
 // ── mock DB helpers ───────────────────────────────────────────────────────────
 
 // fakeBoolRow implements pgx.Row, scanning a single pre-set bool value.
@@ -784,7 +809,9 @@ func TestImportWorkerPool_ConcurrencyLimit(t *testing.T) {
 	// Process using a minimal Server (no DB – all items will fail at
 	// processAndInsertPostCtx since store is nil, but the concurrency counter
 	// fires at the HTTP layer before that).
-	s := &Server{dirs: utils.Directories{Tmp: t.TempDir()}}
+	// newTestDirs ensures any produced files (avif, thumbnails) go into the OS
+	// temp directory rather than the package source tree.
+	s := &Server{dirs: newTestDirs(t)}
 
 	start := time.Now()
 	type itemResult struct {
@@ -897,7 +924,7 @@ func BenchmarkImport_ConcurrentVsSequential(b *testing.B) {
 		items[i] = pr0grammItem{ID: int64(i + 1), Promoted: int64(nItems - i), Image: fmt.Sprintf("bench%d.jpg", i)}
 	}
 
-	s := &Server{dirs: utils.Directories{Tmp: b.TempDir()}}
+	s := &Server{dirs: newTestDirs(b)}
 	ctx := context.Background()
 
 	b.Run("sequential", func(b *testing.B) {
