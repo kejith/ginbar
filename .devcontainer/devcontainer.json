@@ -96,6 +96,10 @@
           }
         ],
 
+        // ── Git ─────────────────────────────────────────────────────────────
+        "git.autorefresh": true,
+        "git.autofetch": true,
+
         // ── Editor ───────────────────────────────────────────────────────────
         "editor.formatOnSave": true,
         "editor.rulers": [100],
