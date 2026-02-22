@@ -18,6 +18,18 @@ const usePostStore = create((set, get) => ({
   listLoading: false,
   listError: null,
 
+  // ── home-reset signal ────────────────────────────────────────────────────
+  // Incremented by resetHome(); Home.jsx watches it to close any open post
+  // and reload the feed from the top, even when already on "/".
+  resetKey: 0,
+
+  /** Navigate-to-home helper: refresh the feed and signal Home to close posts. */
+  resetHome: () => {
+    set((s) => ({ resetKey: s.resetKey + 1 }));
+    // Re-use fetchPosts so filters are respected and the list is replaced.
+    usePostStore.getState().fetchPosts({ page: 1, reset: true });
+  },
+
   // ── filter state ─────────────────────────────────────────────────────────
   // Toggleable extra filters. SFW is always included automatically.
   // Possible values: 'nsfp' | 'nsfw' | 'secret'

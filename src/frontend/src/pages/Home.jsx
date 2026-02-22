@@ -17,8 +17,23 @@ export default function Home() {
 
   const [expandedId, setExpandedId] = useState(initialExpanded);
 
-  const { listError, fetchPosts, fetchAroundPost, search, activeFilters } =
-    usePostStore();
+  const {
+    listError,
+    fetchPosts,
+    fetchAroundPost,
+    search,
+    activeFilters,
+    resetKey,
+  } = usePostStore();
+
+  // When the logo is clicked, resetKey increments → close any open post and
+  // clear the URL back to "/" (the feed refetch is triggered by resetHome itself).
+  useEffect(() => {
+    if (resetKey === 0) return; // skip the initial mount
+    setExpandedId(null);
+    window.history.replaceState(null, "", "/");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resetKey]);
 
   // Initial data load
   useEffect(() => {

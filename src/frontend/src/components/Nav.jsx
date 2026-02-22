@@ -7,6 +7,7 @@ import {
 } from "react-router-dom";
 import useAuthStore from "../stores/authStore.js";
 import useMessageStore from "../stores/messageStore.js";
+import usePostStore from "../stores/postStore.js";
 import UploadModal from "./UploadModal.jsx";
 import ThemeSwitcher from "./ThemeSwitcher.jsx";
 import FilterSelector from "./FilterSelector.jsx";
@@ -17,6 +18,7 @@ export default function Nav() {
   const logout = useAuthStore((s) => s.logout);
   const unread = useMessageStore((s) => s.unread);
   const fetchUnread = useMessageStore((s) => s.fetchUnread);
+  const resetHome = usePostStore((s) => s.resetHome);
   const inputRef = useRef(null);
   const navigate = useNavigate();
   const [showUpload, setShowUpload] = useState(false);
@@ -165,16 +167,23 @@ export default function Nav() {
   return (
     <nav className="sticky top-0 z-50 flex h-12 items-center gap-3 border-b border-(--color-border) bg-(--color-surface)/90 px-3 backdrop-blur-sm">
       {/* Logo */}
-      <Link
-        to="/"
-        className="shrink-0 text-lg text-(--color-accent)"
+      <button
+        onClick={() => {
+          if (inputRef.current) inputRef.current.value = "";
+          navigate("/");
+          resetHome();
+        }}
+        className="shrink-0 text-lg text-(--color-accent) cursor-pointer"
         style={{
           fontWeight: "var(--brand-weight)",
           letterSpacing: "var(--brand-tracking)",
+          background: "none",
+          border: "none",
+          padding: 0,
         }}
       >
         Wallium
-      </Link>
+      </button>
 
       {/* Search */}
       <form onSubmit={handleSearch} className="flex min-w-0 flex-1 gap-2">

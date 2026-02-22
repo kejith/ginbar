@@ -51,7 +51,14 @@ export default function PostGrid({
     newerLoading,
     loadOlderPosts,
     loadNewerPosts,
+    resetKey,
   } = usePostStore();
+
+  // Scroll back to the top whenever the home-reset signal fires.
+  useEffect(() => {
+    if (resetKey === 0) return;
+    if (parentRef.current) parentRef.current.scrollTop = 0;
+  }, [resetKey]);
 
   const cols = useColumns();
   const parentRef = useRef(null);
