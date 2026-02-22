@@ -633,7 +633,7 @@ export default function InlinePost({
                     <button
                       disabled={deletingPost}
                       onClick={handleDeletePost}
-                      className="ml-auto rounded-[var(--radius-sm)] bg-(--color-danger) px-2 py-0.5 text-xs text-white disabled:opacity-50"
+                      className="ml-auto rounded-sm bg-(--color-danger) px-2 py-0.5 text-xs text-white disabled:opacity-50"
                     >
                       {deletingPost ? "deleting…" : "delete post"}
                     </button>
@@ -693,13 +693,13 @@ export default function InlinePost({
                       >
                         {/* Chip input container */}
                         <div
-                          className="relative flex flex-wrap items-center gap-1 rounded-[var(--radius-sm)] border border-(--color-border) bg-(--color-bg) px-1.5 py-0.5 min-w-32 max-w-64 cursor-text focus-within:border-(--color-accent)"
+                          className="relative flex flex-wrap items-center gap-1 rounded-sm border border-(--color-border) bg-(--color-bg) px-1.5 py-0.5 min-w-32 max-w-64 cursor-text focus-within:border-(--color-accent)"
                           onClick={() => tagInputRef.current?.focus()}
                         >
                           {pendingTags.map((name, i) => (
                             <span
                               key={i}
-                              className="inline-flex items-center gap-1 rounded-[var(--radius-badge)] border border-(--color-border) bg-(--color-surface) px-2 py-0.5 text-xs text-(--color-text) shrink-0"
+                              className="inline-flex items-center gap-1 rounded-(--radius-badge) border border-(--color-border) bg-(--color-surface) px-2 py-0.5 text-xs text-(--color-text) shrink-0"
                             >
                               {name}
                               <button
@@ -729,7 +729,7 @@ export default function InlinePost({
                             className="min-w-10 flex-1 bg-transparent text-xs text-(--color-text) outline-none"
                           />
                           {showSuggestions && (
-                            <ul className="absolute left-0 top-full z-50 mt-0.5 w-48 rounded-[var(--radius-sm)] border border-(--color-border) bg-(--color-surface) py-0.5 shadow-lg">
+                            <ul className="absolute left-0 top-full z-50 mt-0.5 w-48 rounded-sm border border-(--color-border) bg-(--color-surface) py-0.5 shadow-lg">
                               {suggestions.map((name) => (
                                 <li key={name}>
                                   <button

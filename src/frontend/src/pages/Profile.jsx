@@ -95,7 +95,7 @@ export default function Profile() {
             {name}
           </h1>
           {profileLevel != null && (
-            <span className="rounded-[var(--radius-sm)] border border-(--color-accent)/30 bg-(--color-accent)/10 px-2 py-0.5 text-xs font-semibold uppercase tracking-widest text-(--color-accent)">
+            <span className="rounded-sm border border-(--color-accent)/30 bg-(--color-accent)/10 px-2 py-0.5 text-xs font-semibold uppercase tracking-widest text-(--color-accent)">
               {levelLabel(profileLevel)}
             </span>
           )}
@@ -216,7 +216,7 @@ export default function Profile() {
         </SectionHeader>
 
         {listError && (
-          <p className="mb-4 rounded-[var(--radius-sm)] border border-(--color-danger)/50 bg-(--color-danger)/10 px-4 py-3 text-sm text-(--color-danger)">
+          <p className="mb-4 rounded-sm border border-(--color-danger)/50 bg-(--color-danger)/10 px-4 py-3 text-sm text-(--color-danger)">
             {listError}
           </p>
         )}

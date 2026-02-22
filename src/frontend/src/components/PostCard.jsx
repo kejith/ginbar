@@ -54,7 +54,7 @@ export default function PostCard({ post, onExpand, isExpanded }) {
 
   return (
     <article
-      className={`group relative overflow-hidden rounded-[var(--radius-card)] border bg-(--color-surface) transition-colors ${
+      className={`group relative overflow-hidden rounded-(--radius-card) border bg-(--color-surface) transition-colors ${
         isExpanded ? "border-(--color-accent)" : "border-(--color-border)"
       }`}
     >
@@ -75,7 +75,7 @@ export default function PostCard({ post, onExpand, isExpanded }) {
                 decoding="async"
                 className="h-full w-full object-cover"
               />
-              <span className="pointer-events-none absolute bottom-1 right-1 rounded-[var(--radius-sm)] bg-black/70 px-1 text-[10px] text-white">
+              <span className="pointer-events-none absolute bottom-1 right-1 rounded-sm bg-black/70 px-1 text-[10px] text-white">
                 ▶
               </span>
             </div>
@@ -100,7 +100,7 @@ export default function PostCard({ post, onExpand, isExpanded }) {
         <button
           onClick={handleDelete}
           disabled={deleting}
-          className="absolute top-1 right-1 z-10 rounded-[var(--radius-sm)] bg-(--color-danger)/80 px-1.5 py-0.5 text-[10px] text-white opacity-0 transition-opacity group-hover:opacity-100 hover:bg-(--color-danger) disabled:cursor-wait"
+          className="absolute top-1 right-1 z-10 rounded-sm bg-(--color-danger)/80 px-1.5 py-0.5 text-[10px] text-white opacity-0 transition-opacity group-hover:opacity-100 hover:bg-(--color-danger) disabled:cursor-wait"
           aria-label="Delete post"
         >
           {deleting ? "…" : "×"}

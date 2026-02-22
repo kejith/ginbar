@@ -181,11 +181,11 @@ export default function Nav() {
           ref={inputRef}
           type="search"
           placeholder="tags… or user:name…"
-          className="h-8 w-full min-w-0 rounded-[var(--radius-sm)] bg-(--color-bg) px-3 text-sm text-(--color-text) placeholder:text-(--color-muted) outline-none ring-1 ring-(--color-border) focus:ring-(--color-accent)"
+          className="h-8 w-full min-w-0 rounded-sm bg-(--color-bg) px-3 text-sm text-(--color-text) placeholder:text-(--color-muted) outline-none ring-1 ring-(--color-border) focus:ring-(--color-accent)"
         />
         <button
           type="submit"
-          className="shrink-0 rounded-[var(--radius-sm)] bg-(--color-accent) px-3 text-sm font-medium text-(--color-accent-text)"
+          className="shrink-0 rounded-sm bg-(--color-accent) px-3 text-sm font-medium text-(--color-accent-text)"
         >
           go
         </button>
@@ -200,7 +200,7 @@ export default function Nav() {
           <div className="flex items-center gap-3">
             <button
               onClick={() => setShowUpload(true)}
-              className="rounded-[var(--radius-sm)] bg-(--color-accent) px-2.5 py-1 text-xs font-semibold text-(--color-accent-text)"
+              className="rounded-sm bg-(--color-accent) px-2.5 py-1 text-xs font-semibold text-(--color-accent-text)"
               title="Upload post"
             >
               + post
@@ -208,7 +208,7 @@ export default function Nav() {
             {isAdmin(user) && (
               <Link
                 to="/admin"
-                className="rounded-[var(--radius-sm)] bg-(--color-admin) px-2.5 py-1 text-xs font-semibold text-white"
+                className="rounded-sm bg-(--color-admin) px-2.5 py-1 text-xs font-semibold text-white"
                 title="Admin panel"
               >
                 admin
@@ -264,7 +264,7 @@ export default function Nav() {
 
       {/* Drag-over overlay */}
       {dragging && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center bg-black/50 backdrop-blur-sm pointer-events-none">
+        <div className="fixed inset-0 z-200 flex items-center justify-center bg-black/50 backdrop-blur-sm pointer-events-none">
           <div className="rounded-2xl border-2 border-dashed border-(--color-accent) px-12 py-10 text-center text-(--color-accent)">
             <div className="text-4xl mb-2">📎</div>
             <div className="text-lg font-semibold">Drop to upload</div>
