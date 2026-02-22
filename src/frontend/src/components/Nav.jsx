@@ -20,6 +20,7 @@ export default function Nav() {
   const navigate = useNavigate();
   const [showUpload, setShowUpload] = useState(false);
   const [preloadFile, setPreloadFile] = useState(null);
+  const [preloadUrl, setPreloadUrl] = useState("");
   const [dragging, setDragging] = useState(false);
   const [searchParams] = useSearchParams();
   const location = useLocation();
@@ -70,18 +71,38 @@ export default function Nav() {
   useEffect(() => {
     if (!user) return;
 
+    // URL pointing to an image or video file
+    const MEDIA_URL_RE =
+      /^https?:\/\/.+\.(?:jpe?g|png|gif|webp|avif|bmp|tiff?|svg|mp4|webm|mov|avi|mkv)(\?.*)?$/i;
+
     function onPaste(e) {
       // ignore when typing in an input/textarea
       const tag = document.activeElement?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
+
       const items = [...(e.clipboardData?.items ?? [])];
+
+      // 1. Raw image data (screenshot, copy-image, etc.)
       const imageItem = items.find((i) => i.type.startsWith("image/"));
-      if (!imageItem) return;
-      const f = imageItem.getAsFile();
-      if (!f) return;
-      e.preventDefault();
-      setPreloadFile(f);
-      setShowUpload(true);
+      if (imageItem) {
+        const f = imageItem.getAsFile();
+        if (f) {
+          e.preventDefault();
+          setPreloadFile(f);
+          setPreloadUrl("");
+          setShowUpload(true);
+          return;
+        }
+      }
+
+      // 2. Plain-text URL that points to an image or video
+      const text = e.clipboardData?.getData("text")?.trim() ?? "";
+      if (MEDIA_URL_RE.test(text)) {
+        e.preventDefault();
+        setPreloadUrl(text);
+        setPreloadFile(null);
+        setShowUpload(true);
+      }
     }
 
     document.addEventListener("paste", onPaste);
@@ -254,9 +275,11 @@ export default function Nav() {
       {showUpload && (
         <UploadModal
           initialFile={preloadFile}
+          initialUrl={preloadUrl}
           onClose={() => {
             setShowUpload(false);
             setPreloadFile(null);
+            setPreloadUrl("");
           }}
         />
       )}

@@ -24,12 +24,17 @@ const FLAGS_OPTIONS = [
  * Props:
  *   onClose()      — called when the modal should be dismissed
  *   initialFile    — File object to pre-fill in the "File upload" tab
+ *   initialUrl     — URL string to pre-fill in the "From URL" tab
  */
-export default function UploadModal({ onClose, initialFile = null }) {
+export default function UploadModal({
+  onClose,
+  initialFile = null,
+  initialUrl = "",
+}) {
   const [tab, setTab] = useState(initialFile ? "file" : "url");
 
   // url / file state
-  const [url, setUrl] = useState("");
+  const [url, setUrl] = useState(initialUrl);
   const [file, setFile] = useState(initialFile);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
