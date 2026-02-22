@@ -51,11 +51,17 @@ services:
       REDIS_URL: redis://redis:6379
       PORT: 3000
       SESSION_SECRET: ${SESSION_SECRET:?required}
+      LOG_FORMAT: json
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FILE: /app/logs/app.log
     volumes:
       # Bind-mount host media directory so the host nginx can serve files
       # directly without going through Docker.  MEDIA_DIR must be set in .env
       # (the install script writes it automatically).
       - ${MEDIA_DIR:-/opt/wallium/media}:/app/public
+      # Bind-mount log directory so the host can run logrotate on it.
+      # LOG_DIR defaults to /opt/wallium/logs; set in .env on the server.
+      - ${LOG_DIR:-/opt/wallium/logs}:/app/logs
     ports:
       # Expose the API only on loopback so the host nginx can reach it.
       # Nothing else should talk to the backend directly.

@@ -26,10 +26,11 @@ INSTALL_DIR="${WALLIUM_DIR:-${GINBAR_DIR:-$_DEFAULT_DIR}}"
 [[ -d "$INSTALL_DIR" ]] || error "Install directory not found: $INSTALL_DIR (set \$WALLIUM_DIR to override)"
 cd "$INSTALL_DIR"
 
-# Source .env so MEDIA_DIR and FRONTEND_DIR are available
+# Source .env so MEDIA_DIR, FRONTEND_DIR, and LOG_DIR are available
 [[ -f "$INSTALL_DIR/.env" ]] && { set -a; source "$INSTALL_DIR/.env"; set +a; }
 MEDIA_DIR="${MEDIA_DIR:-${INSTALL_DIR}/media}"
 FRONTEND_DIR="${FRONTEND_DIR:-${INSTALL_DIR}/frontend}"
+LOG_DIR="${LOG_DIR:-${INSTALL_DIR}/logs}"
 
 echo -e "\n${BOLD}${CYAN}══ wallium update ══${RESET}\n"
 
@@ -156,6 +157,19 @@ success "Frontend assets updated at $FRONTEND_DIR"
 # ── 3. Run any new migrations ────────────────────────────────────────────────
 info "Running database migrations…"
 docker compose run --rm migrate
+
+# ── 3b. Ensure log directory exists and logrotate config is current ──────────
+info "Ensuring log directory exists at ${LOG_DIR}…"
+mkdir -p "$LOG_DIR"
+chmod 755 "$LOG_DIR"
+
+LOGROTATE_SRC="${INSTALL_DIR}/scripts/wallium.logrotate"
+LOGROTATE_DEST="/etc/logrotate.d/wallium"
+if [[ -f "$LOGROTATE_SRC" ]]; then
+  sed "s|/opt/wallium/logs|${LOG_DIR}|g" "$LOGROTATE_SRC" > "$LOGROTATE_DEST"
+  chmod 644 "$LOGROTATE_DEST"
+  success "logrotate config updated at $LOGROTATE_DEST"
+fi
 
 # ── 4. Always overwrite the systemd service file and reload ──────────────────
 SERVICE_DEST="/etc/systemd/system/wallium.service"

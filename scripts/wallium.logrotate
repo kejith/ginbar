@@ -1,0 +1,24 @@
+# /etc/logrotate.d/wallium
+#
+# Rotates the wallium backend application log.
+#
+# NOTE: copytruncate is required because the Go process inside the Docker
+# container holds the log file open by inode.  Sending SIGHUP into the
+# container to reopen the file is not reliable across container restarts, so
+# we truncate-in-place after copying instead.  This means a tiny race window
+# where a few lines written between the copy and the truncate are duplicated
+# in the rotated file — acceptable for an application log.
+#
+# The actual path on disk is the host bind-mount of the container's /app/logs.
+# Override with LOG_DIR in /opt/wallium/.env if you changed the default.
+
+/opt/wallium/logs/app.log {
+    daily
+    rotate 14
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+    create 0640 root root
+}

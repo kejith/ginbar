@@ -62,11 +62,13 @@ COPY --from=backend-builder /go/bin/goose ./goose
 COPY --from=backend-builder /app/db/migrations ./db/migrations
 
 # Media dirs — overridden at runtime by the shared volume mount
+# ./logs is bind-mounted from the host so logrotate can manage it.
 RUN mkdir -p \
     ./public/images/thumbnails \
     ./public/videos \
     ./public/upload \
-    ./tmp/thumbnails
+    ./tmp/thumbnails \
+    ./logs
 
 EXPOSE 3000
 CMD ["./wallium"]

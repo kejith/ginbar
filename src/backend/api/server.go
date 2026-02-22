@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"time"
 
@@ -15,7 +16,6 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/gofiber/fiber/v3/middleware/cors"
-	"github.com/gofiber/fiber/v3/middleware/recover"
 	"github.com/gofiber/fiber/v3/middleware/session"
 	"github.com/gofiber/fiber/v3/middleware/static"
 	redisstore "github.com/gofiber/storage/redis/v2"
@@ -50,6 +50,22 @@ func NewServer(store *db.Store, rdb *redis.Client, sessionSecret string, log *sl
 			if errors.As(err, &fiberErr) {
 				code = fiberErr.Code
 			}
+
+			reqID, _ := c.Locals("request_id").(string)
+			attrs := []any{
+				"request_id", reqID,
+				"method", c.Method(),
+				"path", c.Path(),
+				"status", code,
+				"err", err.Error(),
+				"body", maskBody(c.Body()),
+			}
+			if code >= 500 {
+				log.Error("request error", attrs...)
+			} else {
+				log.Warn("request error", attrs...)
+			}
+
 			return c.Status(code).JSON(fiber.Map{"error": err.Error()})
 		},
 	})
@@ -93,8 +109,11 @@ func NewServer(store *db.Store, rdb *redis.Client, sessionSecret string, log *sl
 	}
 
 	// ── Global middleware ─────────────────────────────────────────────────────
-	app.Use(recover.New())
-	app.Use(slogMiddleware(log))
+	// requestIDMiddleware first — all subsequent middleware/handlers can read it.
+	app.Use(requestIDMiddleware())
+	// Panic recovery wired through slog so panics appear in the structured log.
+	app.Use(panicRecoveryMiddleware(log))
+	app.Use(srv.slogMiddleware())
 	app.Use(cors.New(cors.Config{
 		AllowOrigins:     []string{"http://localhost:5173", "http://localhost:3000"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Accept"},
@@ -192,21 +211,65 @@ func (s *Server) sessionUser(c fiber.Ctx) (*SessionUser, error) {
 	return &u, nil
 }
 
-// ── slog request logger middleware ───────────────────────────────────────────
+// ── Middleware ────────────────────────────────────────────────────────────────
 
-func slogMiddleware(log *slog.Logger) fiber.Handler {
+// requestIDMiddleware generates a unique correlation ID for every request,
+// stores it in c.Locals("request_id"), and echoes it in the response header.
+func requestIDMiddleware() fiber.Handler {
+	return func(c fiber.Ctx) error {
+		id := newRequestID()
+		c.Locals("request_id", id)
+		c.Set("X-Request-ID", id)
+		return c.Next()
+	}
+}
+
+// panicRecoveryMiddleware catches any panic from downstream handlers, logs it
+// with a full stack trace via slog, and returns a 500 response.
+func panicRecoveryMiddleware(log *slog.Logger) fiber.Handler {
+	return func(c fiber.Ctx) (err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				reqID, _ := c.Locals("request_id").(string)
+				log.Error("panic recovered",
+					"request_id", reqID,
+					"method", c.Method(),
+					"path", c.Path(),
+					"panic", r,
+					"stack", string(debug.Stack()),
+				)
+				err = fiber.ErrInternalServerError
+			}
+		}()
+		return c.Next()
+	}
+}
+
+// slogMiddleware logs every completed request at INFO level with the
+// correlation ID, method, path, status, latency, IP, and (if authenticated)
+// user identity.
+func (s *Server) slogMiddleware() fiber.Handler {
 	return func(c fiber.Ctx) error {
 		start := time.Now()
 		err := c.Next()
-		log.InfoContext(
-			context.Background(),
-			"request",
+
+		reqID, _ := c.Locals("request_id").(string)
+
+		attrs := []any{
+			"request_id", reqID,
 			"method", c.Method(),
 			"path", c.Path(),
 			"status", c.Response().StatusCode(),
 			"latency", time.Since(start).String(),
 			"ip", c.IP(),
-		)
+		}
+
+		// Attach user identity when a session is present — best-effort, no error.
+		if u, _ := s.sessionUser(c); u != nil {
+			attrs = append(attrs, "user_id", u.ID, "username", u.Name)
+		}
+
+		s.log.InfoContext(context.Background(), "request", attrs...)
 		return err
 	}
 }

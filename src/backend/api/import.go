@@ -173,6 +173,10 @@ maxPages = 50
 tags := strings.TrimSpace(form.Tags)
 userName := u.Name
 
+// Bind the correlation ID to every log line this import produces.
+reqID, _ := c.Locals("request_id").(string)
+log := s.log.With("request_id", reqID)
+
 // SSE headers must be set before SendStreamWriter.
 c.Set("Content-Type", "text/event-stream")
 c.Set("Cache-Control", "no-cache")
@@ -182,7 +186,7 @@ c.Set("X-Accel-Buffering", "no")
 c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
 ctx := context.Background()
 
-s.log.InfoContext(ctx, "pr0gramm import started",
+log.InfoContext(ctx, "pr0gramm import started",
 slog.String("tags", tags),
 slog.Int("flags", flags),
 slog.Int("max_pages", maxPages),
@@ -196,7 +200,7 @@ older := int64(0)
 for page := 1; page <= maxPages; page++ {
 resp, fetchErr := fetchPr0grammPage(tags, flags, older)
 if fetchErr != nil {
-s.log.ErrorContext(ctx, "pr0gramm page fetch failed",
+log.ErrorContext(ctx, "pr0gramm page fetch failed",
 slog.Int("page", page), slog.Any("err", fetchErr))
 writeSSE(w, sseErrorEvent{
 Phase:   phError,
@@ -217,7 +221,7 @@ TotalRead: len(allItems),
 AtEnd:     atEnd,
 })
 
-s.log.InfoContext(ctx, "pr0gramm page fetched",
+log.InfoContext(ctx, "pr0gramm page fetched",
 slog.Int("page", page),
 slog.Int("items_this_page", len(resp.Items)),
 slog.Int("total_so_far", len(allItems)),
@@ -226,7 +230,7 @@ slog.Bool("at_end", atEnd),
 )
 
 if atEnd {
-s.log.InfoContext(ctx, "pr0gramm fetch stopped",
+log.InfoContext(ctx, "pr0gramm fetch stopped",
 slog.Int("page", page),
 slog.String("reason", func() string {
 if resp.AtEnd {
@@ -275,7 +279,7 @@ var toProcess []candidate
 if s.store != nil {
 existing, dedupErr := s.store.FilterExistingURLs(ctx, allURLs)
 if dedupErr != nil {
-s.log.WarnContext(ctx, "batch URL dedup failed, proceeding without dedup",
+log.WarnContext(ctx, "batch URL dedup failed, proceeding without dedup",
 slog.Any("err", dedupErr))
 toProcess = candidates
 } else {
@@ -305,7 +309,7 @@ break
 }
 post, insertErr := s.store.CreateDirtyPost(ctx, cand.imageURL, userName)
 if insertErr != nil {
-s.log.WarnContext(ctx, "failed to insert dirty post",
+log.WarnContext(ctx, "failed to insert dirty post",
 slog.String("url", cand.imageURL),
 slog.Any("err", insertErr))
 skippedDedup++
@@ -325,7 +329,7 @@ Total:        total,
 SkippedDedup: skippedDedup,
 })
 
-s.log.InfoContext(ctx, "pr0gramm dirty posts inserted",
+log.InfoContext(ctx, "pr0gramm dirty posts inserted",
 slog.Int("total", total),
 slog.Int("skipped_dedup", skippedDedup),
 )
@@ -353,13 +357,13 @@ finalizeErr := s.processAndFinalizeDirtyPost(ctx, dp.postID, dp.imageURL)
 proc := int(processed.Add(1))
 if finalizeErr != nil {
 failed.Add(1)
-s.log.DebugContext(ctx, "failed to finalize dirty post",
+log.DebugContext(ctx, "failed to finalize dirty post",
 slog.Int("post_id", int(dp.postID)),
 slog.Any("err", finalizeErr),
 )
 } else {
 imported.Add(1)
-s.log.DebugContext(ctx, "dirty post finalized",
+log.DebugContext(ctx, "dirty post finalized",
 slog.Int("post_id", int(dp.postID)),
 )
 }
@@ -387,7 +391,7 @@ Imported: finalImported,
 Failed:   finalFailed,
 })
 
-s.log.InfoContext(ctx, "pr0gramm import complete",
+log.InfoContext(ctx, "pr0gramm import complete",
 slog.Int("total", total),
 slog.Int("imported", finalImported),
 slog.Int("failed", finalFailed),

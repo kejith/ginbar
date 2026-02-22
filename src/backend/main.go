@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -17,7 +19,7 @@ import (
 )
 
 func main() {
-	log := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	log := buildLogger()
 
 	// ── Config from environment ───────────────────────────────────────────────
 	dbURL := getenv("DB_URL", "postgres://wallium:devpassword@localhost:5432/wallium?sslmode=disable")
@@ -107,5 +109,54 @@ func getenv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// buildLogger constructs an *slog.Logger from environment variables:
+//
+//	LOG_LEVEL   – debug | info | warn | error  (default: info)
+//	LOG_FORMAT  – json | text                  (default: text)
+//	LOG_FILE    – path to append log lines to  (default: stdout only)
+func buildLogger() *slog.Logger {
+	// ── Level ─────────────────────────────────────────────────────────────────
+	var levelVar slog.LevelVar // default INFO
+
+	switch strings.ToLower(getenv("LOG_LEVEL", "info")) {
+	case "debug":
+		levelVar.Set(slog.LevelDebug)
+	case "warn", "warning":
+		levelVar.Set(slog.LevelWarn)
+	case "error":
+		levelVar.Set(slog.LevelError)
+	default:
+		levelVar.Set(slog.LevelInfo)
+	}
+
+	// ── Output writer ─────────────────────────────────────────────────────────
+	var out io.Writer = os.Stdout
+
+	if logFile := os.Getenv("LOG_FILE"); logFile != "" {
+		f, err := os.OpenFile(logFile, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		if err == nil {
+			out = io.MultiWriter(os.Stdout, f)
+		} else {
+			// Can't write to bootstrap a logger yet, fall back gracefully.
+			_, _ = fmt.Fprintf(os.Stderr, "[logger] cannot open LOG_FILE %q: %v — logging to stdout only\n", logFile, err)
+		}
+	}
+
+	// ── Handler ───────────────────────────────────────────────────────────────
+	opts := &slog.HandlerOptions{
+		Level:     &levelVar,
+		AddSource: true,
+	}
+
+	var handler slog.Handler
+	if strings.ToLower(getenv("LOG_FORMAT", "text")) == "json" {
+		handler = slog.NewJSONHandler(out, opts)
+	} else {
+		handler = slog.NewTextHandler(out, opts)
+	}
+
+	return slog.New(handler)
 }
 

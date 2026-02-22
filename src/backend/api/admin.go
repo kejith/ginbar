@@ -394,7 +394,7 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 
 				// Full-res encode: CRF 18 / preset 4 (≈ visually lossless).
 				if encErr := utils.ConvertImageToAvif(srcPath, newFilePath, 18, 4); encErr != nil {
-					log.Warn("regenerate: encode failed", "post", p.ID, "err", encErr)
+					log.WarnContext(ctx, "regenerate: encode failed", "post", p.ID, "err", encErr)
 					failed.Add(1)
 					current.Add(1)
 					sendProgress()
@@ -405,7 +405,7 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 				// read it for smartcrop (Go cannot natively decode AVIF).
 				jpegPath, normErr := utils.NormalizeImageToJPEG(newFilePath, filepath.Join(dirs.Tmp, "thumbnails"))
 				if normErr != nil {
-					log.Warn("regenerate: normalize failed", "post", p.ID, "err", normErr)
+					log.WarnContext(ctx, "regenerate: normalize failed", "post", p.ID, "err", normErr)
 					removeFiles(newFilePath)
 					failed.Add(1)
 					current.Add(1)
@@ -416,7 +416,7 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 				img, loadErr := utils.LoadImageFile(jpegPath)
 				_ = os.Remove(jpegPath)
 				if loadErr != nil {
-					log.Warn("regenerate: load failed", "post", p.ID, "err", loadErr)
+					log.WarnContext(ctx, "regenerate: load failed", "post", p.ID, "err", loadErr)
 					removeFiles(newFilePath)
 					failed.Add(1)
 					current.Add(1)
@@ -426,7 +426,7 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 
 				// Thumbnail: CRF 30 / preset 6 (great quality at 150 px, fast).
 				if thumbErr := utils.CreateThumbnailFromImage(img, newThumbPath, dirs); thumbErr != nil {
-					log.Warn("regenerate: thumbnail failed", "post", p.ID, "err", thumbErr)
+					log.WarnContext(ctx, "regenerate: thumbnail failed", "post", p.ID, "err", thumbErr)
 					removeFiles(newFilePath)
 					failed.Add(1)
 					current.Add(1)
@@ -437,7 +437,7 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 				w2, h2, _ := utils.GetVideoDimensions(newFilePath)
 
 				if dbErr := store.UpdatePostFiles(ctx, p.ID, newFilename, newThumbFilename, int32(w2), int32(h2)); dbErr != nil {
-					log.Warn("regenerate: db update failed", "post", p.ID, "err", dbErr)
+					log.WarnContext(ctx, "regenerate: db update failed", "post", p.ID, "err", dbErr)
 					removeFiles(newFilePath, newThumbPath)
 					failed.Add(1)
 					current.Add(1)

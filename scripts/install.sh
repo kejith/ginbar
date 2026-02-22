@@ -212,6 +212,7 @@ if [[ "${generate_env:-false}" == "true" ]]; then
 
   MEDIA_DIR="${INSTALL_DIR}/media"
   FRONTEND_DIR="${INSTALL_DIR}/frontend"
+  LOG_DIR="${INSTALL_DIR}/logs"
 
   cat > "$ENV_FILE" <<EOF
 POSTGRES_PASSWORD=${PG_PASS}
@@ -219,6 +220,11 @@ SESSION_SECRET=${SESSION_SECRET}
 # Paths used by docker-compose and host nginx
 MEDIA_DIR=${MEDIA_DIR}
 FRONTEND_DIR=${FRONTEND_DIR}
+LOG_DIR=${LOG_DIR}
+# Logging (LOG_FORMAT=json for structured production logs, LOG_LEVEL=info)
+LOG_FORMAT=json
+LOG_LEVEL=info
+LOG_FILE=/app/logs/app.log
 # Optional overrides:
 # POSTGRES_DB=wallium
 # POSTGRES_USER=wallium
@@ -292,6 +298,25 @@ chmod o+x "$INSTALL_DIR"
 chmod -R 755 "$MEDIA_DIR"
 chmod -R o+rX "$FRONTEND_DIR"
 success "Media directories ready at $MEDIA_DIR"
+
+# ── Create log directory ─────────────────────────────────────────────────────
+LOG_DIR="${LOG_DIR:-${INSTALL_DIR}/logs}"
+info "Creating log directory at ${LOG_DIR}…"
+mkdir -p "$LOG_DIR"
+chmod 755 "$LOG_DIR"
+success "Log directory ready at $LOG_DIR"
+
+# ── Install logrotate config ──────────────────────────────────────────────────
+LOGROTATE_SRC="${INSTALL_DIR}/scripts/wallium.logrotate"
+LOGROTATE_DEST="/etc/logrotate.d/wallium"
+if [[ -f "$LOGROTATE_SRC" ]]; then
+  # Patch the log path in case LOG_DIR was changed from the default
+  sed "s|/opt/wallium/logs|${LOG_DIR}|g" "$LOGROTATE_SRC" > "$LOGROTATE_DEST"
+  chmod 644 "$LOGROTATE_DEST"
+  success "logrotate config installed at $LOGROTATE_DEST (rotates ${LOG_DIR}/app.log)"
+else
+  warn "logrotate config not found at $LOGROTATE_SRC — skipping"
+fi
 
 # ── Migrate legacy ginbar PostgreSQL role/database if volume already exists ──
 # On a clean server the volume doesn't exist yet and Postgres will initialise

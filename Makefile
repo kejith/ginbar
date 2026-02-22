@@ -16,6 +16,15 @@ dev-backend:
 dev-frontend:
 	cd src/frontend && pnpm dev
 
+# ── Logging ───────────────────────────────────────────────────────────────────
+## logs-tail: pretty-print the production JSON log (requires jq)
+logs-tail:
+	tail -f $${LOG_FILE:-/opt/wallium/logs/app.log} | jq .
+
+## logs-errors: stream only warn/error lines from the production log
+logs-errors:
+	tail -f $${LOG_FILE:-/opt/wallium/logs/app.log} | jq 'select(.level=="WARN" or .level=="ERROR")'
+
 # ── Database ───────────────────────────────────────────────────────────────────
 PG_URL ?= postgres://wallium:devpassword@localhost:5432/wallium?sslmode=disable
 
