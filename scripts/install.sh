@@ -250,6 +250,12 @@ sed \
 ln -sf "$VHOST_DEST" "$VHOST_LINK"
 success "Vhost installed: $VHOST_DEST"
 
+# Remove the nginx default site — it catches all traffic and hides our vhost
+if [[ -L /etc/nginx/sites-enabled/default ]]; then
+  rm -f /etc/nginx/sites-enabled/default
+  success "Removed nginx default site"
+fi
+
 nginx -t
 systemctl reload nginx
 success "Host nginx reloaded"

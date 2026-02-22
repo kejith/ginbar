@@ -65,16 +65,23 @@ for OLD_VHOST in /etc/nginx/sites-available/ginbar*; do
   [[ -e "$OLD_VHOST" ]] || continue
   OLD_DOMAIN=$(grep -oP 'server_name \K[^;]+' "$OLD_VHOST" 2>/dev/null | head -1 | xargs || true)
   NEW_VHOST="/etc/nginx/sites-available/${OLD_DOMAIN:-wallium}"
+  # Remove stale symlink regardless
+  OLD_LINK="/etc/nginx/sites-enabled/$(basename "$OLD_VHOST")"
+  [[ -L "$OLD_LINK" ]] && rm -f "$OLD_LINK" && info "Removed stale symlink: $OLD_LINK"
   if [[ "$OLD_VHOST" != "$NEW_VHOST" ]]; then
     info "Renaming nginx vhost: $(basename "$OLD_VHOST") → $(basename "$NEW_VHOST")…"
     mv "$OLD_VHOST" "$NEW_VHOST"
-    # Fix dangling symlink in sites-enabled
-    OLD_LINK="/etc/nginx/sites-enabled/$(basename "$OLD_VHOST")"
-    [[ -L "$OLD_LINK" ]] && rm -f "$OLD_LINK"
     ln -sf "$NEW_VHOST" "/etc/nginx/sites-enabled/$(basename "$NEW_VHOST")"
     success "Nginx vhost renamed"
   fi
 done
+
+# Remove the nginx default site if it is still enabled (it catches all traffic
+# and hides the wallium vhost)
+if [[ -L /etc/nginx/sites-enabled/default ]]; then
+  rm -f /etc/nginx/sites-enabled/default
+  success "Removed nginx default site"
+fi
 
 # ── 1c. One-time PostgreSQL role/database migration: ginbar → wallium ────────
 # The Postgres data volume is initialised once; POSTGRES_USER/DB env vars in
