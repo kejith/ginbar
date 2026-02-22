@@ -6,17 +6,28 @@ import {
   useLocation,
 } from "react-router-dom";
 import useAuthStore from "../stores/authStore.js";
+import useMessageStore from "../stores/messageStore.js";
 import UploadModal from "./UploadModal.jsx";
 import { isAdmin } from "../utils/roles.js";
 
 export default function Nav() {
   const user = useAuthStore((s) => s.user);
   const logout = useAuthStore((s) => s.logout);
+  const unread = useMessageStore((s) => s.unread);
+  const fetchUnread = useMessageStore((s) => s.fetchUnread);
   const inputRef = useRef(null);
   const navigate = useNavigate();
   const [showUpload, setShowUpload] = useState(false);
   const [searchParams] = useSearchParams();
   const location = useLocation();
+
+  // Poll unread count every 30 s while logged in.
+  useEffect(() => {
+    if (!user) return;
+    fetchUnread();
+    const id = setInterval(fetchUnread, 30_000);
+    return () => clearInterval(id);
+  }, [user, fetchUnread]);
 
   // Keep the search input in sync with the current URL.
   useEffect(() => {
@@ -121,6 +132,31 @@ export default function Nav() {
               className="text-(--color-text) hover:text-(--color-accent)"
             >
               {user.name}
+            </Link>
+            {/* Envelope icon with unread badge */}
+            <Link
+              to="/messages"
+              className="relative flex items-center text-(--color-muted) hover:text-(--color-text) transition-colors"
+              title="Messages"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="h-5 w-5"
+              >
+                <rect x="2" y="4" width="20" height="16" rx="2" />
+                <path d="m22 7-10 7L2 7" />
+              </svg>
+              {unread > 0 && (
+                <span className="absolute -top-1.5 -right-1.5 flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-(--color-accent) px-0.5 text-[9px] font-bold leading-none text-white">
+                  {unread > 99 ? "99+" : unread}
+                </span>
+              )}
             </Link>
             <button
               onClick={logout}

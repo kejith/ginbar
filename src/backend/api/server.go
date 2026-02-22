@@ -138,6 +138,16 @@ func NewServer(store *db.Store, rdb *redis.Client, sessionSecret string, log *sl
 	comment.Post("/create", srv.requireAuth, srv.CreateComment)
 	comment.Post("/vote", srv.requireAuth, srv.VoteComment)
 
+	// Messages
+	msg := api.Group("/message", srv.requireAuth)
+	msg.Get("/unread", srv.GetUnreadCount)
+	msg.Get("/inbox", srv.GetInbox)
+	msg.Get("/notifications", srv.GetNotificationsPage)
+	msg.Get("/thread/:partner", srv.GetThread)
+	msg.Post("/send", srv.SendMessage)
+	msg.Post("/mark-read", srv.MarkMessageRead)
+	msg.Post("/mark-all-read", srv.MarkAllRead)
+
 	// Tags
 	tag := api.Group("/tag")
 	tag.Get("/", srv.GetTags)
@@ -156,6 +166,7 @@ func NewServer(store *db.Store, rdb *redis.Client, sessionSecret string, log *sl
 	admin.Delete("/tags/:id", srv.AdminDeleteTag)
 	admin.Post("/posts/backfill-dimensions", srv.BackfillPostDimensions)
 	admin.Post("/posts/regenerate-images", srv.RegenerateImages)
+	admin.Post("/message/broadcast", srv.BroadcastMessage)
 
 	// Static — SPA fallback (frontend served separately in dev via Vite proxy)
 	app.Use("/", static.New("./public", static.Config{Browse: false}))

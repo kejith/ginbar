@@ -6,6 +6,8 @@ package db
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Querier interface {
@@ -16,6 +18,7 @@ type Querier interface {
 	CountTags(ctx context.Context) (int32, error)
 	CountUsers(ctx context.Context) (int32, error)
 	CreateComment(ctx context.Context, arg CreateCommentParams) (Comment, error)
+	CreateMessage(ctx context.Context, arg CreateMessageParams) (Message, error)
 	CreatePost(ctx context.Context, arg CreatePostParams) (Post, error)
 	CreateTag(ctx context.Context, name string) (Tag, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
@@ -32,6 +35,7 @@ type Querier interface {
 	GetComments(ctx context.Context) ([]Comment, error)
 	GetCommentsByPost(ctx context.Context, postID int32) ([]Comment, error)
 	GetNewerPosts(ctx context.Context, arg GetNewerPostsParams) ([]Post, error)
+	GetNotificationsEnriched(ctx context.Context, arg GetNotificationsEnrichedParams) ([]GetNotificationsEnrichedRow, error)
 	GetOlderPosts(ctx context.Context, arg GetOlderPostsParams) ([]Post, error)
 	GetPossibleDuplicatePosts(ctx context.Context, arg GetPossibleDuplicatePostsParams) ([]GetPossibleDuplicatePostsRow, error)
 	GetPost(ctx context.Context, arg GetPostParams) (Post, error)
@@ -39,10 +43,13 @@ type Querier interface {
 	GetPostTag(ctx context.Context, id int32) (PostTag, error)
 	GetPosts(ctx context.Context, arg GetPostsParams) ([]Post, error)
 	GetPostsByUser(ctx context.Context, arg GetPostsByUserParams) ([]Post, error)
+	GetPrivateMessages(ctx context.Context, fromName pgtype.Text) ([]Message, error)
 	GetTag(ctx context.Context, id int32) (Tag, error)
 	GetTagByName(ctx context.Context, name string) (Tag, error)
 	GetTags(ctx context.Context) ([]Tag, error)
 	GetTagsByPost(ctx context.Context, arg GetTagsByPostParams) ([]GetTagsByPostRow, error)
+	GetThread(ctx context.Context, arg GetThreadParams) ([]Message, error)
+	GetUnreadCount(ctx context.Context, toName string) (int32, error)
 	GetUser(ctx context.Context, id int32) (GetUserRow, error)
 	GetUserByName(ctx context.Context, name string) (User, error)
 	GetUsers(ctx context.Context) ([]GetUsersRow, error)
@@ -50,6 +57,8 @@ type Querier interface {
 	GetVotedComments(ctx context.Context, arg GetVotedCommentsParams) ([]GetVotedCommentsRow, error)
 	GetVotedPost(ctx context.Context, arg GetVotedPostParams) (GetVotedPostRow, error)
 	GetVotedPosts(ctx context.Context, arg GetVotedPostsParams) ([]GetVotedPostsRow, error)
+	MarkAllReadForUser(ctx context.Context, toName string) error
+	MarkMessageRead(ctx context.Context, arg MarkMessageReadParams) error
 	PostURLExists(ctx context.Context, url string) (bool, error)
 	RemoveTagFromPost(ctx context.Context, arg RemoveTagFromPostParams) error
 	Search(ctx context.Context, dollar_1 []string) ([]Post, error)

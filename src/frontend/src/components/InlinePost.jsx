@@ -61,6 +61,7 @@ export default function InlinePost({
   onOlder,
   canGoNewer,
   canGoOlder,
+  highlightCommentId = null,
 }) {
   const panelRef = useRef(null);
   const tagInputRef = useRef(null);
@@ -94,6 +95,25 @@ export default function InlinePost({
     setTagError("");
     setImgReady(false);
   }, [postId]);
+
+  // Scroll to and briefly highlight a specific comment once comments are loaded.
+  useEffect(() => {
+    if (!highlightCommentId || !comments?.length) return;
+    // Give the DOM a frame to settle after comments render.
+    const tid = setTimeout(() => {
+      const el = document.getElementById(`comment-${highlightCommentId}`);
+      if (!el) return;
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      el.style.transition = "background-color 0.3s ease";
+      el.style.backgroundColor =
+        "color-mix(in srgb, var(--color-accent) 20%, transparent)";
+      setTimeout(() => {
+        el.style.backgroundColor = "";
+      }, 2500);
+    }, 100);
+    return () => clearTimeout(tid);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [highlightCommentId, comments]);
 
   useEffect(() => {
     fetchPost(postId);

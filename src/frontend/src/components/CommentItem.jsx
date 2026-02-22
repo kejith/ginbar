@@ -41,7 +41,7 @@ export default function CommentItem({
   const indentPx = Math.min(depth, MAX_DEPTH_INDENT) * INDENT_PX;
 
   return (
-    <div style={{ marginLeft: indentPx }}>
+    <div id={`comment-${comment.id}`} style={{ marginLeft: indentPx }}>
       <div
         className={depth > 0 ? "border-l-2 border-(--color-border) pl-3" : ""}
       >

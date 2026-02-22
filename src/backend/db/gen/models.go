@@ -33,6 +33,19 @@ type Invitation struct {
 	UsedAt    pgtype.Timestamptz `json:"used_at"`
 }
 
+type Message struct {
+	ID           int32              `json:"id"`
+	Kind         string             `json:"kind"`
+	FromName     pgtype.Text        `json:"from_name"`
+	ToName       string             `json:"to_name"`
+	Subject      pgtype.Text        `json:"subject"`
+	Body         string             `json:"body"`
+	ReadAt       pgtype.Timestamptz `json:"read_at"`
+	CreatedAt    pgtype.Timestamptz `json:"created_at"`
+	RefPostID    pgtype.Int4        `json:"ref_post_id"`
+	RefCommentID pgtype.Int4        `json:"ref_comment_id"`
+}
+
 type Post struct {
 	ID                int32              `json:"id"`
 	Url               string             `json:"url"`

@@ -12,6 +12,7 @@ const Profile = lazy(() => import("./pages/Profile.jsx"));
 const UserGrid = lazy(() => import("./pages/UserGrid.jsx"));
 const NotFound = lazy(() => import("./pages/NotFound.jsx"));
 const Admin = lazy(() => import("./pages/Admin.jsx"));
+const Messages = lazy(() => import("./pages/Messages.jsx"));
 
 export default function App() {
   const hydrate = useAuthStore((s) => s.hydrate);
@@ -32,6 +33,7 @@ export default function App() {
         <Route path="/user/:name/posts" element={<UserGrid />} />
         <Route path="/user/:name/posts/:segment" element={<UserGrid />} />
         <Route path="/user/:name/posts/:tags/:postId" element={<UserGrid />} />
+        <Route path="/messages" element={<Messages />} />
         <Route
           path="/admin/*"
           element={

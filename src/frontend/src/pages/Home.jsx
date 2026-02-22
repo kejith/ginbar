@@ -11,6 +11,8 @@ export default function Home() {
   const [searchParams, setSearchParams] = useSearchParams();
   const query = searchParams.get("q") || "";
   const tag = searchParams.get("tag") || "";
+  const commentIdParam = searchParams.get("comment");
+  const highlightCommentId = commentIdParam ? Number(commentIdParam) : null;
   const initialExpanded = postIdParam ? Number(postIdParam) : null;
 
   const [expandedId, setExpandedId] = useState(initialExpanded);
@@ -88,6 +90,7 @@ export default function Home() {
         }}
         onPostOpen={handlePostOpen}
         onPostClose={handlePostClose}
+        highlightCommentId={highlightCommentId}
       />
     </div>
   );

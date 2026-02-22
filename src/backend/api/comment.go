@@ -46,6 +46,14 @@ func (s *Server) CreateComment(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+
+	// If this is a reply, notify the parent comment's author.
+	if form.ParentID > 0 {
+		if parent, lookupErr := s.store.GetComment(c.Context(), form.ParentID); lookupErr == nil {
+			go s.sendReplyNotification(parent.UserName, u.Name, form.Content, form.PostID, comment.ID)
+		}
+	}
+
 	return c.Status(fiber.StatusCreated).JSON(comment)
 }
 

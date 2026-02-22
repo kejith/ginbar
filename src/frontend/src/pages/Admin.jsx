@@ -279,6 +279,7 @@ function ContentSection() {
       label: comments ? `comments (${comments.length})` : "comments",
     },
     { id: "tags", label: tags ? `tags (${tags.length})` : "tags" },
+    { id: "broadcast", label: "broadcast" },
   ];
 
   return (
@@ -362,40 +363,75 @@ function ContentSection() {
         </div>
       )}
 
-      {/* Tags tab */}
-      {tab === "tags" && (
-        <div className="mt-2">
-          {!tags ? (
-            <p className="text-(--color-muted) text-sm p-2">loading…</p>
-          ) : tags.length === 0 ? (
-            <p className="text-(--color-muted) text-sm p-2">no tags</p>
-          ) : (
-            <div className="flex flex-wrap gap-2 p-2">
-              {tags.map((t) => (
-                <div
-                  key={t.id}
-                  className="flex items-center gap-1.5 rounded border border-(--color-border) bg-(--color-surface) px-2 py-1 text-sm"
-                >
-                  <span className="text-(--color-text)">{t.name}</span>
-                  <button
-                    disabled={busy === `tag-${t.id}`}
-                    onClick={() => deleteTag(t.id, t.name)}
-                    className="text-(--color-danger) hover:opacity-80 disabled:opacity-50"
-                    title="delete tag"
-                  >
-                    ×
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
+      {/* Broadcast tab */}
+      {tab === "broadcast" && <BroadcastPanel />}
     </div>
   );
 }
 
-// ── Maintenance: generic job runner ──────────────────────────────────────────
+// ── Broadcast panel ───────────────────────────────────────────────────────────
+
+function BroadcastPanel() {
+  const [subject, setSubject] = useState("");
+  const [body, setBody] = useState("");
+  const [status, setStatus] = useState(null); // null | 'loading' | { sent: N } | 'error'
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    if (!body.trim()) return;
+    setStatus("loading");
+    try {
+      const { data } = await api.post("/admin/message/broadcast", {
+        subject: subject.trim() || undefined,
+        body: body.trim(),
+      });
+      setStatus({ sent: data.sent });
+      setBody("");
+      setSubject("");
+    } catch {
+      setStatus("error");
+    }
+  }
+
+  return (
+    <div className="mt-2 p-3">
+      <p className="text-xs text-(--color-muted) mb-3">
+        Send a system message to every registered user.
+      </p>
+      <form onSubmit={handleSubmit} className="flex flex-col gap-2 max-w-md">
+        <input
+          value={subject}
+          onChange={(e) => setSubject(e.target.value)}
+          placeholder="Subject (optional)"
+          className="rounded bg-(--color-bg) px-3 py-2 text-sm text-(--color-text) placeholder:text-(--color-muted) ring-1 ring-(--color-border) focus:outline-none focus:ring-(--color-accent)"
+        />
+        <textarea
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+          rows={4}
+          placeholder="Message body…"
+          required
+          className="rounded bg-(--color-bg) px-3 py-2 text-sm text-(--color-text) placeholder:text-(--color-muted) ring-1 ring-(--color-border) focus:outline-none focus:ring-(--color-accent) resize-none"
+        />
+        {status === "error" && (
+          <p className="text-xs text-(--color-danger)">Broadcast failed.</p>
+        )}
+        {status && status !== "loading" && status !== "error" && (
+          <p className="text-xs text-(--color-success)">
+            Sent to {status.sent} user{status.sent !== 1 ? "s" : ""}.
+          </p>
+        )}
+        <button
+          type="submit"
+          disabled={!body.trim() || status === "loading"}
+          className="self-start rounded bg-(--color-accent) px-4 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+        >
+          {status === "loading" ? "sending…" : "broadcast"}
+        </button>
+      </form>
+    </div>
+  );
+}
 
 /**
  * JobCard — generic UI for one admin maintenance task.

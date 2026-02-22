@@ -29,6 +29,7 @@ export default function PostGrid({
   onPostClose,
   expandedId,
   setExpandedId,
+  highlightCommentId,
 }) {
   const { posts, page, hasMore, listLoading, fetchPosts } = usePostStore();
   const cols = useColumns();
@@ -253,6 +254,7 @@ export default function PostGrid({
                   onOlder={handleOlder}
                   canGoNewer={canGoNewer}
                   canGoOlder={canGoOlder}
+                  highlightCommentId={highlightCommentId}
                 />
               )}
 
