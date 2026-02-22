@@ -78,13 +78,45 @@ export default function UploadModal({
 
   const createPost = usePostStore((s) => s.createPost);
   const uploadPost = usePostStore((s) => s.uploadPost);
+  const getUserQueueStatus = usePostStore((s) => s.getUserQueueStatus);
   const getPostQueueStatus = usePostStore((s) => s.getPostQueueStatus);
   const importFromPr0gramm = usePostStore((s) => s.importFromPr0gramm);
 
-  const visibleTabs = [
-    ...(admin ? TABS : TABS.filter((t) => t.id !== "pr0gramm")),
-    ...(queueInfo ? [QUEUE_TAB] : []),
-  ];
+  // ── On-mount queue check ──────────────────────────────────────────────────
+  // Ask the backend whether this user already has a post in the queue.
+  // If so, jump straight to the queue tab and start polling.
+  const [checkingQueue, setCheckingQueue] = useState(true);
+  useEffect(() => {
+    let cancelled = false;
+    getUserQueueStatus()
+      .then((status) => {
+        if (cancelled) return;
+        if (status.has_post) {
+          setQueueInfo({
+            post_id: status.post_id,
+            queue_position: status.queue_position,
+            eta_sec: status.eta_sec,
+          });
+        }
+      })
+      .catch((err) => {
+        // Non-fatal — user may not be logged in, or the check failed.
+        // Log so it's visible in devtools without breaking the modal.
+        console.warn("[UploadModal] queue check failed:", err?.message ?? err);
+      })
+      .finally(() => {
+        if (!cancelled) setCheckingQueue(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const visibleTabs = queueInfo
+    ? [QUEUE_TAB]
+    : admin
+      ? TABS
+      : TABS.filter((t) => t.id !== "pr0gramm");
 
   // Auto-switch to the queue tab as soon as a post enters the queue.
   useEffect(() => {
@@ -222,19 +254,46 @@ export default function UploadModal({
           </div>
 
           {/* Tabs */}
-          <Tabs
-            tabs={visibleTabs}
-            active={tab}
-            onChange={(id) => {
-              setTab(id);
-              setError(null);
-              setPrError(null);
-            }}
-            className="mb-5"
-          />
+          {!checkingQueue && (
+            <Tabs
+              tabs={visibleTabs}
+              active={tab}
+              onChange={(id) => {
+                setTab(id);
+                setError(null);
+                setPrError(null);
+              }}
+              className="mb-5"
+            />
+          )}
+
+          {/* ── Loading state while checking queue on open ──────────── */}
+          {checkingQueue && (
+            <div className="flex items-center justify-center py-10">
+              <svg
+                className="h-6 w-6 animate-spin text-(--color-accent)"
+                viewBox="0 0 24 24"
+                fill="none"
+              >
+                <circle
+                  className="opacity-25"
+                  cx="12"
+                  cy="12"
+                  r="10"
+                  stroke="currentColor"
+                  strokeWidth="4"
+                />
+                <path
+                  className="opacity-75"
+                  fill="currentColor"
+                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"
+                />
+              </svg>
+            </div>
+          )}
 
           {/* ── URL / File tabs ─────────────────────────────────────────── */}
-          {(tab === "url" || tab === "file") && (
+          {!checkingQueue && (tab === "url" || tab === "file") && (
             <form onSubmit={handleSubmit} className="flex flex-col gap-4">
               {tab === "url" ? (
                 <input
@@ -283,7 +342,7 @@ export default function UploadModal({
           )}
 
           {/* ── Queue status tab ──────────────────────────────────────── */}
-          {tab === "queue" && queueInfo && (
+          {!checkingQueue && tab === "queue" && queueInfo && (
             <div className="flex flex-col gap-4">
               {!queueDone ? (
                 <>
@@ -332,7 +391,7 @@ export default function UploadModal({
           )}
 
           {/* ── Pr0gramm import tab ─────────────────────────────────────── */}
-          {tab === "pr0gramm" && (
+          {!checkingQueue && tab === "pr0gramm" && (
             <form
               onSubmit={handlePr0grammImport}
               className="flex flex-col gap-4"

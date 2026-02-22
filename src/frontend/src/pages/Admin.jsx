@@ -698,7 +698,7 @@ const MAINTENANCE_JOBS = [
     id: "load-new-pr0gramm",
     label: "Load 500 new posts from New",
     description:
-      "Fetches the pr0gramm \"New\" feed (flags=9) page by page and inserts " +
+      'Fetches the pr0gramm "New" feed (flags=1) page by page and inserts ' +
       "posts as dirty rows for the background queue to process. Stops once " +
       "500 new posts have been queued (or the feed is exhausted). " +
       "Duplicate URLs are skipped automatically.",
@@ -715,17 +715,19 @@ const MAINTENANCE_JOBS = [
     },
     formatResult: (r) => (
       <span>
-        Queued <strong>{r.total}</strong> new post{r.total !== 1 ? "s" : ""}
-        {" "}across <strong>{r.pages_read}</strong> page
+        Queued <strong>{r.total}</strong> new post{r.total !== 1 ? "s" : ""}{" "}
+        across <strong>{r.pages_read}</strong> page
         {r.pages_read !== 1 ? "s" : ""} ({r.total_read} items read).
         {r.skipped_dedup > 0 && (
           <span className="text-(--color-muted)">
-            {" "}{r.skipped_dedup} already exist.
+            {" "}
+            {r.skipped_dedup} already exist.
           </span>
         )}
         {r.filtered_ext > 0 && (
           <span className="text-(--color-muted)">
-            {" "}{r.filtered_ext} unsupported format.
+            {" "}
+            {r.filtered_ext} unsupported format.
           </span>
         )}
         {r.total >= 500 && (

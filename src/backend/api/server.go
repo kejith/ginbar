@@ -149,6 +149,9 @@ func NewServer(store *db.Store, rdb *redis.Client, sessionSecret string, log *sl
 	post.Get("/position/:post_id", srv.GetPostPosition)
 	post.Get("/around/:post_id", srv.GetPostsAround)
 	post.Get("/cursor", srv.GetPostsCursor)
+	// Queue status — must be before /:post_id to avoid param capture
+	post.Get("/my-queue", srv.requireAuth, srv.GetMyQueueStatus)
+	post.Get("/queue/:post_id", srv.requireAuth, srv.GetPostQueueStatus)
 	post.Get("/:post_id", srv.GetPost)
 	post.Get("/*", srv.GetPosts)
 	post.Post("/vote", srv.requireAuth, srv.VotePost)
@@ -177,9 +180,6 @@ func NewServer(store *db.Store, rdb *redis.Client, sessionSecret string, log *sl
 	tag.Get("/", srv.GetTags)
 	tag.Post("/create", srv.requireAuth, srv.CreatePostTag)
 	tag.Post("/vote", srv.requireAuth, srv.VotePostTag)
-
-	// Queue status for member posts (auth required — user checks own post)
-	post.Get("/queue/:post_id", srv.requireAuth, srv.GetPostQueueStatus)
 
 	// ── Admin routes (all require level >= LevelAdmin) ────────────────────────
 	admin := api.Group("/admin", srv.requireAdmin)

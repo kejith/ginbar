@@ -412,6 +412,41 @@ func (s *Server) AdminQueueStream(c fiber.Ctx) error {
 	return nil
 }
 
+// GetMyQueueStatus returns the calling user's current dirty post (if any).
+// GET /api/post/my-queue
+func (s *Server) GetMyQueueStatus(c fiber.Ctx) error {
+	u, err := s.sessionUser(c)
+	if err != nil || u == nil || u.ID == 0 {
+		return fiber.NewError(fiber.StatusUnauthorized, "not logged in")
+	}
+
+	post, err := s.store.GetUserDirtyPost(c.Context(), u.Name)
+	if err != nil {
+		return err
+	}
+	if post == nil {
+		return c.JSON(fiber.Map{"has_post": false})
+	}
+
+	pos, _ := s.store.CountDirtyPostsBeforeID(c.Context(), post.ID)
+	snap := s.queue.Snapshot()
+	eta := -1
+	if snap.RatePerSec > 0 {
+		if pos == 0 {
+			eta = snap.ETASec
+		} else {
+			eta = int(math.Ceil(float64(pos) / snap.RatePerSec))
+		}
+	}
+
+	return c.JSON(fiber.Map{
+		"has_post":       true,
+		"post_id":        post.ID,
+		"queue_position": pos,
+		"eta_sec":        eta,
+	})
+}
+
 // GetPostQueueStatus returns queue position and ETA for a specific dirty post.
 // GET /api/post/queue/:post_id
 func (s *Server) GetPostQueueStatus(c fiber.Ctx) error {

@@ -246,6 +246,14 @@ const usePostStore = create((set, get) => ({
     return data; // { status, post_id, queue_position, eta_sec }
   },
 
+  // ── getUserQueueStatus ────────────────────────────────────────────────────
+  // Returns { has_post, post_id?, queue_position?, eta_sec? }.
+  // has_post=false means the user has no post currently in the queue.
+  getUserQueueStatus: async () => {
+    const { data } = await api.get("/post/my-queue");
+    return data;
+  },
+
   // ── getPostQueueStatus ────────────────────────────────────────────────────
   // Returns { dirty, queue_position, eta_sec }.
   // dirty=false means the post was finalized (or deleted on failure).

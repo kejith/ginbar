@@ -747,7 +747,13 @@ type sseLoadNewDone struct {
 // POST /api/admin/posts/load-new
 func (s *Server) LoadNewFromPr0gramm(c fiber.Ctx) error {
 	const targetDirty = 500
-	const newFlags = 9
+	const newFlags = 1
+
+	u, err := s.sessionUser(c)
+	if err != nil || u == nil || u.ID == 0 {
+		return fiber.NewError(fiber.StatusUnauthorized, "not logged in")
+	}
+	userName := u.Name
 
 	ctx := context.Background()
 
@@ -815,7 +821,7 @@ func (s *Server) LoadNewFromPr0gramm(c fiber.Ctx) error {
 						skippedDedup++
 						continue
 					}
-					_, err = s.store.CreateDirtyPost(ctx, imageURL, "")
+					_, err = s.store.CreateDirtyPost(ctx, imageURL, userName)
 					if err != nil {
 						s.log.WarnContext(ctx, "load-new: insert dirty post failed",
 							slog.String("url", imageURL), slog.Any("err", err))
