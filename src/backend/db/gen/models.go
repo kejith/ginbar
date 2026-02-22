@@ -16,12 +16,21 @@ type Comment struct {
 	PostID    int32              `json:"post_id"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 	DeletedAt pgtype.Timestamptz `json:"deleted_at"`
+	ParentID  pgtype.Int4        `json:"parent_id"`
 }
 
 type CommentVote struct {
 	CommentID int32 `json:"comment_id"`
 	UserID    int32 `json:"user_id"`
 	Vote      int16 `json:"vote"`
+}
+
+type Invitation struct {
+	Token     pgtype.UUID        `json:"token"`
+	CreatedBy int32              `json:"created_by"`
+	UsedBy    pgtype.Int4        `json:"used_by"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UsedAt    pgtype.Timestamptz `json:"used_at"`
 }
 
 type Post struct {

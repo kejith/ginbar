@@ -16,8 +16,8 @@ WHERE post_id = $1 AND deleted_at IS NULL
 ORDER BY id;
 
 -- name: CreateComment :one
-INSERT INTO comments (content, user_name, post_id)
-VALUES ($1, $2, $3)
+INSERT INTO comments (content, user_name, post_id, parent_id)
+VALUES ($1, $2, $3, $4)
 RETURNING *;
 
 -- name: DeleteComment :exec

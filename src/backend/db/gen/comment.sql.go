@@ -25,19 +25,25 @@ func (q *Queries) CountComments(ctx context.Context) (int32, error) {
 }
 
 const createComment = `-- name: CreateComment :one
-INSERT INTO comments (content, user_name, post_id)
-VALUES ($1, $2, $3)
-RETURNING id, content, score, user_name, post_id, created_at, deleted_at
+INSERT INTO comments (content, user_name, post_id, parent_id)
+VALUES ($1, $2, $3, $4)
+RETURNING id, content, score, user_name, post_id, created_at, deleted_at, parent_id
 `
 
 type CreateCommentParams struct {
-	Content  string `json:"content"`
-	UserName string `json:"user_name"`
-	PostID   int32  `json:"post_id"`
+	Content  string      `json:"content"`
+	UserName string      `json:"user_name"`
+	PostID   int32       `json:"post_id"`
+	ParentID pgtype.Int4 `json:"parent_id"`
 }
 
 func (q *Queries) CreateComment(ctx context.Context, arg CreateCommentParams) (Comment, error) {
-	row := q.db.QueryRow(ctx, createComment, arg.Content, arg.UserName, arg.PostID)
+	row := q.db.QueryRow(ctx, createComment,
+		arg.Content,
+		arg.UserName,
+		arg.PostID,
+		arg.ParentID,
+	)
 	var i Comment
 	err := row.Scan(
 		&i.ID,
@@ -47,6 +53,7 @@ func (q *Queries) CreateComment(ctx context.Context, arg CreateCommentParams) (C
 		&i.PostID,
 		&i.CreatedAt,
 		&i.DeletedAt,
+		&i.ParentID,
 	)
 	return i, err
 }
@@ -63,7 +70,7 @@ func (q *Queries) DeleteComment(ctx context.Context, id int32) error {
 }
 
 const getComment = `-- name: GetComment :one
-SELECT id, content, score, user_name, post_id, created_at, deleted_at
+SELECT id, content, score, user_name, post_id, created_at, deleted_at, parent_id
 FROM comments
 WHERE id = $1 AND deleted_at IS NULL
 `
@@ -79,12 +86,13 @@ func (q *Queries) GetComment(ctx context.Context, id int32) (Comment, error) {
 		&i.PostID,
 		&i.CreatedAt,
 		&i.DeletedAt,
+		&i.ParentID,
 	)
 	return i, err
 }
 
 const getComments = `-- name: GetComments :many
-SELECT id, content, score, user_name, post_id, created_at, deleted_at
+SELECT id, content, score, user_name, post_id, created_at, deleted_at, parent_id
 FROM comments
 WHERE deleted_at IS NULL
 ORDER BY id
@@ -107,6 +115,7 @@ func (q *Queries) GetComments(ctx context.Context) ([]Comment, error) {
 			&i.PostID,
 			&i.CreatedAt,
 			&i.DeletedAt,
+			&i.ParentID,
 		); err != nil {
 			return nil, err
 		}
@@ -119,7 +128,7 @@ func (q *Queries) GetComments(ctx context.Context) ([]Comment, error) {
 }
 
 const getCommentsByPost = `-- name: GetCommentsByPost :many
-SELECT id, content, score, user_name, post_id, created_at, deleted_at
+SELECT id, content, score, user_name, post_id, created_at, deleted_at, parent_id
 FROM comments
 WHERE post_id = $1 AND deleted_at IS NULL
 ORDER BY id
@@ -142,6 +151,7 @@ func (q *Queries) GetCommentsByPost(ctx context.Context, postID int32) ([]Commen
 			&i.PostID,
 			&i.CreatedAt,
 			&i.DeletedAt,
+			&i.ParentID,
 		); err != nil {
 			return nil, err
 		}
@@ -154,7 +164,7 @@ func (q *Queries) GetCommentsByPost(ctx context.Context, postID int32) ([]Commen
 }
 
 const getVotedComment = `-- name: GetVotedComment :one
-SELECT c.id, c.content, c.score, c.user_name, c.post_id, c.created_at, c.deleted_at, COALESCE(cv.vote, 0)::smallint AS vote
+SELECT c.id, c.content, c.score, c.user_name, c.post_id, c.created_at, c.deleted_at, c.parent_id, COALESCE(cv.vote, 0)::smallint AS vote
 FROM comments c
 LEFT JOIN comment_votes cv ON cv.comment_id = c.id AND cv.user_id = $1
 WHERE c.deleted_at IS NULL AND c.id = $2
@@ -173,6 +183,7 @@ type GetVotedCommentRow struct {
 	PostID    int32              `json:"post_id"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 	DeletedAt pgtype.Timestamptz `json:"deleted_at"`
+	ParentID  pgtype.Int4        `json:"parent_id"`
 	Vote      int16              `json:"vote"`
 }
 
@@ -187,13 +198,14 @@ func (q *Queries) GetVotedComment(ctx context.Context, arg GetVotedCommentParams
 		&i.PostID,
 		&i.CreatedAt,
 		&i.DeletedAt,
+		&i.ParentID,
 		&i.Vote,
 	)
 	return i, err
 }
 
 const getVotedComments = `-- name: GetVotedComments :many
-SELECT c.id, c.content, c.score, c.user_name, c.post_id, c.created_at, c.deleted_at, COALESCE(cv.vote, 0)::smallint AS vote
+SELECT c.id, c.content, c.score, c.user_name, c.post_id, c.created_at, c.deleted_at, c.parent_id, COALESCE(cv.vote, 0)::smallint AS vote
 FROM comments c
 LEFT JOIN comment_votes cv ON cv.comment_id = c.id AND cv.user_id = $1
 WHERE c.deleted_at IS NULL AND c.post_id = $2
@@ -213,6 +225,7 @@ type GetVotedCommentsRow struct {
 	PostID    int32              `json:"post_id"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 	DeletedAt pgtype.Timestamptz `json:"deleted_at"`
+	ParentID  pgtype.Int4        `json:"parent_id"`
 	Vote      int16              `json:"vote"`
 }
 
@@ -233,6 +246,7 @@ func (q *Queries) GetVotedComments(ctx context.Context, arg GetVotedCommentsPara
 			&i.PostID,
 			&i.CreatedAt,
 			&i.DeletedAt,
+			&i.ParentID,
 			&i.Vote,
 		); err != nil {
 			return nil, err

@@ -5,13 +5,15 @@ import (
 	dbgen "ginbar/db/gen"
 
 	"github.com/gofiber/fiber/v3"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 // ── Forms ─────────────────────────────────────────────────────────────────────
 
 type commentWriteForm struct {
-	Content string `form:"content" json:"content"`
-	PostID  int32  `form:"post_id" json:"post_id"`
+	Content  string `form:"content"   json:"content"`
+	PostID   int32  `form:"post_id"   json:"post_id"`
+	ParentID int32  `form:"parent_id" json:"parent_id"`
 }
 
 type commentVoteForm struct {
@@ -39,6 +41,7 @@ func (s *Server) CreateComment(c fiber.Ctx) error {
 		Content:  form.Content,
 		UserName: u.Name,
 		PostID:   form.PostID,
+		ParentID: pgtype.Int4{Int32: form.ParentID, Valid: form.ParentID > 0},
 	})
 	if err != nil {
 		return err

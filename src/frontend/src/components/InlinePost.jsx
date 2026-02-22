@@ -4,6 +4,7 @@ import CommentItem from "./CommentItem.jsx";
 import CommentForm from "./CommentForm.jsx";
 import TagChip from "./TagChip.jsx";
 import VoteButtons from "./VoteButtons.jsx";
+import UserLink from "./UserLink.jsx";
 import useAuthStore from "../stores/authStore.js";
 import usePostStore from "../stores/postStore.js";
 import useCommentStore from "../stores/commentStore.js";
@@ -13,6 +14,29 @@ import { isAdmin } from "../utils/roles.js";
 import api from "../utils/api.js";
 
 const TOP_TAGS = 5;
+
+/**
+ * Build a tree from a flat comment list.
+ * Each node gets a `replies` array of its direct children, preserving
+ * insertion order. Orphaned replies (parent deleted) fall back to roots.
+ */
+function buildCommentTree(flat) {
+  const byId = {};
+  const roots = [];
+  for (const c of flat) {
+    byId[c.id] = { ...c, replies: [] };
+  }
+  for (const c of Object.values(byId)) {
+    const pid = c.parent_id;
+    // parent_id is a plain number (or null) after JSON parsing from the API
+    if (pid && pid > 0 && byId[pid]) {
+      byId[pid].replies.push(c);
+    } else {
+      roots.push(c);
+    }
+  }
+  return roots;
+}
 
 /**
  * InlinePost — full post view embedded between grid rows.
@@ -393,12 +417,7 @@ export default function InlinePost({
                 {/* ── Author + close ── */}
                 <div className="flex items-center justify-between gap-3 border-b border-(--color-border) px-4 py-3">
                   <div className="flex min-w-0 items-center gap-2 text-sm">
-                    <Link
-                      to={`/user/${post.user_name}`}
-                      className="truncate font-semibold text-(--color-accent) hover:opacity-75"
-                    >
-                      {post.user_name}
-                    </Link>
+                    <UserLink name={post.user_name} className="truncate" />
                     {timeStr && (
                       <span className="shrink-0 text-xs text-(--color-muted)">
                         {timeStr}
@@ -602,15 +621,13 @@ export default function InlinePost({
                       : ""}
                   </h2>
                   <CommentForm postId={postId} />
-                  {(comments ?? []).map((c) => (
+                  {buildCommentTree(comments ?? []).map((c) => (
                     <CommentItem
                       key={c.id}
                       comment={c}
                       postId={postId}
-                      onDelete={
-                        admin ? () => handleDeleteComment(c.id) : undefined
-                      }
-                      deleting={deletingComment === c.id}
+                      onDelete={admin ? handleDeleteComment : undefined}
+                      deleting={deletingComment}
                     />
                   ))}
                 </section>

@@ -21,12 +21,13 @@ const useCommentStore = create((set) => ({
     set((s) => ({ byPost: { ...s.byPost, [postId]: comments ?? [] } })),
 
   // ── createComment ─────────────────────────────────────────────────────────
-  createComment: async (postId, content) => {
+  createComment: async (postId, content, parentId = null) => {
     set({ loading: true, error: null });
     try {
       const { data } = await api.post("/comment/create", {
         post_id: postId,
         content,
+        ...(parentId ? { parent_id: parentId } : {}),
       });
       set((s) => ({
         loading: false,
