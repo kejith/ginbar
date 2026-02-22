@@ -132,7 +132,7 @@ export default function Profile() {
               onClick={async () => {
                 try {
                   const token = await createInvite();
-                  const url = `${window.location.origin}/register?invite=${token}`;
+                  const url = `${window.location.origin}/register/invite/${token}`;
                   await navigator.clipboard.writeText(url);
                   setCopiedToken(token);
                   setTimeout(() => setCopiedToken(null), 4000);
@@ -151,7 +151,7 @@ export default function Profile() {
           {copiedToken && (
             <div className="flex items-center justify-between gap-3 border-t border-(--color-border) px-4 py-2 text-xs">
               <span className="truncate font-mono text-(--color-muted)">
-                {window.location.origin}/register?invite={copiedToken}
+                {window.location.origin}/register/invite/{copiedToken}
               </span>
               <span className="shrink-0 font-semibold text-(--color-accent)">
                 copied!
@@ -187,7 +187,7 @@ export default function Profile() {
               {inv.used_by == null && (
                 <button
                   onClick={async () => {
-                    const url = `${window.location.origin}/register?invite=${inv.token}`;
+                    const url = `${window.location.origin}/register/invite/${inv.token}`;
                     await navigator.clipboard.writeText(url);
                     setCopiedToken(inv.token);
                     setTimeout(() => setCopiedToken(null), 4000);

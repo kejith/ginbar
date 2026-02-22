@@ -41,7 +41,7 @@ export default function App() {
         <Route path="/" element={<Home />} />
         <Route path="/post/:postId" element={<Home />} />
         <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
+        <Route path="/register/invite/:code" element={<Register />} />
         <Route path="/user/:name" element={<Profile />} />
         <Route path="/user/:name/posts" element={<UserGrid />} />
         <Route path="/user/:name/posts/:segment" element={<UserGrid />} />

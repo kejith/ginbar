@@ -1,18 +1,17 @@
 import { useState, useEffect } from "react";
-import { useNavigate, useSearchParams, Link } from "react-router-dom";
+import { useNavigate, useParams, Link } from "react-router-dom";
 import useAuthStore from "../stores/authStore.js";
 import useInviteStore from "../stores/inviteStore.js";
 import FormField, { inputCls } from "../components/FormField.jsx";
 
 /**
- * /register?invite=<token>
+ * /register/invite/<token>
  *
  * Validates the invite token on mount.  If valid, shows the registration form.
  * Registration is impossible without a valid, unused invite token.
  */
 export default function Register() {
-  const [searchParams] = useSearchParams();
-  const token = searchParams.get("invite") ?? "";
+  const { code: token = "" } = useParams();
 
   const navigate = useNavigate();
   const {
