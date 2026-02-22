@@ -18,6 +18,15 @@ const usePostStore = create((set, get) => ({
   listLoading: false,
   listError: null,
 
+  // ── cursor-mode state (active when a direct /post/:id URL is opened) ──────
+  // Replaces page-based pagination for the default feed. Both ends use the
+  // min/max id already in `posts` as the cursor so no extra tracking needed.
+  cursorMode: false,
+  hasOlderPosts: true,
+  hasNewerPosts: false,
+  olderLoading: false,
+  newerLoading: false,
+
   // ── single post state ─────────────────────────────────────────────────────
   current: null, // { data, comments, tags }
   postLoading: false,
@@ -36,9 +45,80 @@ const usePostStore = create((set, get) => ({
         page,
         hasMore: incoming.length === limit,
         listLoading: false,
+        // exit cursor mode when doing a full reset
+        ...(reset
+          ? { cursorMode: false, hasNewerPosts: false, hasOlderPosts: true }
+          : {}),
       }));
     } catch (err) {
       set({ listLoading: false, listError: err.message });
+    }
+  },
+
+  // ── fetchAroundPost ───────────────────────────────────────────────────────
+  // For direct /post/:id URLs: loads a window of posts centered on the target
+  // in a single round trip. The backend returns has_newer / has_older flags so
+  // bi-directional cursor scroll works from the first render.
+  fetchAroundPost: async (postId) => {
+    set({ listLoading: true, listError: null, cursorMode: false });
+    try {
+      const { data } = await api.get(`/post/around/${postId}`);
+      const incoming = data.posts ?? [];
+      set({
+        posts: incoming,
+        listLoading: false,
+        cursorMode: true,
+        hasNewerPosts: data.has_newer ?? false,
+        hasOlderPosts: data.has_older ?? false,
+        olderLoading: false,
+        newerLoading: false,
+      });
+    } catch (err) {
+      set({ listLoading: false, listError: err.message });
+    }
+  },
+
+  // ── loadOlderPosts ────────────────────────────────────────────────────────
+  // Appends posts older than the current oldest post (cursor = min id in list).
+  loadOlderPosts: async () => {
+    const { posts, hasOlderPosts, olderLoading } = usePostStore.getState();
+    if (!hasOlderPosts || olderLoading || posts.length === 0) return;
+    const minId = Math.min(...posts.map((p) => p.id));
+    set({ olderLoading: true });
+    try {
+      const { data } = await api.get("/post/cursor", {
+        params: { before_id: minId },
+      });
+      const incoming = data.posts ?? [];
+      set((s) => ({
+        posts: [...s.posts, ...incoming],
+        hasOlderPosts: data.has_more ?? false,
+        olderLoading: false,
+      }));
+    } catch (err) {
+      set({ olderLoading: false, listError: err.message });
+    }
+  },
+
+  // ── loadNewerPosts ────────────────────────────────────────────────────────
+  // Prepends posts newer than the current newest post (cursor = max id in list).
+  loadNewerPosts: async () => {
+    const { posts, hasNewerPosts, newerLoading } = usePostStore.getState();
+    if (!hasNewerPosts || newerLoading || posts.length === 0) return;
+    const maxId = Math.max(...posts.map((p) => p.id));
+    set({ newerLoading: true });
+    try {
+      const { data } = await api.get("/post/cursor", {
+        params: { after_id: maxId },
+      });
+      const incoming = data.posts ?? [];
+      set((s) => ({
+        posts: [...incoming, ...s.posts],
+        hasNewerPosts: data.has_more ?? false,
+        newerLoading: false,
+      }));
+    } catch (err) {
+      set({ newerLoading: false, listError: err.message });
     }
   },
 
@@ -51,7 +131,14 @@ const usePostStore = create((set, get) => ({
       const encoded = encodeURIComponent(query.trim()).replace(/%20/g, "%20");
       const params = username ? { user: username } : undefined;
       const { data } = await api.get(`/post/search/${encoded}`, { params });
-      set({ posts: data.posts ?? [], listLoading: false, hasMore: false });
+      set({
+        posts: data.posts ?? [],
+        listLoading: false,
+        hasMore: false,
+        cursorMode: false,
+        hasNewerPosts: false,
+        hasOlderPosts: false,
+      });
     } catch (err) {
       set({ listLoading: false, listError: err.message });
     }

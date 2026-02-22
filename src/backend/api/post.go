@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"wallium/cache"
+	walliumdb "wallium/db"
 	dbgen "wallium/db/gen"
 	"wallium/utils"
 
@@ -97,6 +98,126 @@ func (s *Server) Search(c fiber.Ctx) error {
 		return err
 	}
 	return c.JSON(fiber.Map{"posts": posts})
+}
+
+// GetPostPosition returns the 0-based offset and 1-based page number of a
+// post in the default list (ORDER BY id DESC, limit=50). Used by the frontend
+// to jump directly to the correct page when opening a deep /post/:id URL
+// without chase-fetching every preceding page.
+func (s *Server) GetPostPosition(c fiber.Ctx) error {
+	const limit = 50
+
+	id, err := strconv.ParseInt(c.Params("post_id", "0"), 10, 32)
+	if err != nil || id == 0 {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid post id")
+	}
+
+	u, _ := s.sessionUser(c)
+	userLevel := int32(0)
+	if u != nil {
+		userLevel = u.Level
+	}
+
+	offset, err := s.store.GetPostOffset(c.Context(), int32(id), userLevel)
+	if err != nil {
+		return err
+	}
+	page := int(offset)/limit + 1
+	return c.JSON(fiber.Map{"offset": offset, "page": page})
+}
+
+// GetPostsAround returns up to `limit` posts newer than + the target post +
+// up to `limit` posts older than the given post id, all in DESC id order.
+// Response: { posts, has_newer, has_older }
+func (s *Server) GetPostsAround(c fiber.Ctx) error {
+	const defaultLimit = int32(50)
+
+	id, err := strconv.ParseInt(c.Params("post_id", "0"), 10, 32)
+	if err != nil || id == 0 {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid post id")
+	}
+
+	u, _ := s.sessionUser(c)
+	userID := int32(0)
+	userLevel := int32(0)
+	if u != nil {
+		userID = u.ID
+		userLevel = u.Level
+	}
+
+	newer, target, older, hasNewer, hasOlder, err := s.store.GetPostsAround(
+		c.Context(), int32(id), userID, userLevel, defaultLimit,
+	)
+	if err != nil {
+		return err
+	}
+
+	// Combine: newer (DESC) + target + older (DESC) → single DESC list.
+	var posts []walliumdb.PostWithVote
+	posts = append(posts, newer...)
+	if target.ID != 0 {
+		posts = append(posts, target)
+	}
+	posts = append(posts, older...)
+
+	return c.JSON(fiber.Map{"posts": posts, "has_newer": hasNewer, "has_older": hasOlder})
+}
+
+// GetPostsCursor returns posts using cursor-based pagination.
+// Query params (mutually exclusive):
+//
+//	before_id=X  →  posts with id < X, ORDER BY id DESC, LIMIT limit
+//	after_id=X   →  posts with id > X, ORDER BY id DESC, LIMIT limit
+func (s *Server) GetPostsCursor(c fiber.Ctx) error {
+	const defaultLimit = int32(50)
+
+	beforeStr := c.Query("before_id")
+	afterStr := c.Query("after_id")
+
+	u, _ := s.sessionUser(c)
+	userID := int32(0)
+	userLevel := int32(0)
+	if u != nil {
+		userID = u.ID
+		userLevel = u.Level
+	}
+
+	var posts []walliumdb.PostWithVote
+	var hasMore bool
+	var err error
+
+	switch {
+	case beforeStr != "":
+		beforeID, pErr := strconv.ParseInt(beforeStr, 10, 32)
+		if pErr != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid before_id")
+		}
+		posts, err = s.store.GetPostsOlderThan(c.Context(), int32(beforeID), userID, userLevel, defaultLimit+1)
+		if err != nil {
+			return err
+		}
+		if len(posts) > int(defaultLimit) {
+			hasMore = true
+			posts = posts[:defaultLimit]
+		}
+	case afterStr != "":
+		afterID, pErr := strconv.ParseInt(afterStr, 10, 32)
+		if pErr != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid after_id")
+		}
+		posts, err = s.store.GetPostsNewerThan(c.Context(), int32(afterID), userID, userLevel, defaultLimit+1)
+		if err != nil {
+			return err
+		}
+		if len(posts) > int(defaultLimit) {
+			hasMore = true
+			posts = posts[:defaultLimit]
+		}
+	default:
+		return fiber.NewError(fiber.StatusBadRequest, "before_id or after_id required")
+	}
+
+	return c.JSON(fiber.Map{"posts": posts, "has_more": hasMore})
 }
 
 func (s *Server) GetPost(c fiber.Ctx) error {

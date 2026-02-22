@@ -6,21 +6,33 @@
  * inserted immediately after the row that contains that post.
  *
  * Row descriptor shapes:
+ *   { type: 'loading-top' }               — spinner prepended when loading newer
  *   { type: 'posts',    items: Post[], startIndex: number }
  *   { type: 'expanded', postId: number }
- *   { type: 'loading' }
+ *   { type: 'loading' }                   — spinner appended when loading older
  *
- * @param {Array}   posts       flat array of post objects
- * @param {number}  columns     number of grid columns
- * @param {number|null} expandedId  id of the expanded post (or null)
- * @param {boolean} isLoading   whether more posts are being loaded
+ * @param {Array}   posts          flat array of post objects
+ * @param {number}  columns        number of grid columns
+ * @param {number|null} expandedId id of the expanded post (or null)
+ * @param {boolean} isLoadingBottom whether more older posts are being loaded
+ * @param {boolean} isLoadingTop    whether more newer posts are being loaded
  * @returns {Array} row descriptors
  */
-export function buildVirtualRows(posts, columns, expandedId, isLoading) {
+export function buildVirtualRows(
+  posts,
+  columns,
+  expandedId,
+  isLoadingBottom,
+  isLoadingTop = false,
+) {
   const rows = [];
+
+  if (isLoadingTop) {
+    rows.push({ type: "loading-top" });
+  }
+
   let i = 0;
   let insertedExpanded = false;
-  let expandedRowIndex = null; // which row index (0-based in rows array) contains the expanded post
 
   while (i < posts.length) {
     const slice = posts.slice(i, i + columns);
@@ -33,7 +45,6 @@ export function buildVirtualRows(posts, columns, expandedId, isLoading) {
       !insertedExpanded &&
       slice.some((p) => p.id === expandedId)
     ) {
-      expandedRowIndex = rows.length; // will be inserted at this position
       rows.push({ type: "expanded", postId: expandedId });
       insertedExpanded = true;
     }
@@ -41,7 +52,7 @@ export function buildVirtualRows(posts, columns, expandedId, isLoading) {
     i += columns;
   }
 
-  if (isLoading) {
+  if (isLoadingBottom) {
     rows.push({ type: "loading" });
   }
 

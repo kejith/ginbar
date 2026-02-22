@@ -17,12 +17,16 @@ export default function Home() {
 
   const [expandedId, setExpandedId] = useState(initialExpanded);
 
-  const { listError, fetchPosts, search } = usePostStore();
+  const { listError, fetchPosts, fetchAroundPost, search } = usePostStore();
 
   // Initial data load
   useEffect(() => {
     if (query) {
       search(query);
+    } else if (initialExpanded && !tag) {
+      // Load a window of posts centered on the target post — O(1) round trips,
+      // no page-chasing. Cursor-mode bi-directional scroll takes over after.
+      fetchAroundPost(initialExpanded);
     } else {
       fetchPosts({ page: 1, tag: tag || undefined, reset: true });
     }

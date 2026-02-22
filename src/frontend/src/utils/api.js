@@ -14,10 +14,29 @@ const api = axios.create({
   headers: { "Content-Type": "application/json" },
 });
 
+// Retry GET requests on network errors (ECONNREFUSED / backend not yet ready).
+// Retries up to 5 times with 1 s delay. Only safe/idempotent methods retry.
+const MAX_RETRIES = 5;
+const RETRY_DELAY_MS = 1000;
+
 api.interceptors.response.use(
   (res) => res,
-  (err) => {
+  async (err) => {
     const status = err.response?.status ?? 0;
+    const method = (err.config?.method ?? "").toUpperCase();
+    const retryCount = err.config?._retryCount ?? 0;
+
+    // Retry on network error for safe methods only
+    if (
+      status === 0 &&
+      ["GET", "HEAD"].includes(method) &&
+      retryCount < MAX_RETRIES
+    ) {
+      err.config._retryCount = retryCount + 1;
+      await new Promise((r) => setTimeout(r, RETRY_DELAY_MS));
+      return api(err.config);
+    }
+
     const message =
       err.response?.data?.error ??
       err.response?.data?.message ??

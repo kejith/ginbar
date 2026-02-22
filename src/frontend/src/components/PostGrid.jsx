@@ -1,4 +1,10 @@
-import { useRef, useEffect, useCallback, useMemo } from "react";
+import {
+  useRef,
+  useEffect,
+  useLayoutEffect,
+  useCallback,
+  useMemo,
+} from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import PostCard from "./PostCard.jsx";
 import PostCardSkeleton from "./PostCardSkeleton.jsx";
@@ -31,15 +37,43 @@ export default function PostGrid({
   setExpandedId,
   highlightCommentId,
 }) {
-  const { posts, page, hasMore, listLoading, fetchPosts } = usePostStore();
+  const {
+    posts,
+    page,
+    hasMore,
+    listLoading,
+    fetchPosts,
+    // cursor-mode state (active when a direct /post/:id URL is opened)
+    cursorMode,
+    hasOlderPosts,
+    hasNewerPosts,
+    olderLoading,
+    newerLoading,
+    loadOlderPosts,
+    loadNewerPosts,
+  } = usePostStore();
+
   const cols = useColumns();
   const parentRef = useRef(null);
   const initialScrollDone = useRef(false);
+  // True until the initial scroll-to-target has been performed once.
+  const needsInitialScroll = useRef(!!initialExpanded);
+  // Becomes true after the final retry timeout fires — prevents near-top
+  // load-newer from triggering while initial-scroll retries are still pending.
+  const scrollSettled = useRef(!initialExpanded);
+  // Holds pending setTimeout IDs for the initial-scroll retries so they can
+  // be cancelled if a prepend happens before they fire.
+  const scrollRetryIds = useRef([]);
+  // Saved before a newer-posts prepend so we can compensate the scroll position.
+  const prependRef = useRef(null);
 
-  // Build virtual row descriptors
+  // ── Virtual row descriptors ───────────────────────────────────────────────
+  // In cursor mode the bottom loader is driven by olderLoading; in page mode
+  // by listLoading.
+  const isLoadingBottom = cursorMode ? olderLoading : listLoading;
   const rows = useMemo(
-    () => buildVirtualRows(posts, cols, expandedId, listLoading),
-    [posts, cols, expandedId, listLoading],
+    () => buildVirtualRows(posts, cols, expandedId, isLoadingBottom),
+    [posts, cols, expandedId, isLoadingBottom],
   );
 
   const virtualizer = useVirtualizer({
@@ -59,23 +93,80 @@ export default function PostGrid({
         : undefined,
   });
 
-  // ── Infinite scroll ───────────────────────────────────────────────────────
+  // ── Prepend scroll-anchor compensation ───────────────────────────────────
+  // When newer posts are prepended the total virtual height grows. We save
+  // scrollTop + totalHeight just before the prepend, then in a layout-effect
+  // (fires before paint, after React's DOM mutations) restore
+  // scrollTop += delta so the existing content stays in place on screen.
+  useLayoutEffect(() => {
+    if (!prependRef.current || !parentRef.current) return;
+    const delta = virtualizer.getTotalSize() - prependRef.current.totalHeight;
+    if (delta > 0) {
+      parentRef.current.scrollTop = prependRef.current.scrollTop + delta;
+    }
+    prependRef.current = null;
+  }, [rows]); // eslint-disable-line react-hooks/exhaustive-deps — runs on every rows change
+
+  // ── Bidirectional infinite scroll ────────────────────────────────────────
   const virtualItems = virtualizer.getVirtualItems();
 
   useEffect(() => {
     if (!virtualItems.length) return;
+    const first = virtualItems[0];
     const last = virtualItems[virtualItems.length - 1];
-    // When the last visible item is within 3 rows of the end, fetch more
-    if (last.index >= rows.length - 3 && hasMore && !listLoading) {
-      fetchPosts({ page: page + 1, tag, reset: false });
-    }
-  }, [virtualItems, rows.length, hasMore, listLoading, page, tag, fetchPosts]);
 
-  // ── Scroll so the clicked card row is at the top (panel appears right below nav)
+    // Near-top → load newer posts (cursor mode only).
+    // Guard: don't trigger while the initial-scroll retries are still pending;
+    // doing so would start a prepend that fights the in-flight retries.
+    if (
+      cursorMode &&
+      scrollSettled.current &&
+      first.index <= 2 &&
+      hasNewerPosts &&
+      !newerLoading
+    ) {
+      // Cancel any stale initial-scroll retries before anchoring the scroll.
+      scrollRetryIds.current.forEach(clearTimeout);
+      scrollRetryIds.current = [];
+      if (parentRef.current) {
+        prependRef.current = {
+          scrollTop: parentRef.current.scrollTop,
+          totalHeight: virtualizer.getTotalSize(),
+        };
+      }
+      loadNewerPosts();
+    }
+
+    // Near-bottom → load older posts
+    if (last.index >= rows.length - 3) {
+      if (cursorMode) {
+        if (hasOlderPosts && !olderLoading) loadOlderPosts();
+      } else {
+        if (hasMore && !listLoading)
+          fetchPosts({ page: page + 1, tag, reset: false });
+      }
+    }
+  }, [
+    virtualItems,
+    rows.length,
+    cursorMode,
+    hasNewerPosts,
+    newerLoading,
+    hasOlderPosts,
+    olderLoading,
+    hasMore,
+    listLoading,
+    page,
+    tag,
+    fetchPosts,
+    loadOlderPosts,
+    loadNewerPosts,
+    virtualizer,
+  ]);
+
+  // ── Scroll so the clicked card row is at the top (panel appears below nav)
   useEffect(() => {
     if (expandedId == null) return;
-    // Target the card row, not the expanded panel — this guarantees the panel
-    // starts exactly at the top edge of the scroll viewport.
     const cardRowIdx = rows.findIndex(
       (r) => r.type === "posts" && r.items.some((p) => p.id === expandedId),
     );
@@ -88,16 +179,51 @@ export default function PostGrid({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [expandedId]); // intentionally omit rows/virtualizer — only trigger on id change
 
-  // ── Chase-fetch pages until initialExpanded post appears in the list ──────
+  // ── Initial scroll: fires when rows update and the target row first appears.
+  //    scrollToIndex uses estimated row heights for unmeasured rows, so the
+  //    first call may land slightly off. We retry with setTimeout delays so
+  //    ResizeObserver has time to measure newly-rendered rows and the
+  //    virtualizer can recalculate the accurate offset.
+  //    Each retry first checks whether we're already at the correct row;
+  //    if so it's a no-op so subsequent retries don't shift a correct position.
   useEffect(() => {
-    if (!initialExpanded || initialScrollDone.current) return;
-    const found = posts.some((p) => p.id === initialExpanded);
-    if (!found && hasMore && !listLoading) {
-      fetchPosts({ page: page + 1, tag, reset: false });
-    }
-  }, [initialExpanded, posts, hasMore, listLoading, page, tag, fetchPosts]);
+    if (!needsInitialScroll.current) return;
+    const cardRowIdx = rows.findIndex(
+      (r) =>
+        r.type === "posts" && r.items.some((p) => p.id === initialExpanded),
+    );
+    if (cardRowIdx === -1) return;
 
-  // ── Open expanded panel once the target post is loaded ────────────────────
+    needsInitialScroll.current = false;
+
+    const scroll = () => {
+      // If the target row is already the first visible item, we're done.
+      const firstVisible = virtualizer.getVirtualItems()[0];
+      if (firstVisible && firstVisible.index === cardRowIdx) return;
+      virtualizer.scrollToIndex(cardRowIdx, {
+        align: "start",
+        behavior: "auto",
+      });
+    };
+
+    scroll();
+    scrollSettled.current = false;
+    const ids = [50, 150, 350, 600].map((d, i, arr) =>
+      setTimeout(() => {
+        scroll();
+        // Mark settled after the final retry fires.
+        if (i === arr.length - 1) scrollSettled.current = true;
+      }, d),
+    );
+    scrollRetryIds.current = ids;
+    return () => {
+      ids.forEach(clearTimeout);
+      scrollRetryIds.current = [];
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rows]);
+
+  // ── Open expanded panel once the target post is in the list ──────────────
   useEffect(() => {
     if (!initialExpanded || initialScrollDone.current) return;
     const found = posts.some((p) => p.id === initialExpanded);
@@ -108,7 +234,7 @@ export default function PostGrid({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialExpanded, posts]);
 
-  // ── Preload full-size images for the expanded post + 2 neighbours each side
+  // ── Preload full-size images for the expanded post + 2 neighbours ────────
   useEffect(() => {
     if (expandedId == null) return;
     const idx = posts.findIndex((p) => p.id === expandedId);
@@ -166,22 +292,34 @@ export default function PostGrid({
       const nextId = posts[currentPostIndex + 1].id;
       setExpandedId(nextId);
       onPostOpen?.(nextId);
-    } else if (hasMore && !listLoading) {
-      // Fetch next page; once posts update the effect will find the new post
-      await fetchPosts({ page: page + 1, tag, reset: false });
-      // After fetch, pick the first newly arrived post (index = currentPostIndex + 1)
-      // The posts array will update and we rely on the next render to resolve.
-      // We peek at the store directly after await.
-      const updated = usePostStore.getState().posts;
-      if (updated.length > currentPostIndex + 1) {
-        const nextId = updated[currentPostIndex + 1].id;
-        setExpandedId(nextId);
-        onPostOpen?.(nextId);
+    } else if (cursorMode) {
+      if (hasOlderPosts && !olderLoading) {
+        await loadOlderPosts();
+        const updated = usePostStore.getState().posts;
+        if (updated.length > currentPostIndex + 1) {
+          const nextId = updated[currentPostIndex + 1].id;
+          setExpandedId(nextId);
+          onPostOpen?.(nextId);
+        }
+      }
+    } else {
+      if (hasMore && !listLoading) {
+        await fetchPosts({ page: page + 1, tag, reset: false });
+        const updated = usePostStore.getState().posts;
+        if (updated.length > currentPostIndex + 1) {
+          const nextId = updated[currentPostIndex + 1].id;
+          setExpandedId(nextId);
+          onPostOpen?.(nextId);
+        }
       }
     }
   }, [
     currentPostIndex,
     posts,
+    cursorMode,
+    hasOlderPosts,
+    olderLoading,
+    loadOlderPosts,
     hasMore,
     listLoading,
     fetchPosts,
@@ -192,7 +330,12 @@ export default function PostGrid({
   ]);
 
   const canGoNewer = currentPostIndex > 0;
-  const canGoOlder = currentPostIndex < posts.length - 1 || hasMore;
+  const canGoOlder =
+    currentPostIndex < posts.length - 1 ||
+    (cursorMode ? hasOlderPosts : hasMore);
+
+  // Pad skeletons for incomplete last row only in page mode.
+  const showPadSkeletons = !cursorMode && !hasMore;
 
   // ── Render ────────────────────────────────────────────────────────────────
   const totalHeight = virtualizer.getTotalSize();
@@ -203,6 +346,31 @@ export default function PostGrid({
       className="flex-1 min-h-0 overflow-y-auto"
       style={{ contain: "strict" }}
     >
+      {/* Loading-newer skeleton row — sticky at top, outside the virtual DOM
+          so it doesn't shift virtual indices. Negative bottom margin means
+          it overlaps the first row instead of pushing content down. */}
+      {newerLoading && (
+        <div
+          className="sticky top-0 z-10 pointer-events-none"
+          style={{
+            marginBottom: `-${LOADING_HEIGHT}px`,
+            height: LOADING_HEIGHT,
+          }}
+        >
+          <div
+            className="grid px-2 py-0.5"
+            style={{
+              gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+              gap: "var(--grid-gap)",
+            }}
+          >
+            {Array.from({ length: cols }).map((_, i) => (
+              <PostCardSkeleton key={i} />
+            ))}
+          </div>
+        </div>
+      )}
+
       <div style={{ height: totalHeight, position: "relative" }}>
         {virtualizer.getVirtualItems().map((vItem) => {
           const row = rows[vItem.index];
@@ -237,9 +405,9 @@ export default function PostGrid({
                       isExpanded={post.id === expandedId}
                     />
                   ))}
-                  {/* Pad incomplete last row with skeletons */}
+                  {/* Pad incomplete last row with ghost cards */}
                   {row.items.length < cols &&
-                    !hasMore &&
+                    showPadSkeletons &&
                     Array.from({
                       length: cols - row.items.length,
                     }).map((_, i) => <PostCardSkeleton key={`sk-${i}`} />)}
@@ -277,7 +445,7 @@ export default function PostGrid({
         })}
       </div>
 
-      {/* Empty state (only when not loading and no posts loaded at all) */}
+      {/* Empty state */}
       {!listLoading && posts.length === 0 && (
         <p className="absolute inset-0 flex items-center justify-center text-sm text-(--color-muted)">
           nothing here yet
