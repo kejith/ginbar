@@ -79,8 +79,8 @@ fn rt() -> tokio::runtime::Runtime {
 
 fn bench_convert_to_avif_fullres(c: &mut Criterion) {
     let mut group = c.benchmark_group("convert_to_avif_fullres");
-    // AVIF encoding is slow — reduce sample count for practical bench times.
     group.sample_size(10);
+    group.measurement_time(std::time::Duration::from_secs(15));
 
     for &(name, path) in TEST_INPUTS {
         if !input_available(path) {
@@ -108,6 +108,7 @@ fn bench_convert_to_avif_fullres(c: &mut Criterion) {
 fn bench_convert_to_avif_thumbnail(c: &mut Criterion) {
     let mut group = c.benchmark_group("convert_to_avif_thumbnail");
     group.sample_size(10);
+    group.measurement_time(std::time::Duration::from_secs(20));
 
     for &(name, path) in TEST_INPUTS {
         if !input_available(path) {
@@ -134,6 +135,7 @@ fn bench_convert_to_avif_thumbnail(c: &mut Criterion) {
 fn bench_normalize_to_jpeg(c: &mut Criterion) {
     let mut group = c.benchmark_group("normalize_to_jpeg");
     group.sample_size(10);
+    group.measurement_time(std::time::Duration::from_secs(7));
 
     for &(name, path) in TEST_INPUTS {
         if !input_available(path) {
@@ -160,6 +162,7 @@ fn bench_normalize_to_jpeg(c: &mut Criterion) {
 
 fn bench_compute_phash(c: &mut Criterion) {
     let mut group = c.benchmark_group("compute_phash");
+    group.measurement_time(std::time::Duration::from_secs(10));
 
     for &(name, path) in TEST_INPUTS {
         if !input_available(path) {
@@ -184,6 +187,7 @@ fn bench_compute_phash(c: &mut Criterion) {
 fn bench_create_thumbnail(c: &mut Criterion) {
     let mut group = c.benchmark_group("create_thumbnail");
     group.sample_size(10);
+    group.measurement_time(std::time::Duration::from_secs(13));
 
     for &(name, path) in TEST_INPUTS {
         if !input_available(path) {
@@ -212,8 +216,8 @@ fn bench_create_thumbnail(c: &mut Criterion) {
 
 fn bench_process_image(c: &mut Criterion) {
     let mut group = c.benchmark_group("process_image");
-    // End-to-end is the slowest — minimal samples.
     group.sample_size(10);
+    group.measurement_time(std::time::Duration::from_secs(30));
 
     for &(name, path) in TEST_INPUTS {
         if !input_available(path) {
@@ -248,6 +252,7 @@ fn bench_process_image(c: &mut Criterion) {
 fn bench_avif_preset_comparison(c: &mut Criterion) {
     let mut group = c.benchmark_group("avif_preset_comparison");
     group.sample_size(10);
+    group.measurement_time(std::time::Duration::from_secs(25));
 
     // Use the medium-sized input for the comparison.
     let (name, path) = TEST_INPUTS[1];
