@@ -114,7 +114,7 @@
   "forwardPorts": [3000, 5173, 5432, 5050],
   "portsAttributes": {
     "3000": { "label": "Backend API", "onAutoForward": "notify" },
-    "5173": { "label": "Frontend (Vite)", "onAutoForward": "openBrowser" },
+    "5173": { "label": "Frontend (Vite)", "onAutoForward": "notify" },
     "5432": { "label": "PostgreSQL", "onAutoForward": "silent" },
     "5050": { "label": "pgAdmin", "onAutoForward": "notify" }
   },
