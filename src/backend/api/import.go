@@ -151,6 +151,8 @@ w.Flush()
 //  3. Download + process each row concurrently             → "processing" event per item.
 //  4. Emit "done".
 //
+// The operation is also registered as a user-specific tracked job.
+//
 //POST /api/post/import/pr0gramm
 //Content-Type: application/json
 //Body: { "tags": "...", "flags": 1, "maxPages": 5 }
@@ -184,6 +186,14 @@ maxPages = 50
 tags := strings.TrimSpace(form.Tags)
 userName := u.Name
 
+job := s.jobs.Register(fmt.Sprintf("pr0gramm import: %s", tags), JobOpts{
+	Description:   fmt.Sprintf("Importing posts matching \"%s\" (flags=%d, max %d pages)", tags, flags, maxPages),
+	Visibility:    VisibilityUser,
+	OwnerUserID:   u.ID,
+	OwnerUserName: userName,
+	Total:         maxPages,
+})
+
 // Bind the correlation ID to every log line this import produces.
 reqID, _ := c.Locals("request_id").(string)
 log := s.log.With("request_id", reqID)
@@ -196,6 +206,7 @@ c.Set("X-Accel-Buffering", "no")
 
 c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
 ctx := context.Background()
+job.Start()
 
 log.InfoContext(ctx, "pr0gramm import started",
 slog.String("tags", tags),
@@ -212,6 +223,9 @@ successPages := 0
 failedPages := 0
 
 for page := 1; page <= maxPages; page++ {
+if job.Ctx().Err() != nil {
+break
+}
 resp, fetchErr := fetchPr0grammPage(tags, flags, older)
 if fetchErr != nil {
 failedPages++
@@ -236,6 +250,8 @@ continue
 successPages++
 allItems = append(allItems, resp.Items...)
 older = minPromoted(resp.Items)
+job.SetProgress(page, maxPages,
+	fmt.Sprintf("fetching page %d/%d · %d items", page, maxPages, len(allItems)))
 atEnd := resp.AtEnd || len(resp.Items) == 0
 
 writeSSE(w, sseFetchingEvent{
@@ -395,6 +411,12 @@ slog.Int("insert_errors", insertErrors),
 
 // ── Hand off to background process queue ──────────────────────────────
 s.queue.Notify()
+
+if job.Ctx().Err() != nil {
+	// Was cancelled — already marked by JobManager.
+} else {
+	job.Complete(fmt.Sprintf("%d posts queued · %d skipped · %d filtered", total, skippedDedup, filteredExt))
+}
 
 writeSSE(w, sseDoneEvent{
 Phase:    phDone,
@@ -743,6 +765,7 @@ type sseLoadNewDone struct {
 // from the pr0gramm "new" feed (flags=9, non-promoted) until at least 500 new
 // dirty posts have been inserted into the database, then hands off to the
 // background process queue.  Progress is streamed as SSE.
+// The operation is also registered as a tracked job.
 //
 // POST /api/admin/posts/load-new
 func (s *Server) LoadNewFromPr0gramm(c fiber.Ctx) error {
@@ -755,6 +778,12 @@ func (s *Server) LoadNewFromPr0gramm(c fiber.Ctx) error {
 	}
 	userName := u.Name
 
+	job := s.jobs.Register("Load 500 new posts from pr0gramm", JobOpts{
+		Description: "Fetching the pr0gramm \"New\" feed and inserting dirty posts",
+		Visibility:  VisibilityGlobal,
+		Total:       targetDirty,
+	})
+
 	ctx := context.Background()
 
 	c.Set("Content-Type", "text/event-stream")
@@ -763,6 +792,8 @@ func (s *Server) LoadNewFromPr0gramm(c fiber.Ctx) error {
 	c.Set("X-Accel-Buffering", "no")
 
 	c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
+		job.Start()
+
 		var (
 			page         int
 			totalRead    int
@@ -773,11 +804,17 @@ func (s *Server) LoadNewFromPr0gramm(c fiber.Ctx) error {
 		)
 
 		for inserted < targetDirty {
+			// Check for cancellation.
+			if job.Ctx().Err() != nil {
+				break
+			}
+
 			page++
 			resp, err := fetchPr0grammNewPage(newFlags, olderID)
 			if err != nil {
 				s.log.ErrorContext(ctx, "load-new: page fetch failed",
 					slog.Int("page", page), slog.Any("err", err))
+				job.Fail(fmt.Sprintf("page %d fetch failed: %v", page, err))
 				// Emit final done event with what we have so far and stop.
 				writeSSE(w, sseLoadNewDone{
 					Phase:        phDone,
@@ -831,6 +868,9 @@ func (s *Server) LoadNewFromPr0gramm(c fiber.Ctx) error {
 				}
 			}
 
+			job.SetProgress(inserted, targetDirty,
+				fmt.Sprintf("page %d · %d read · %d skipped", page, totalRead, skippedDedup))
+
 			writeSSE(w, sseLoadNewProgress{
 				Phase:        "progress",
 				Page:         page,
@@ -851,6 +891,12 @@ func (s *Server) LoadNewFromPr0gramm(c fiber.Ctx) error {
 		// Notify background worker.
 		if inserted > 0 {
 			s.queue.Notify()
+		}
+
+		if job.Ctx().Err() != nil {
+			// Was cancelled — already marked by JobManager.
+		} else {
+			job.Complete(fmt.Sprintf("%d posts queued across %d pages", inserted, page))
 		}
 
 		writeSSE(w, sseLoadNewDone{
