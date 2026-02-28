@@ -21,3 +21,6 @@ dump.rdb
 nginx/certs/*.crt
 nginx/certs/*.key
 nginx/certs/*.pem
+
+# ── VSCode settings (personal preferences) ─────────────────────────────────
+.github/
