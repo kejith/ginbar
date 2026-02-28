@@ -79,6 +79,33 @@ services:
       retries: 5
       start_period: 10s
 
+  # ── Rust processing worker ───────────────────────────────────────────────
+  worker:
+    image: wallium-worker
+    build:
+      context: .
+      target: worker
+    restart: unless-stopped
+    environment:
+      DB_URL: postgres://${POSTGRES_USER:-wallium}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-wallium}?sslmode=disable
+      REDIS_URL: redis://redis:6379
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
+      WORKER_POLL_INTERVAL: ${WORKER_POLL_INTERVAL:-5}
+      LOG_FORMAT: json
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - ${MEDIA_DIR:-/opt/wallium/media}:/app/public
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 2G
+
   # ── goose migrations (run once: docker compose run --rm migrate) ──────────
   migrate:
     image: wallium-backend

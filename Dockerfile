@@ -44,7 +44,23 @@ RUN CGO_ENABLED=1 GOOS=linux go build -o wallium .
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Stage 3: backend runtime image
+# Stage 3: build Rust worker
+# ─────────────────────────────────────────────────────────────────────────────
+FROM rust:1-bookworm AS worker-builder
+
+WORKDIR /app
+
+# Cache deps by building with a dummy main first
+COPY src/worker/Cargo.toml ./
+RUN mkdir src && echo 'fn main() {}' > src/main.rs && cargo build --release && rm -rf src
+
+# Build actual worker
+COPY src/worker/ ./
+RUN touch src/main.rs && cargo build --release
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 4: backend runtime image
 # ─────────────────────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim AS backend
 
@@ -75,7 +91,32 @@ CMD ["./wallium"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Stage 4: nginx — SPA + /api proxy + static media from shared volume
+# Stage 5: worker runtime image (Rust processing worker)
+# ─────────────────────────────────────────────────────────────────────────────
+FROM debian:bookworm-slim AS worker
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    ffmpeg \
+    util-linux \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY --from=worker-builder /app/target/release/wallium-worker ./wallium-worker
+
+# Media dirs — overridden at runtime by the shared volume mount
+RUN mkdir -p \
+    ./public/images/thumbnails \
+    ./public/videos \
+    ./public/upload \
+    ./tmp/thumbnails
+
+CMD ["./wallium-worker"]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 6: nginx — SPA + /api proxy + static media from shared volume
 # ─────────────────────────────────────────────────────────────────────────────
 FROM nginx:1.27-alpine AS frontend
 
