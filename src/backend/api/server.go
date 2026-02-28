@@ -39,6 +39,7 @@ type Server struct {
 	log      *slog.Logger
 	dirs     utils.Directories
 	queue    *ProcessQueue
+	jobs     *JobManager
 }
 
 // NewServer wires up the Fiber v3 application.
@@ -109,6 +110,7 @@ func NewServer(store *db.Store, rdb *redis.Client, sessionSecret string, log *sl
 		dirs:     dirs,
 	}
 	srv.queue = newProcessQueue(srv, log)
+	srv.jobs = NewJobManager()
 
 	// ── Global middleware ─────────────────────────────────────────────────────
 	// requestIDMiddleware first — all subsequent middleware/handlers can read it.
@@ -197,6 +199,16 @@ func NewServer(store *db.Store, rdb *redis.Client, sessionSecret string, log *sl
 	admin.Post("/posts/regenerate-images", srv.RegenerateImages)
 	admin.Post("/posts/load-new", srv.LoadNewFromPr0gramm)
 	admin.Post("/message/broadcast", srv.BroadcastMessage)
+
+	// Job management (admin sees all jobs).
+	admin.Get("/jobs", srv.ListAllJobs)
+	admin.Get("/jobs/stream", srv.AdminJobsStream)
+	admin.Post("/jobs/:id/cancel", srv.CancelJob)
+
+	// Job management (authenticated users see their own / global jobs).
+	jobs := api.Group("/jobs", srv.requireAuth)
+	jobs.Get("/", srv.ListMyJobs)
+	jobs.Get("/stream", srv.UserJobsStream)
 
 	// Static — SPA fallback (frontend served separately in dev via Vite proxy)
 	app.Use("/", static.New("./public", static.Config{Browse: false}))
