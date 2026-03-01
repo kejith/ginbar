@@ -2,13 +2,23 @@
 # Targets delegate into src/ sub-projects.
 # Run from repo root inside devcontainer.
 
-.PHONY: dev dev-backend dev-frontend migrate sqlc lint build up down logs migrate-prod dev-clean
+.PHONY: dev dev-build dev-build-backend dev-build-worker dev-backend dev-frontend migrate sqlc lint build up down logs migrate-prod dev-clean
 
 # ── Dev ───────────────────────────────────────────────────────────────────────
 
 ## dev: migrate + start backend (air) + frontend (vite) — Ctrl-C stops all
 dev:
 	@bash dev.sh
+
+## dev-build: compile Go backend + Rust worker binaries for local dev
+dev-build: dev-build-backend dev-build-worker
+	@echo "✓ dev binaries ready"
+
+dev-build-backend:
+	cd src/backend && go build -o wallium-backend .
+
+dev-build-worker:
+	cd src/worker && cargo build
 
 dev-backend:
 	cd src/backend && air

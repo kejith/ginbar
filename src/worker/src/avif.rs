@@ -230,7 +230,9 @@ fn encode_av1_raw(
     // immediately without buffering a GOP.  Essential for single-frame
     // still-image encoding — the default RANDOM_ACCESS (2) buffers frames
     // and may produce no output for a one-frame stream even after send_eos.
-    cfg.config.pred_structure = 0;
+    // SVT-AV1 v2.3.0 only accepts 1 (LOW_DELAY_P) or 2 (RANDOM_ACCESS);
+    // the old value 0 was removed.
+    cfg.config.pred_structure = 1;
 
     // Let the encoder auto-set the intra period based on pred_structure.
     // -1 means auto; combined with LOW_DELAY_P the single frame is always

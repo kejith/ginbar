@@ -203,80 +203,102 @@ pub async fn process_image(input: &Path, dirs: &Directories) -> Result<ImageResu
 
 /// Compute a 256-bit DCT perceptual hash, returned as four `i64` components.
 ///
-/// Algorithm (matches the semantics of Go's `goimagehash.ExtPerceptionHash(img, 16, 16)`):
-/// 1. Resize to 32×32 grayscale.
-/// 2. Apply a separable 2-D DCT-II (row-then-column).
-/// 3. Take the top-left 16×16 coefficient block (256 values).
-/// 4. Compute their mean.
-/// 5. Bit[i] = 1 if coeff[i] > mean, else 0.
-/// 6. Pack 64 bits per `i64` (little-endian bit order).
+/// Algorithm matches Go's `goimagehash.ExtPerceptionHash(img, 16, 16)`:
+/// 1. Resize to 256×256 grayscale  (imgSize = hashW × hashH = 16 × 16 = 256).
+/// 2. Apply a separable 2-D DCT-II (row-then-column), keeping only the
+///    top-left 16×16 low-frequency coefficients.
+/// 3. Compute the **median** of those 256 coefficients.
+/// 4. Bit[i] = 1 if coeff[i] > median, else 0.
+/// 5. Pack 64 bits per `i64` in big-endian bit order (MSB-first, matching Go).
 pub fn compute_phash(img: &image::DynamicImage) -> [i64; 4] {
-    // Step 1: resize to 32×32 and convert to grayscale luma.
-    let small = img.resize_exact(32, 32, FilterType::Lanczos3);
+    const IMG_SIZE: usize = 256; // hashW * hashH  (Go: width * height)
+    const HASH_W: usize = 16;
+    const HASH_H: usize = 16;
+    const HASH_BITS: usize = HASH_W * HASH_H; // 256
+
+    // Step 1: resize to 256×256 grayscale.
+    // Go uses resize.Bilinear → FilterType::Triangle is the equivalent.
+    let small = img.resize_exact(IMG_SIZE as u32, IMG_SIZE as u32, FilterType::Triangle);
     let gray = small.to_luma8();
 
-    let mut pixels = [[0f32; 32]; 32]; // [row][col]
-    for (y, row) in pixels.iter_mut().enumerate() {
-        for (x, px) in row.iter_mut().enumerate() {
-            *px = gray.get_pixel(x as u32, y as u32).0[0] as f32;
+    // Build pixel buffer as f64 (matching Go's float64 precision).
+    let mut pixels = vec![0f64; IMG_SIZE * IMG_SIZE];
+    for y in 0..IMG_SIZE {
+        for x in 0..IMG_SIZE {
+            pixels[y * IMG_SIZE + x] = gray.get_pixel(x as u32, y as u32).0[0] as f64;
         }
     }
 
     // Step 2: separable 2-D DCT-II.
-    // Apply 1-D DCT to each row.
-    let mut dct = [[0f32; 32]; 32];
-    for (row_idx, row) in pixels.iter().enumerate() {
-        dct1d(row, &mut dct[row_idx]);
-    }
-    // Apply 1-D DCT to each column (transpose, DCT, transpose back).
-    for col in 0..32usize {
-        let mut col_in = [0f32; 32];
-        let mut col_out = [0f32; 32];
-        for row in 0..32usize {
-            col_in[row] = dct[row][col];
-        }
-        dct1d(&col_in, &mut col_out);
-        for row in 0..32usize {
-            dct[row][col] = col_out[row];
-        }
+    // Only compute the first HASH_W coefficients per row (the rest are unused).
+    let mut dct_rows = vec![0f64; IMG_SIZE * HASH_W];
+    for y in 0..IMG_SIZE {
+        dct1d_partial(
+            &pixels[y * IMG_SIZE..(y + 1) * IMG_SIZE],
+            &mut dct_rows[y * HASH_W..(y + 1) * HASH_W],
+            HASH_W,
+        );
     }
 
-    // Step 3: Collect the 16×16 top-left coefficients (256 values).
-    let mut coeffs = [0f32; 256];
-    let mut idx = 0usize;
-    for row in 0..16usize {
-        for col in 0..16usize {
-            coeffs[idx] = dct[row][col];
-            idx += 1;
+    // Column transform: for each of the 16 kept columns, compute only the
+    // first HASH_H (16) output coefficients from 256 row-DCT values.
+    let mut coeffs = [0f64; HASH_BITS];
+    let mut col_in = vec![0f64; IMG_SIZE];
+    let mut col_out = [0f64; HASH_H];
+    for x in 0..HASH_W {
+        for y in 0..IMG_SIZE {
+            col_in[y] = dct_rows[y * HASH_W + x];
+        }
+        dct1d_partial(&col_in, &mut col_out, HASH_H);
+        for y in 0..HASH_H {
+            coeffs[y * HASH_W + x] = col_out[y];
         }
     }
 
-    // Step 4: Mean of the 256 values.
-    let mean = coeffs.iter().sum::<f32>() / 256.0;
+    // Step 3: **median** of the 256 DCT coefficients (matching Go's etcs.MedianOfPixels).
+    // Using mean here was the root cause of false-positive duplicates: the DC
+    // coefficient dominates the mean → most bits are 0 for every image →
+    // hamming distance between any two images is artificially low.
+    let median = median_of_256(&coeffs);
 
-    // Steps 5–6: threshold and pack into 4 × i64.
+    // Step 4: threshold and pack into 4 × i64, big-endian bit order (matching Go).
+    // Go: indexOfBit = 64 - idx%64 - 1  →  first coefficient = MSB of phash[0].
     let mut result = [0i64; 4];
     for (i, &c) in coeffs.iter().enumerate() {
-        if c > mean {
-            result[i / 64] |= 1i64 << (i % 64);
+        if c > median {
+            let array_idx = i / 64;
+            let bit_idx = 63 - (i % 64);
+            result[array_idx] |= 1i64 << bit_idx;
         }
     }
     result
 }
 
-/// 1-D DCT-II for N=32 (in-place naive O(N²) — fast enough for N=32).
-fn dct1d(input: &[f32; 32], output: &mut [f32; 32]) {
-    use std::f32::consts::PI;
-    let n = 32usize;
-    let factor = PI / (2.0 * n as f32);
-    for k in 0..n {
-        let mut sum = 0f32;
+/// 1-D DCT-II computing only the first `k_max` output coefficients from an
+/// input of length `n`.  O(k_max × n) — for k_max=16, n=256 this is ~4 096
+/// multiplies per call, perfectly adequate.
+fn dct1d_partial(input: &[f64], output: &mut [f64], k_max: usize) {
+    use std::f64::consts::PI;
+    let n = input.len();
+    let factor = PI / (2.0 * n as f64);
+    for k in 0..k_max {
+        let mut sum = 0f64;
         for (x, &v) in input.iter().enumerate() {
-            sum += v * (factor * k as f32 * (2 * x + 1) as f32).cos();
+            sum += v * (factor * k as f64 * (2 * x + 1) as f64).cos();
         }
         output[k] = sum;
     }
 }
+
+/// Median of exactly 256 f64 values.
+fn median_of_256(values: &[f64; HASH_BITS_LEN]) -> f64 {
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    // Even length: average of the two middle values (index 127 and 128).
+    (sorted[127] + sorted[128]) / 2.0
+}
+
+const HASH_BITS_LEN: usize = 256;
 
 // ── Thumbnail creation (fully in-process) ────────────────────────────────────
 
