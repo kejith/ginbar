@@ -1,36 +1,27 @@
 //! Image and video processing pipeline.
 //!
-//! Key optimizations over the original implementation:
+//! Key optimizations:
 //!
-//! 1. **Skip ffmpeg normalization for common formats** – JPEG, PNG, WebP,
-//!    GIF, BMP and TIFF are decoded directly by the `image` crate (zune-jpeg
-//!    backend for JPEG is very fast).  Only exotic formats (AVIF, JXL, …)
-//!    fall back to an ffmpeg subprocess.
+//! 1. **Fully in-process AVIF encoding** – SVT-AV1 v2.3.0 native bindings
+//!    encode both full-res and thumbnails entirely in-process.  No ffmpeg or
+//!    ffprobe subprocess for images (eliminates fork/exec overhead, double
+//!    decode, and IPC).  ffmpeg is only used for video operations.
 //!
-//! 2. **In-process AVIF thumbnail encoding** – `ravif`/`rav1e` encode the
-//!    150×150 thumbnail entirely in-process (~30-60 ms vs ~1 s subprocess),
-//!    and it runs concurrently with the full-res AVIF encode.  Critical path
-//!    = ~1.2 s (full-res AVIF) vs original ~2.2 s (sequential).
+//! 2. **Skip ffmpeg normalization for common formats** – JPEG, PNG, WebP,
+//!    GIF, BMP and TIFF are decoded directly by the `image` crate.
 //!
-//! 3. **Maximum parallelism** – the ffmpeg full-resolution AVIF encode (the
-//!    dominant cost at ~1.2 s) runs in a Tokio task while the in-process work
-//!    (image load + perceptual hash + thumbnail) happens concurrently and
-//!    finishes well inside that window.
+//! 3. **Maximum parallelism** – full-res AVIF encode runs on a blocking
+//!    thread while in-process work (phash + thumbnail) runs concurrently.
+//!    Both complete in-process, so the critical path is the encode time only.
 //!
-//! 4. **Architecture**: critical path is now just the AVIF encode, not
-//!    AVIF encode + thumbnail (they overlap completely).
-//!
-//! 5. **Content-aware thumbnails** – gradient-saliency crop replaces the
+//! 4. **Content-aware thumbnails** – gradient-saliency crop replaces the
 //!    naïve center crop, matching the Go `smartcrop` behaviour.
 //!
-//! 6. **CatmullRom resize** instead of Lanczos3 for the thumbnail downscale —
-//!    visually equivalent at this scale, ~2× faster.
+//! 5. **CatmullRom resize** – ~2× faster than Lanczos3 for downscaling.
 //!
-//! 7. **UUID filenames** prevent the timestamp-collision race under
-//!    concurrent processing (concurrency ≥ 2).
+//! 6. **UUID filenames** prevent timestamp-collision races.
 //!
-//! 8. **DCT perceptual hash** implemented in-process (no `img_hash` dep,
-//!    matches the semantics of Go's `goimagehash.ExtPerceptionHash`).
+//! 7. **DCT perceptual hash** in-process (no `img_hash` dep).
 
 use anyhow::{Context, Result};
 use image::imageops::FilterType;
@@ -38,6 +29,7 @@ use std::path::{Path, PathBuf};
 use tokio::fs;
 use tracing::debug;
 
+use crate::avif;
 use crate::ffmpeg;
 
 /// Thumbnail target size (px).
@@ -147,9 +139,9 @@ async fn load_image(
 
 /// Process a single image: encode to AVIF, compute perceptual hash, create thumbnail.
 ///
-/// The full-resolution AVIF encode (the slow part, ~1.2 s) runs in a Tokio
-/// task while the in-process work (image decode + hash + thumbnail) is done
-/// concurrently, so the critical path is just the AVIF encode time.
+/// Everything runs in-process via SVT-AV1 native bindings — no ffmpeg subprocess.
+/// The full-resolution AVIF encode (the slow part) runs on a blocking thread
+/// while phash + thumbnail are computed concurrently.
 pub async fn process_image(input: &Path, dirs: &Directories) -> Result<ImageResult> {
     let file_name = input
         .file_name()
@@ -159,23 +151,23 @@ pub async fn process_image(input: &Path, dirs: &Directories) -> Result<ImageResu
     let avif_name = format!("{}.avif", file_name);
     let output_path = dirs.image.join(&avif_name);
 
-    // ── Spawn the full-resolution AVIF encode immediately (slow, ~1.2 s). ──
-    let avif_input = input.to_path_buf();
+    // ── Decode the source image first (shared by all in-process work). ───────
+    let (img, tmp_path) = load_image(input, dirs).await?;
+
+    // ── Spawn the full-resolution AVIF encode on a blocking thread. ──────────
+    // Uses SVT-AV1 native bindings — no subprocess, no double decode.
+    let avif_img = img.clone();
     let avif_output = output_path.clone();
-    let avif_handle = tokio::spawn(async move {
-        ffmpeg::convert_to_avif(&avif_input, &avif_output, 18, 8, 920).await
+    let avif_handle = tokio::task::spawn_blocking(move || {
+        avif::encode_avif(&avif_img, &avif_output, 18, 8, 920)
     });
 
-    // ── While ffmpeg runs, do all in-process work (~50-100 ms total). ────────
-
-    // Decode the source image natively (or via ffmpeg for exotic formats).
-    let (img, tmp_path) = load_image(input, dirs).await?;
+    // ── While SVT-AV1 encodes, do all fast in-process work concurrently. ─────
 
     // Perceptual hash — pure in-process, fast (~1-5 ms).
     let p_hash = compute_phash(&img);
 
-    // Thumbnail: smart-crop + CatmullRom resize (in-process) then AVIF via ffmpeg.
-    // Runs concurrently with the spawned full-res AVIF encode task above.
+    // Thumbnail: smart-crop + CatmullRom resize + ravif encode (in-process).
     let thumb_name = format!("{}.avif", file_name);
     let thumb_path = dirs.thumbnail.join(&thumb_name);
     create_thumbnail(&img, &thumb_path, dirs).await?;
@@ -190,12 +182,7 @@ pub async fn process_image(input: &Path, dirs: &Directories) -> Result<ImageResu
         .await?
         .context("AVIF encode failed")?;
 
-    // Use the returned dimensions; fall back to source if encoding lacked info.
-    let (w, h) = if out_w == 0 || out_h == 0 {
-        (img.width() as i32, img.height() as i32)
-    } else {
-        (out_w, out_h)
-    };
+    let (w, h) = (out_w, out_h);
 
     debug!(file = %file_name, width = w, height = h, "image processed");
 

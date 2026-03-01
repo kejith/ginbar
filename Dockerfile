@@ -44,14 +44,44 @@ RUN CGO_ENABLED=1 GOOS=linux go build -o wallium .
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Stage 2.5: build SVT-AV1 v2.3.0 from source (for Rust worker bindings)
+# ─────────────────────────────────────────────────────────────────────────────
+FROM debian:bookworm-slim AS svtav1-builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake nasm git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 --branch v2.3.0 https://gitlab.com/AOMediaCodec/SVT-AV1.git /tmp/SVT-AV1 \
+    && cd /tmp/SVT-AV1 \
+    && mkdir Build && cd Build \
+    && cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
+       -DBUILD_APPS=OFF -DBUILD_DEC=OFF -DCMAKE_INSTALL_PREFIX=/usr/local \
+       -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+    && make -j$(nproc) \
+    && make install \
+    && rm -rf /tmp/SVT-AV1
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Stage 3: build Rust worker
 # ─────────────────────────────────────────────────────────────────────────────
 FROM rust:1-bookworm AS worker-builder
 
+# SVT-AV1 v2.3.0 headers + shared library (for svt-av1-enc Rust bindings)
+COPY --from=svtav1-builder /usr/local/lib/libSvtAv1Enc* /usr/local/lib/
+COPY --from=svtav1-builder /usr/local/lib/pkgconfig/SvtAv1Enc.pc /usr/local/lib/pkgconfig/
+COPY --from=svtav1-builder /usr/local/include/svt-av1/ /usr/local/include/svt-av1/
+RUN ldconfig
+
+# Install nasm for rav1e SIMD optimizations
+RUN apt-get update && apt-get install -y --no-install-recommends nasm \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
-# Cache deps by building with a dummy main first
-COPY src/worker/Cargo.toml ./
+# Cache deps by building with a dummy main + build.rs first
+COPY src/worker/Cargo.toml src/worker/build.rs ./
 RUN mkdir src && echo 'fn main() {}' > src/main.rs && cargo build --release && rm -rf src
 
 # Build actual worker
@@ -100,6 +130,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     util-linux \
     && rm -rf /var/lib/apt/lists/*
+
+# SVT-AV1 v2.3.0 shared library (needed at runtime for in-process AVIF encoding)
+COPY --from=svtav1-builder /usr/local/lib/libSvtAv1Enc.so* /usr/local/lib/
+RUN ldconfig
 
 WORKDIR /app
 

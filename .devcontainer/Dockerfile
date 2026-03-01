@@ -49,4 +49,18 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
  && rustup component add clippy rustfmt \
  && chmod -R a+w /usr/local/rustup /usr/local/cargo
 
+# ── SVT-AV1 v2.3.0 (built from source for Rust svt-av1-enc bindings) ─────────
+# Builds a shared library so the worker can link against it at dev/bench time.
+RUN apt-get update && apt-get install -y --no-install-recommends cmake \
+ && rm -rf /var/lib/apt/lists/* \
+ && git clone --depth 1 --branch v2.3.0 https://gitlab.com/AOMediaCodec/SVT-AV1.git /tmp/SVT-AV1 \
+ && cd /tmp/SVT-AV1 && mkdir Build && cd Build \
+ && cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
+    -DBUILD_APPS=OFF -DBUILD_DEC=OFF -DCMAKE_INSTALL_PREFIX=/usr/local \
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+ && make -j$(nproc) \
+ && make install \
+ && ldconfig \
+ && rm -rf /tmp/SVT-AV1
+
 USER vscode

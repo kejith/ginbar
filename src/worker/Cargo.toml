@@ -2,6 +2,7 @@
 name = "wallium-worker"
 version = "0.1.0"
 edition = "2021"
+build = "build.rs"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }
@@ -19,6 +20,10 @@ image = { version = "0.25", default-features = true }
 # In-process AVIF encoder for thumbnails (eliminates ffmpeg subprocess for 150×150)
 ravif = "0.13"
 rgb = "0.8"
+# In-process SVT-AV1 encoder for full-res AVIF (eliminates ffmpeg subprocess entirely for images)
+svt-av1-enc = { version = "0.1.2", default-features = false, features = ["dynamic"] }
+# AVIF container serialization (wraps raw AV1 bitstream into .avif)
+avif-serialize = "0.8"
 # UUID v4 for collision-safe temp filenames under concurrency
 uuid = { version = "1", features = ["v4"] }
 # Thread count calculation for ffmpeg -threads flag

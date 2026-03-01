@@ -25,7 +25,7 @@ use std::path::Path;
 use tempfile::TempDir;
 
 // Bring in crate internals via the library (we're an external bench harness).
-use wallium_worker::{ffmpeg, processing};
+use wallium_worker::{avif, ffmpeg, processing};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -88,41 +88,13 @@ fn bench_convert_to_avif_fullres(c: &mut Criterion) {
             continue;
         }
 
-        group.bench_with_input(BenchmarkId::new("crf18_preset8", name), &path, |b, &p| {
-            let rt = rt();
+        // In-process SVT-AV1 bindings
+        let img = image::open(path).expect("load image for bench");
+        group.bench_with_input(BenchmarkId::new("inprocess_crf18_preset8", name), &img, |b, img| {
             b.iter(|| {
                 let (dirs, _tmp) = bench_dirs();
                 let dst = dirs.image.join("out.avif");
-                rt.block_on(async {
-                    ffmpeg::convert_to_avif(Path::new(p), &dst, 18, 8, 920).await.unwrap();
-                });
-            });
-        });
-    }
-
-    group.finish();
-}
-
-// ── convert_to_avif (thumbnail settings) ──────────────────────────────────────
-
-fn bench_convert_to_avif_thumbnail(c: &mut Criterion) {
-    let mut group = c.benchmark_group("convert_to_avif_thumbnail");
-    group.sample_size(10);
-    group.measurement_time(std::time::Duration::from_secs(20));
-
-    for &(name, path) in TEST_INPUTS {
-        if !input_available(path) {
-            continue;
-        }
-
-        group.bench_with_input(BenchmarkId::new("crf30_preset6", name), &path, |b, &p| {
-            let rt = rt();
-            b.iter(|| {
-                let (dirs, _tmp) = bench_dirs();
-                let dst = dirs.thumbnail.join("out.avif");
-                rt.block_on(async {
-                    ffmpeg::convert_to_avif(Path::new(p), &dst, 30, 6, 0).await.unwrap();
-                });
+                avif::encode_avif(img, &dst, 18, 8, 920).unwrap();
             });
         });
     }
@@ -261,20 +233,18 @@ fn bench_avif_preset_comparison(c: &mut Criterion) {
         return;
     }
 
+    let img = image::open(path).expect("load image for preset comparison");
+
     for preset in [4, 6, 8, 10] {
+        // In-process SVT-AV1 bindings
         group.bench_with_input(
-            BenchmarkId::new(format!("crf18_preset{preset}"), name),
-            &preset,
-            |b, &preset| {
-                let rt = rt();
+            BenchmarkId::new(format!("inprocess_crf18_preset{preset}"), name),
+            &img,
+            |b, img| {
                 b.iter(|| {
                     let (dirs, _tmp) = bench_dirs();
                     let dst = dirs.image.join("out.avif");
-                    rt.block_on(async {
-                        ffmpeg::convert_to_avif(Path::new(path), &dst, 18, preset, 0)
-                            .await
-                            .unwrap();
-                    });
+                    avif::encode_avif(img, &dst, 18, preset, 0).unwrap();
                 });
             },
         );
@@ -288,7 +258,6 @@ fn bench_avif_preset_comparison(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_convert_to_avif_fullres,
-    bench_convert_to_avif_thumbnail,
     bench_normalize_to_jpeg,
     bench_compute_phash,
     bench_create_thumbnail,
