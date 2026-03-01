@@ -10,9 +10,9 @@
 //! 2. **Skip ffmpeg normalization for common formats** – JPEG, PNG, WebP,
 //!    GIF, BMP and TIFF are decoded directly by the `image` crate.
 //!
-//! 3. **Maximum parallelism** – full-res AVIF encode runs on a blocking
-//!    thread while in-process work (phash + thumbnail) runs concurrently.
-//!    Both complete in-process, so the critical path is the encode time only.
+//! 3. **Sequential then blocking** – phash + thumbnail run first (cheap,
+//!    ~5-60 ms), then the image is moved (not cloned) to a blocking thread
+//!    for SVT-AV1 encoding.  This eliminates a full pixel-buffer copy.
 //!
 //! 4. **Content-aware thumbnails** – gradient-saliency crop replaces the
 //!    naïve center crop, matching the Go `smartcrop` behaviour.
@@ -140,8 +140,9 @@ async fn load_image(
 /// Process a single image: encode to AVIF, compute perceptual hash, create thumbnail.
 ///
 /// Everything runs in-process via SVT-AV1 native bindings — no ffmpeg subprocess.
-/// The full-resolution AVIF encode (the slow part) runs on a blocking thread
-/// while phash + thumbnail are computed concurrently.
+/// Phash + thumbnail are computed first (cheap, ~5-60 ms), then the image is
+/// moved (not cloned) to a blocking thread for full-res AVIF encoding.
+/// This avoids copying the entire pixel buffer.
 pub async fn process_image(input: &Path, dirs: &Directories) -> Result<ImageResult> {
     let file_name = input
         .file_name()
@@ -154,15 +155,9 @@ pub async fn process_image(input: &Path, dirs: &Directories) -> Result<ImageResu
     // ── Decode the source image first (shared by all in-process work). ───────
     let (img, tmp_path) = load_image(input, dirs).await?;
 
-    // ── Spawn the full-resolution AVIF encode on a blocking thread. ──────────
-    // Uses SVT-AV1 native bindings — no subprocess, no double decode.
-    let avif_img = img.clone();
-    let avif_output = output_path.clone();
-    let avif_handle = tokio::task::spawn_blocking(move || {
-        avif::encode_avif(&avif_img, &avif_output, 18, 8, 920)
-    });
-
-    // ── While SVT-AV1 encodes, do all fast in-process work concurrently. ─────
+    // ── Fast in-process work first (phash + thumbnail) ── ~5-60 ms total ─────
+    // These are cheap, so finish them before handing the image off to SVT-AV1.
+    // This avoids cloning the full image buffer.
 
     // Perceptual hash — pure in-process, fast (~1-5 ms).
     let p_hash = compute_phash(&img);
@@ -172,15 +167,23 @@ pub async fn process_image(input: &Path, dirs: &Directories) -> Result<ImageResu
     let thumb_path = dirs.thumbnail.join(&thumb_name);
     create_thumbnail(&img, &thumb_path, dirs).await?;
 
-    // Clean up temp normalization file (exotic formats only).
-    if let Some(p) = tmp_path {
-        let _ = fs::remove_file(&p).await;
-    }
+    // ── Full-resolution AVIF encode on a blocking thread. ────────────────────
+    // Uses SVT-AV1 native bindings — no subprocess, no double decode.
+    // Image is moved (not cloned) since phash + thumbnail are already done.
+    let avif_output = output_path.clone();
+    let avif_handle = tokio::task::spawn_blocking(move || {
+        avif::encode_avif(&img, &avif_output, 18, 8, 920)
+    });
 
     // ── Await the AVIF encode and collect output dimensions. ─────────────────
     let (out_w, out_h) = avif_handle
         .await?
         .context("AVIF encode failed")?;
+
+    // Clean up temp normalization file (exotic formats only).
+    if let Some(p) = tmp_path {
+        let _ = fs::remove_file(&p).await;
+    }
 
     let (w, h) = (out_w, out_h);
 

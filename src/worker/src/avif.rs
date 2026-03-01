@@ -13,10 +13,16 @@ use anyhow::{Context, Result};
 use image::DynamicImage;
 use std::path::Path;
 use svt_av1_enc::{Frame, SvtAv1EncoderConfig};
-use tracing::debug;
+use tracing::{debug, warn};
 
-/// Maximum number of logical processors SVT-AV1 may use.
-/// Defaults to `max(1, total_cpus / 4)` — leaves 75% for the rest of the system.
+/// Maximum number of logical processors SVT-AV1 may use **per encode**.
+///
+/// When `WORKER_CONCURRENCY` is > 1, multiple images are encoded simultaneously.
+/// The thread budget is split: `max(1, total_cpus / (2 * concurrency))`.
+/// This avoids severe oversubscription that makes batch processing much slower
+/// than the single-image benchmark.
+///
+/// Override with `SVT_AV1_THREADS` to set an explicit value.
 fn encoder_thread_count() -> u32 {
     if let Ok(v) = std::env::var("SVT_AV1_THREADS") {
         if let Ok(n) = v.parse::<u32>() {
@@ -25,7 +31,13 @@ fn encoder_thread_count() -> u32 {
             }
         }
     }
-    (num_cpus::get() as u32 / 4).max(1)
+    let cpus = num_cpus::get() as u32;
+    let concurrency: u32 = std::env::var("WORKER_CONCURRENCY")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(4);
+    // Reserve ~half the CPUs for tokio runtime + thumbnail encoding (ravif).
+    (cpus / (2 * concurrency)).max(1)
 }
 
 /// Encode a `DynamicImage` to AVIF using SVT-AV1 in-process.
@@ -35,6 +47,10 @@ fn encoder_thread_count() -> u32 {
 /// - `max_width`: scale down so width ≤ this value (0 = no scaling)
 ///
 /// Returns `(width, height)` of the encoded output.
+///
+/// Falls back to `ravif` automatically when:
+/// - SVT-AV1 fails for any reason (encode error, library misbehavior, etc.)
+/// - Image dimensions are below the SVT-AV1 minimum (64×64)
 pub fn encode_avif(
     img: &DynamicImage,
     dst: &Path,
@@ -66,12 +82,18 @@ pub fn encode_avif(
     let width = img.width();
     let height = img.height();
 
+    // ── Fallback: dimensions below SVT-AV1 64×64 minimum ────────────────────
+    if width < 64 || height < 64 {
+        debug!(width, height, "image below 64×64 minimum, using ravif directly");
+        return encode_avif_ravif(&img, dst);
+    }
+
     // ── Step 2: Convert RGB → YUV420 (BT.601 limited range) ─────────────────
     let rgb = img.to_rgb8();
     let (y_plane, u_plane, v_plane) = rgb_to_yuv420(&rgb, width, height);
 
     // ── Step 3: Encode with SVT-AV1 ─────────────────────────────────────────
-    let av1_data = encode_av1_raw(
+    match encode_av1_raw(
         &y_plane,
         &u_plane,
         &v_plane,
@@ -79,24 +101,44 @@ pub fn encode_avif(
         height,
         crf,
         preset,
-    )?;
+    ) {
+        Ok(av1_data) => {
+            // ── Step 4: Wrap in AVIF container ───────────────────────────────
+            let avif_data = wrap_avif_container(&av1_data, width, height)?;
 
-    // ── Step 4: Wrap in AVIF container ───────────────────────────────────────
-    let avif_data = wrap_avif_container(&av1_data, width, height)?;
+            // ── Step 5: Write to disk ─────────────────────────────────────────
+            std::fs::write(dst, &avif_data).context("write AVIF file")?;
 
-    // ── Step 5: Write to disk ────────────────────────────────────────────────
-    std::fs::write(dst, &avif_data).context("write AVIF file")?;
+            debug!(
+                dst = %dst.display(),
+                width,
+                height,
+                av1_bytes = av1_data.len(),
+                avif_bytes = avif_data.len(),
+                "AVIF encoded in-process via SVT-AV1"
+            );
 
-    debug!(
-        dst = %dst.display(),
-        width,
-        height,
-        av1_bytes = av1_data.len(),
-        avif_bytes = avif_data.len(),
-        "AVIF encoded in-process via SVT-AV1"
-    );
-
-    Ok((width as i32, height as i32))
+            Ok((width as i32, height as i32))
+        }
+        Err(svt_err) => {
+            // SVT-AV1 failed — log and fall back to ravif so the image is not lost.
+            let err_chain = svt_err
+                .chain()
+                .map(|c| c.to_string())
+                .collect::<Vec<_>>()
+                .join(": ");
+            warn!(
+                width,
+                height,
+                err = err_chain,
+                "SVT-AV1 encode failed, falling back to ravif"
+            );
+            // Remove any partially-written file before retrying.
+            let _ = std::fs::remove_file(dst);
+            encode_avif_ravif(&img, dst)
+                .with_context(|| format!("ravif fallback (SVT-AV1 error: {})", err_chain))
+        }
+    }
 }
 
 /// Convert an RGB image to YUV420 planar format (BT.601 limited range).
@@ -184,8 +226,16 @@ fn encode_av1_raw(
     cfg.config.rate_control_mode = 0;
     cfg.config.qp = crf;
 
-    // Still-picture optimizations (single frame, no temporal prediction)
-    cfg.config.intra_period_length = 0;
+    // LOW_DELAY_P prediction structure: the encoder outputs each frame
+    // immediately without buffering a GOP.  Essential for single-frame
+    // still-image encoding — the default RANDOM_ACCESS (2) buffers frames
+    // and may produce no output for a one-frame stream even after send_eos.
+    cfg.config.pred_structure = 0;
+
+    // Let the encoder auto-set the intra period based on pred_structure.
+    // -1 means auto; combined with LOW_DELAY_P the single frame is always
+    // a keyframe.
+    cfg.config.intra_period_length = -1;
 
     // Thread control
     cfg.config.logical_processors = encoder_thread_count();
@@ -215,6 +265,45 @@ fn encode_av1_raw(
         .map_err(|e| anyhow::anyhow!("SVT-AV1 get_packet: {:?}", e))?;
 
     Ok(packet.to_vec())
+}
+
+/// Encode a (possibly already-resized) `DynamicImage` to AVIF using `ravif`.
+///
+/// Used as a fallback when SVT-AV1 is unavailable or fails, and as the primary
+/// encoder for images smaller than SVT-AV1's 64×64 minimum.
+///
+/// Quality 80.0 / speed 4 balances file size with encode time for full-res images.
+fn encode_avif_ravif(img: &DynamicImage, dst: &Path) -> Result<(i32, i32)> {
+    use ravif::{Encoder, Img};
+    use rgb::RGB8;
+
+    let rgb = img.to_rgb8();
+    let (width, height) = (rgb.width(), rgb.height());
+    let w = width as usize;
+    let h = height as usize;
+
+    let pixels: Vec<RGB8> = rgb
+        .as_raw()
+        .chunks_exact(3)
+        .map(|c| RGB8 { r: c[0], g: c[1], b: c[2] })
+        .collect();
+
+    let encoded = Encoder::new()
+        .with_quality(80.0)
+        .with_speed(4)
+        .encode_rgb(Img::new(pixels.as_slice(), w, h))
+        .map_err(|e| anyhow::anyhow!("ravif encode: {}", e))?;
+
+    std::fs::write(dst, encoded.avif_file).context("write AVIF file (ravif)")?;
+
+    debug!(
+        dst = %dst.display(),
+        width,
+        height,
+        "AVIF encoded via ravif fallback"
+    );
+
+    Ok((width as i32, height as i32))
 }
 
 /// Wrap a raw AV1 bitstream in an AVIF container (ISOBMFF/HEIF).

@@ -191,7 +191,14 @@ async fn drain(
                     }
                     Err(e) => {
                         state.failed.fetch_add(1, Ordering::Relaxed);
-                        warn!(post_id = post.id, err = %e, "post processing failed");
+                        // Build a single-line error chain so the compact tracing
+                        // formatter shows all causes (not just the outermost one).
+                        let err_chain = e
+                            .chain()
+                            .map(|c| c.to_string())
+                            .collect::<Vec<_>>()
+                            .join(": ");
+                        warn!(post_id = post.id, err = err_chain, "post processing failed");
                     }
                 }
 
@@ -259,6 +266,14 @@ async fn process_post(
 
     if is_temp {
         let _ = tokio::fs::remove_file(&tmp_path).await;
+    }
+
+    // If processing failed (encode error, corrupt image, etc.) delete the
+    // dirty post so it doesn't retry forever on every poll cycle.
+    if result.is_err() {
+        if let Err(e) = db::delete_dirty_post(pool, post.id).await {
+            warn!(post_id = post.id, err = %e, "failed to delete dirty post after processing error");
+        }
     }
 
     result
