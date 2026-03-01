@@ -166,20 +166,25 @@ pub fn encode_avif(
         return encode_avif_ravif(&img, dst);
     }
 
-    // ── Step 2: Convert RGB → YUV420 (BT.601 limited range) ─────────────────
+    // ── Step 2: Convert RGB → YUV420 (BT.601 full range) ──────────────────────
+    //
+    // Must use FULL-RANGE values so the encoded data matches the AVIF spec
+    // default: an AVIF without an explicit `colr` box is assumed to be full
+    // range by decoders.  Limited-range values (Y: 16-235) would be decoded
+    // as if they were full-range, resulting in washed-out / incorrect colours.
     let yuv_start = std::time::Instant::now();
     let rgb = img.to_rgb8();
-    let (y_plane, u_plane, v_plane) = rgb_to_yuv420(&rgb, width, height);
+    let (y_plane, u_plane, v_plane) = rgb_to_yuv420_full_range(&rgb, width, height);
     debug!(
         width,
         height,
         elapsed_ms = yuv_start.elapsed().as_millis(),
-        "encode_avif: RGB→YUV420 conversion"
+        "encode_avif: RGB→YUV420 conversion (full range)"
     );
 
     // ── Step 3: Encode with SVT-AV1 ─────────────────────────────────────────
     let svt_start = std::time::Instant::now();
-    match encode_av1_raw(
+    match encode_av1_raw_full_range(
         &y_plane,
         &u_plane,
         &v_plane,
@@ -243,14 +248,87 @@ pub fn encode_avif(
     }
 }
 
-/// Convert an RGB image to YUV420 planar format (BT.601 limited range).
+/// Convert an RGB image to YUV420 planar format (BT.601 **full range**).
 ///
-/// BT.601 coefficients (same as what ffmpeg uses for sRGB source):
-///   Y  =  16 + (65.481 * R + 128.553 * G +  24.966 * B) / 255
-///   Cb = 128 + (-37.797 * R -  74.203 * G + 112.0   * B) / 255
-///   Cr = 128 + (112.0   * R -  93.786 * G -  18.214 * B) / 255
+/// Full-range BT.601 coefficients (JPEG/JFIF convention, Y: 0–255):
+///   Y  =        (77·R + 150·G +  29·B + 128) >> 8      → [0, 255]
+///   Cb = 128 + (-43·R -  85·G + 128·B + 128) >> 8      → [0, 255]
+///   Cr = 128 + (128·R - 107·G -  21·B + 128) >> 8      → [0, 255]
 ///
-/// Using fixed-point arithmetic (<<16) for speed.
+/// This is the correct convention for AVIF without an explicit `colr` box:
+/// the AVIF spec defaults to full-range when no colour-info box is present.
+/// Feed the output to [`encode_av1_raw_full_range`] so the AV1 bitstream
+/// colour-range signal matches the data values.
+pub fn rgb_to_yuv420_full_range(rgb: &image::RgbImage, width: u32, height: u32) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+    let w = width as usize;
+    let h = height as usize;
+    let cw = w / 2;
+    let ch = h / 2;
+
+    let mut y_plane = vec![0u8; w * h];
+    let mut u_plane = vec![0u8; cw * ch];
+    let mut v_plane = vec![0u8; cw * ch];
+
+    let raw = rgb.as_raw();
+
+    // Compute Y for every pixel
+    for row in 0..h {
+        for col in 0..w {
+            let idx = (row * w + col) * 3;
+            let r = raw[idx] as i32;
+            let g = raw[idx + 1] as i32;
+            let b = raw[idx + 2] as i32;
+
+            // Y = (77·R + 150·G + 29·B + 128) >> 8
+            let y = (77 * r + 150 * g + 29 * b + 128) >> 8;
+            y_plane[row * w + col] = y.clamp(0, 255) as u8;
+        }
+    }
+
+    // Compute U (Cb) and V (Cr) at half resolution — average 2×2 blocks
+    for cy in 0..ch {
+        for cx in 0..cw {
+            let row = cy * 2;
+            let col = cx * 2;
+
+            let mut sum_r = 0i32;
+            let mut sum_g = 0i32;
+            let mut sum_b = 0i32;
+            for dy in 0..2 {
+                for dx in 0..2 {
+                    let idx = ((row + dy) * w + (col + dx)) * 3;
+                    sum_r += raw[idx] as i32;
+                    sum_g += raw[idx + 1] as i32;
+                    sum_b += raw[idx + 2] as i32;
+                }
+            }
+            let r = sum_r / 4;
+            let g = sum_g / 4;
+            let b = sum_b / 4;
+
+            // Cb = 128 + (-43·R - 85·G + 128·B + 128) >> 8
+            let u = 128 + ((-43 * r - 85 * g + 128 * b + 128) >> 8);
+            // Cr = 128 + (128·R - 107·G - 21·B + 128) >> 8
+            let v = 128 + ((128 * r - 107 * g - 21 * b + 128) >> 8);
+
+            u_plane[cy * cw + cx] = u.clamp(0, 255) as u8;
+            v_plane[cy * cw + cx] = v.clamp(0, 255) as u8;
+        }
+    }
+
+    (y_plane, u_plane, v_plane)
+}
+
+/// Convert an RGB image to YUV420 planar format (BT.601 **limited range**).
+///
+/// Used only for tests and reference.  The primary encode path now uses
+/// [`rgb_to_yuv420_full_range`] so output is consistent with the AVIF spec
+/// default (full range when no `colr` box is present).
+///
+/// BT.601 limited-range coefficients:
+///   Y  =  16 + (65.481 * R + 128.553 * G +  24.966 * B) / 255  → [16, 235]
+///   Cb = 128 + (-37.797 * R -  74.203 * G + 112.0   * B) / 255 → [16, 240]
+///   Cr = 128 + (112.0   * R -  93.786 * G -  18.214 * B) / 255 → [16, 240]
 pub fn rgb_to_yuv420(rgb: &image::RgbImage, width: u32, height: u32) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     let w = width as usize;
     let h = height as usize;
@@ -543,7 +621,86 @@ mod tests {
         DynamicImage::ImageRgb8(solid_rgb(r, g, b, w, h))
     }
 
-    // ── rgb_to_yuv420 ─────────────────────────────────────────────────────────
+    // ── rgb_to_yuv420_full_range ──────────────────────────────────────────────
+
+    #[test]
+    fn test_yuv420_full_range_plane_dimensions() {
+        let (w, h) = (64u32, 64u32);
+        let rgb = solid_rgb(100, 150, 200, w, h);
+        let (y, u, v) = rgb_to_yuv420_full_range(&rgb, w, h);
+        assert_eq!(y.len(), (w * h) as usize, "Y plane size");
+        assert_eq!(u.len(), (w / 2 * (h / 2)) as usize, "U plane size");
+        assert_eq!(v.len(), (w / 2 * (h / 2)) as usize, "V plane size");
+    }
+
+    #[test]
+    fn test_yuv420_full_range_black_gives_zero_luma() {
+        // Full-range: black = Y=0, Cb=128, Cr=128
+        let rgb = solid_rgb(0, 0, 0, 2, 2);
+        let (y, u, v) = rgb_to_yuv420_full_range(&rgb, 2, 2);
+        assert!(y.iter().all(|&p| p == 0), "Y must be 0 for black (full range)");
+        assert!(u.iter().all(|&p| p == 128), "Cb must be 128 for black");
+        assert!(v.iter().all(|&p| p == 128), "Cr must be 128 for black");
+    }
+
+    #[test]
+    fn test_yuv420_full_range_white_gives_max_luma() {
+        // Full-range: white = Y=255, Cb=128, Cr=128
+        let rgb = solid_rgb(255, 255, 255, 2, 2);
+        let (y, u, v) = rgb_to_yuv420_full_range(&rgb, 2, 2);
+        assert!(y.iter().all(|&p| p == 255), "Y must be 255 for white (full range)");
+        assert!(u.iter().all(|&p| p == 128), "Cb must be 128 for white");
+        assert!(v.iter().all(|&p| p == 128), "Cr must be 128 for white");
+    }
+
+    #[test]
+    fn test_yuv420_full_range_neutral_gray_has_neutral_chroma() {
+        // Mid-gray (128,128,128): Cb and Cr should both be 128 (neutral).
+        let rgb = solid_rgb(128, 128, 128, 2, 2);
+        let (y, u, v) = rgb_to_yuv420_full_range(&rgb, 2, 2);
+        // Y should be approximately 128 (±2 rounding)
+        assert!(y.iter().all(|&p| (p as i32 - 128).abs() <= 2),
+            "Y must be ~128 for mid-gray; got {:?}", &y[..4]);
+        assert!(u.iter().all(|&p| p == 128), "Cb must be 128 for neutral gray");
+        assert!(v.iter().all(|&p| p == 128), "Cr must be 128 for neutral gray");
+    }
+
+    #[test]
+    fn test_yuv420_full_range_y_is_always_in_0_255() {
+        // For any solid colour, Y must stay in 0..=255 (no clamping overflow).
+        for &(r, g, b) in &[
+            (255u8, 0, 0), (0, 255, 0), (0, 0, 255),
+            (255, 255, 0), (0, 255, 255), (255, 0, 255),
+        ] {
+            let rgb = solid_rgb(r, g, b, 2, 2);
+            let (y, u, v) = rgb_to_yuv420_full_range(&rgb, 2, 2);
+            assert!(y.iter().all(|&p| p <= 255), "Y out of range for ({r},{g},{b})");
+            assert!(u.iter().all(|&p| p <= 255), "U out of range for ({r},{g},{b})");
+            assert!(v.iter().all(|&p| p <= 255), "V out of range for ({r},{g},{b})");
+        }
+    }
+
+    #[test]
+    fn test_yuv420_full_range_vs_limited_range_luma_difference() {
+        // Full-range black → Y=0; limited-range black → Y=16.
+        // Full-range white → Y=255; limited-range white → Y=235.
+        // They must differ: full range spans a wider value band.
+        let black = solid_rgb(0, 0, 0, 2, 2);
+        let (y_full, _, _) = rgb_to_yuv420_full_range(&black, 2, 2);
+        let (y_ltd, _, _)  = rgb_to_yuv420(&black, 2, 2);
+        assert_ne!(y_full[0], y_ltd[0],
+            "full-range and limited-range should differ for black");
+        assert_eq!(y_full[0], 0,   "full-range black Y must be 0");
+        assert_eq!(y_ltd[0],  16,  "limited-range black Y must be 16");
+
+        let white = solid_rgb(255, 255, 255, 2, 2);
+        let (y_full, _, _) = rgb_to_yuv420_full_range(&white, 2, 2);
+        let (y_ltd, _, _)  = rgb_to_yuv420(&white, 2, 2);
+        assert_eq!(y_full[0], 255, "full-range white Y must be 255");
+        assert_eq!(y_ltd[0],  235, "limited-range white Y must be 235");
+    }
+
+    // ── rgb_to_yuv420 (limited-range, kept for reference tests) ──────────────
 
     #[test]
     fn test_yuv420_plane_dimensions() {
