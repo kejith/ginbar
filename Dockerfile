@@ -74,8 +74,8 @@ COPY --from=svtav1-builder /usr/local/lib/pkgconfig/SvtAv1Enc.pc /usr/local/lib/
 COPY --from=svtav1-builder /usr/local/include/svt-av1/ /usr/local/include/svt-av1/
 RUN ldconfig
 
-# Install nasm for rav1e SIMD optimizations
-RUN apt-get update && apt-get install -y --no-install-recommends nasm \
+# Install nasm for rav1e SIMD optimizations + libturbojpeg for fast JPEG decode
+RUN apt-get update && apt-get install -y --no-install-recommends nasm libturbojpeg0-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -129,6 +129,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     ffmpeg \
     util-linux \
+    libturbojpeg0 \
     && rm -rf /var/lib/apt/lists/*
 
 # SVT-AV1 v2.3.0 shared library (needed at runtime for in-process AVIF encoding)

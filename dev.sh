@@ -85,6 +85,7 @@ if [[ -x "$WORKER_BIN" ]]; then
     DB_URL="$PG_URL" REDIS_URL="redis://127.0.0.1:6379" \
       WORKER_CONCURRENCY=4 WORKER_POLL_INTERVAL=5 \
       LOG_LEVEL="${LOG_LEVEL:-info}" LOG_FORMAT=text \
+      RUST_LOG="${RUST_LOG:-wallium_worker=debug}" \
       "$WORKER_BIN"
   ) &
   WORKER_PID=$!
