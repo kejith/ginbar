@@ -418,10 +418,26 @@ pub(crate) fn encode_avif_ravif(img: &DynamicImage, dst: &Path) -> Result<(i32, 
 }
 
 /// Wrap a raw AV1 bitstream in an AVIF container (ISOBMFF/HEIF).
+///
+/// The `Av1CodecConfigurationRecord` (Av1C box) embedded in the AVIF
+/// container **must** match the AV1 bitstream sequence header.  Chrome
+/// validates these fields and rejects the file (rendering the image as a
+/// completely white blank frame) when they differ.
+///
+/// We always encode YUV 4:2:0 at 8-bit depth, which maps to:
+/// - AV1 Main profile (`seq_profile = 0`)
+/// - chroma subsampled in both dimensions (`chroma_subsampling_x/y = true`)
+///
+/// `Aviffy::new()` defaults to profile 1 / 4:4:4, which is wrong.
 pub fn wrap_avif_container(av1_data: &[u8], width: u32, height: u32) -> Result<Vec<u8>> {
-    let avif = avif_serialize::Aviffy::new()
-        .to_vec(av1_data, None, width, height, 8);
-
+    let mut aviffy = avif_serialize::Aviffy::new();
+    // AV1 Main profile (0): supports 8-bit YUV420 — must match the SVT-AV1
+    // bitstream which also encodes at profile 0.
+    aviffy.set_seq_profile(0);
+    // YUV 4:2:0: chroma is subsampled by 2 in both horizontal and vertical
+    // directions.  Default (false, false) would declare 4:4:4 — wrong.
+    aviffy.set_chroma_subsampling((true, true));
+    let avif = aviffy.to_vec(av1_data, None, width, height, 8);
     Ok(avif)
 }
 
@@ -797,6 +813,106 @@ mod tests {
     }
 
     // ── suppress_stdio_for ────────────────────────────────────────────────────
+
+    // ── wrap_avif_container ─────────────────────────────────────────────────
+
+    /// Parse all ISOBMFF boxes in `data` and return the byte slice of the first
+    /// box whose 4CC matches `target`, or `None`.
+    fn find_box<'a>(data: &'a [u8], target: &[u8; 4]) -> Option<&'a [u8]> {
+        let mut pos = 0usize;
+        while pos + 8 <= data.len() {
+            let size = u32::from_be_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
+            if size < 8 || pos + size > data.len() {
+                break;
+            }
+            if &data[pos + 4..pos + 8] == target {
+                return Some(&data[pos..pos + size]);
+            }
+            pos += size;
+        }
+        None
+    }
+
+    /// Recursively search all (potentially nested) ISOBMFF boxes for the first
+    /// one whose 4CC matches `target`.  Returns the full box slice including
+    /// the 8-byte header.
+    fn find_box_deep<'a>(data: &'a [u8], target: &[u8; 4]) -> Option<&'a [u8]> {
+        let mut pos = 0usize;
+        while pos + 8 <= data.len() {
+            let size = u32::from_be_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
+            if size < 8 || pos + size > data.len() {
+                break;
+            }
+            if &data[pos + 4..pos + 8] == target {
+                return Some(&data[pos..pos + size]);
+            }
+            // Descend into known container boxes.
+            let four_cc = &data[pos + 4..pos + 8];
+            let is_container = matches!(four_cc,
+                b"moov" | b"trak" | b"mdia" | b"minf" | b"stbl" | b"meta"
+                | b"ipco" | b"iprp" | b"ilst" | b"udta" | b"iinf"
+            );
+            if is_container {
+                let header = if four_cc == b"meta" { 12 } else { 8 };
+                if let Some(found) = find_box_deep(&data[pos + header..pos + size], target) {
+                    return Some(found);
+                }
+            }
+            pos += size;
+        }
+        None
+    }
+
+    #[test]
+    fn test_wrap_avif_container_av1c_signals_yuv420_main_profile() {
+        // Regression: wrap_avif_container must emit an Av1C box with
+        //   seq_profile = 0  (AV1 Main profile — supports YUV 4:2:0)
+        //   chroma_subsampling_x = 1, chroma_subsampling_y = 1  (4:2:0)
+        //
+        // The previous bug: Aviffy::new() defaults to seq_profile=1 (High,
+        // 4:4:4) with chroma_subsampling=(false,false), which mismatches the
+        // YUV420 AV1 bitstream. Chrome validates these fields and renders a
+        // completely white image when they differ.
+        //
+        // AV1CodecConfigurationRecord layout (4 bytes after the 4CC):
+        //   [0]  0x81  marker (1) | version (7=1)
+        //   [1]  seq_profile (3 MSB) | seq_level_idx_0 (5 LSB)
+        //          profile=0, level=31 → 0b000_11111 = 0x1F
+        //   [2]  seq_tier_0 | high_bitdepth | twelve_bit | monochrome |
+        //        chroma_subsampling_x | chroma_subsampling_y | sample_pos(2)
+        //          8-bit 4:2:0 → 0b0000_1100 = 0x0C
+        //   [3]  0x00  (reserved + no initial_presentation_delay)
+        let avif_bytes = wrap_avif_container(&[0u8; 16], 64, 64).unwrap();
+
+        // Locate the Av1C box by scanning for the 4CC bytes.
+        let av1c_pos = avif_bytes
+            .windows(4)
+            .position(|w| w == b"av1C")
+            .expect("Av1C box not found in AVIF container output");
+
+        // The Av1C box payload starts immediately after the 4CC.
+        let config = &avif_bytes[av1c_pos + 4..av1c_pos + 8];
+
+        assert_eq!(config[0], 0x81, "Av1C: marker+version byte must be 0x81");
+
+        let seq_profile = config[1] >> 5;
+        assert_eq!(
+            seq_profile, 0,
+            "Av1C: seq_profile must be 0 (Main, YUV420); got {seq_profile} — \
+             this mismatch causes Chrome to render white images"
+        );
+
+        let chroma_subsampling_x = (config[2] >> 3) & 1;
+        let chroma_subsampling_y = (config[2] >> 2) & 1;
+        assert_eq!(
+            chroma_subsampling_x, 1,
+            "Av1C: chroma_subsampling_x must be 1 for YUV420"
+        );
+        assert_eq!(
+            chroma_subsampling_y, 1,
+            "Av1C: chroma_subsampling_y must be 1 for YUV420"
+        );
+    }
 
     #[test]
     fn test_suppress_stdio_for_returns_value() {
