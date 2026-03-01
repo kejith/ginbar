@@ -24,3 +24,13 @@ nginx/certs/*.pem
 
 # ── VSCode settings (personal preferences) ─────────────────────────────────
 .github/
+
+# ── Rust / Cargo ──────────────────────────────────────────────────────────────
+src/worker/target/
+src/worker/Cargo.lock
+src/worker/**/*.rs.bk
+src/worker/.cargo/
+
+# ── Worker test dataset (blobs are downloaded, only manifest is committed) ───
+src/worker/test_data/images/*
+!src/worker/test_data/images/.gitkeep

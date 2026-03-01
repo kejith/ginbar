@@ -1,0 +1,2 @@
+# Image blobs live here — downloaded by `make test-data`, never committed.
+# Run: go run ./scripts/download_testset.go

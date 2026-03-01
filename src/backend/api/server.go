@@ -109,7 +109,7 @@ func NewServer(store *db.Store, rdb *redis.Client, sessionSecret string, log *sl
 		log:      log,
 		dirs:     dirs,
 	}
-	srv.queue = newProcessQueue(srv, log)
+	srv.queue = newProcessQueue(rdb, store, log)
 	srv.jobs = NewJobManager()
 
 	// ── Global middleware ─────────────────────────────────────────────────────
@@ -218,10 +218,11 @@ func NewServer(store *db.Store, rdb *redis.Client, sessionSecret string, log *sl
 
 // ── Session helpers ───────────────────────────────────────────────────────────
 
-// Start launches background workers (queue processor).  Call once after
-// NewServer, passing a context that is cancelled during graceful shutdown.
+// Start is a no-op placeholder — the processing queue is now handled by the
+// external Rust worker.  Kept for API compatibility with main.go.
 func (s *Server) Start(ctx context.Context) {
-	go s.queue.Run(ctx)
+	// Nothing to start — the Rust worker handles processing.
+	_ = ctx
 }
 
 func (s *Server) sessionGet(c fiber.Ctx) (*session.Session, error) {

@@ -35,15 +35,26 @@ LOG_DIR="${LOG_DIR:-${INSTALL_DIR}/logs}"
 echo -e "\n${BOLD}${CYAN}══ wallium update ══${RESET}\n"
 
 # ── 1. Pull latest code ───────────────────────────────────────────────────────
-info "Pulling latest code…"
+# BRANCH can be overridden via env var; defaults to the feature branch.
+BRANCH="${WALLIUM_BRANCH:-master}"
+
+info "Pulling latest code (branch: ${BRANCH})…"
 git fetch origin
+
+CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+if [[ "$CURRENT_BRANCH" != "$BRANCH" ]]; then
+  info "Switching from ${CURRENT_BRANCH} to ${BRANCH}…"
+  git checkout "$BRANCH"
+  success "Switched to branch ${BRANCH}"
+fi
+
 LOCAL=$(git rev-parse HEAD)
-REMOTE=$(git rev-parse @{u})
+REMOTE=$(git rev-parse "origin/${BRANCH}")
 
 if [[ "$LOCAL" == "$REMOTE" ]]; then
   echo "  Already up to date ($LOCAL)"
 else
-  git pull --ff-only
+  git merge --ff-only "origin/${BRANCH}"
   success "Updated $(git rev-parse --short HEAD~1)..$(git rev-parse --short HEAD)"
   git log --oneline "${LOCAL}..HEAD"
 fi

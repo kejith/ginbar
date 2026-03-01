@@ -74,7 +74,26 @@ log "Starting backend (air hot-reload)..."
   air
 ) &
 BACKEND_PID=$!
+# ── start worker (Rust processing) ────────────────────────────────────────
+WORKER_DIR="$(cd "$(dirname "$0")/src/worker" && pwd)"
+WORKER_BIN="$WORKER_DIR/target/debug/wallium-worker"
 
+if [[ -x "$WORKER_BIN" ]]; then
+  log "Starting worker..."
+  (
+    cd "$BACKEND_DIR"  # same cwd as backend so media paths match
+    DB_URL="$PG_URL" REDIS_URL="redis://127.0.0.1:6379" \
+      WORKER_CONCURRENCY=4 WORKER_POLL_INTERVAL=5 \
+      LOG_LEVEL="${LOG_LEVEL:-info}" LOG_FORMAT=text \
+      RUST_LOG="${RUST_LOG:-wallium_worker=debug}" \
+      "$WORKER_BIN"
+  ) &
+  WORKER_PID=$!
+else
+  warn "Worker binary not found at $WORKER_BIN"
+  warn "Build it first: cd src/worker && cargo build"
+  WORKER_PID=""
+fi
 # ── start frontend (vite) ─────────────────────────────────────────────────────
 log "Starting frontend (Vite)..."
 (
@@ -103,8 +122,10 @@ cleanup() {
   warn "Shutting down..."
   kill "$BACKEND_PID"  2>/dev/null || true
   kill "$FRONTEND_PID" 2>/dev/null || true
+  [[ -n "$WORKER_PID" ]] && kill "$WORKER_PID" 2>/dev/null || true
   wait "$BACKEND_PID"  2>/dev/null || true
   wait "$FRONTEND_PID" 2>/dev/null || true
+  [[ -n "$WORKER_PID" ]] && wait "$WORKER_PID" 2>/dev/null || true
   if [[ "${REDIS_STARTED:-0}" == "1" ]]; then
     redis-cli shutdown nosave 2>/dev/null || true
     log "Redis stopped"
@@ -114,5 +135,9 @@ cleanup() {
 trap cleanup SIGINT SIGTERM
 
 # Block until one of the child processes exits (crash = exit script)
-wait -n "$BACKEND_PID" "$FRONTEND_PID" 2>/dev/null || true
+if [[ -n "$WORKER_PID" ]]; then
+  wait -n "$BACKEND_PID" "$FRONTEND_PID" "$WORKER_PID" 2>/dev/null || true
+else
+  wait -n "$BACKEND_PID" "$FRONTEND_PID" 2>/dev/null || true
+fi
 cleanup

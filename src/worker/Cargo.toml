@@ -1,0 +1,54 @@
+[package]
+name = "wallium-worker"
+version = "0.1.0"
+edition = "2021"
+build = "build.rs"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "tls-rustls", "postgres", "chrono"] }
+redis = { version = "0.27", features = ["tokio-comp"] }
+reqwest = { version = "0.12", features = ["rustls-tls", "stream"], default-features = false }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1"
+# image 0.25 brings faster zune-jpeg/zune-png decoders + WebP support built-in
+image = { version = "0.25", default-features = true }
+# libjpeg-turbo via TurboJPEG API — SIMD-accelerated JPEG decode with DCT downscaling
+turbojpeg = { version = "1", features = ["image"] }
+# In-process AVIF encoder for thumbnails (eliminates ffmpeg subprocess for 150×150)
+ravif = "0.13"
+rgb = "0.8"
+# In-process SVT-AV1 encoder for full-res AVIF (eliminates ffmpeg subprocess entirely for images)
+svt-av1-enc = { version = "0.1.2", default-features = false, features = ["dynamic"] }
+# AVIF container serialization (wraps raw AV1 bitstream into .avif)
+avif-serialize = "0.8"
+# UUID v4 for collision-safe temp filenames under concurrency
+uuid = { version = "1", features = ["v4"] }
+# Thread count calculation for ffmpeg -threads flag
+num_cpus = "1"
+# pre_exec for priority setting in child process (replaces nice/ionice wrapper)
+libc = "0.2"
+futures-util = "0.3"
+tokio-stream = { version = "0.1", features = ["sync"] }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["async_tokio", "html_reports"] }
+tempfile = "3"
+
+[[bench]]
+name = "processing"
+harness = false
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+
+[profile.bench]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
