@@ -81,8 +81,10 @@ pub async fn run(
 
     let mut shutdown = Box::pin(signal::ctrl_c());
     let mut ticker = tokio::time::interval(poll_interval);
-    // Don't immediately fire the first tick (we drain right away below).
-    ticker.reset();
+
+    // Drain immediately on startup so any dirty posts left from a previous
+    // run are picked up without waiting for the first tick or wake.
+    drain(&pool, &redis_client, &dirs, &sem, &state, cfg).await;
 
     loop {
         tokio::select! {
