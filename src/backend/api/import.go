@@ -203,6 +203,7 @@ slog.Int("flags", flags),
 slog.Int("max_pages", maxPages),
 slog.String("user", userName),
 )
+importStart := time.Now()
 
 // ── Phase 1: Fetch all pr0gramm JSON pages ────────────────────────────
 var allItems []pr0grammItem
@@ -212,6 +213,7 @@ successPages := 0
 failedPages := 0
 
 for page := 1; page <= maxPages; page++ {
+pageStart := time.Now()
 resp, fetchErr := fetchPr0grammPage(tags, flags, older)
 if fetchErr != nil {
 failedPages++
@@ -219,6 +221,7 @@ log.ErrorContext(ctx, "pr0gramm page fetch failed",
 slog.Int("page", page),
 slog.Int("success_pages_so_far", successPages),
 slog.Int("failed_pages_so_far", failedPages),
+slog.String("elapsed", time.Since(pageStart).String()),
 slog.Any("err", fetchErr))
 writeSSE(w, sseFetchingEvent{
 Phase:        phFetching,
@@ -256,6 +259,7 @@ slog.Int("success_pages", successPages),
 slog.Int("failed_pages", failedPages),
 slog.Bool("api_at_end", resp.AtEnd),
 slog.Bool("at_end", atEnd),
+slog.String("elapsed", time.Since(pageStart).String()),
 )
 
 if atEnd {
@@ -278,7 +282,9 @@ log.InfoContext(ctx, "pr0gramm fetch phase complete",
 slog.Int("success_pages", successPages),
 slog.Int("failed_pages", failedPages),
 slog.Int("total_items", len(allItems)),
+slog.String("fetch_phase_elapsed", time.Since(importStart).String()),
 )
+phase2Start := time.Now()
 
 // ── Phase 2: Filter, batch dedup, insert dirty rows ───────────────────
 type candidate struct {
@@ -325,6 +331,7 @@ allURLs[i] = c.imageURL
 skippedDedup := 0
 var toProcess []candidate
 
+dedupStart := time.Now()
 if s.store != nil {
 existing, dedupErr := s.store.FilterExistingURLs(ctx, allURLs)
 if dedupErr != nil {
@@ -347,6 +354,7 @@ log.InfoContext(ctx, "pr0gramm dedup",
 slog.Int("candidates", len(candidates)),
 slog.Int("skipped_dedup", skippedDedup),
 slog.Int("to_process", len(toProcess)),
+slog.String("dedup_elapsed", time.Since(dedupStart).String()),
 )
 
 // Insert placeholder dirty rows (one per new URL).
@@ -357,6 +365,7 @@ imageURL string
 }
 
 insertErrors := 0
+insertStart := time.Now()
 var dirtyPosts []dirtyEntry
 for _, cand := range toProcess {
 if s.store == nil {
@@ -391,6 +400,8 @@ slog.Int("total_queued", total),
 slog.Int("filtered_ext", filteredExt),
 slog.Int("skipped_dedup", skippedDedup),
 slog.Int("insert_errors", insertErrors),
+slog.String("insert_elapsed", time.Since(insertStart).String()),
+slog.String("phase2_elapsed", time.Since(phase2Start).String()),
 )
 
 // ── Hand off to background process queue ──────────────────────────────
@@ -408,6 +419,7 @@ slog.Int("total_queued", total),
 slog.Int("filtered_ext", filteredExt),
 slog.Int("skipped_dedup", skippedDedup),
 slog.Int("insert_errors", insertErrors),
+slog.String("total_elapsed", time.Since(importStart).String()),
 )
 })
 	return nil
@@ -417,6 +429,9 @@ slog.Int("insert_errors", insertErrors),
 // pipeline, and calls FinalizePost to make the dirty row visible.
 // On any failure the placeholder row is deleted to free the URL for future imports.
 func (s *Server) processAndFinalizeDirtyPost(ctx context.Context, postID int32, imageURL string) error {
+fnStart := time.Now()
+
+downloadStart := time.Now()
 tmpPath, err := downloadPr0grammFile(imageURL, s.dirs.Tmp)
 if err != nil {
 if s.store != nil {
@@ -425,6 +440,11 @@ _ = s.store.DeleteDirtyPost(ctx, postID)
 return fmt.Errorf("download failed: %w", err)
 }
 defer os.Remove(tmpPath)
+s.log.DebugContext(ctx, "import: download complete",
+slog.Int("post_id", int(postID)),
+slog.String("url", imageURL),
+slog.String("elapsed", time.Since(downloadStart).String()),
+)
 
 mimeType := mime.TypeByExtension(filepath.Ext(tmpPath))
 fileType := strings.SplitN(mimeType, "/", 2)[0]
@@ -435,6 +455,7 @@ _ = s.store.DeleteDirtyPost(ctx, postID)
 return fmt.Errorf("unsupported file type: %s", mimeType)
 }
 
+procStart := time.Now()
 res, err := utils.ProcessImage(tmpPath, s.dirs)
 if err != nil {
 if s.store != nil {
@@ -442,10 +463,18 @@ _ = s.store.DeleteDirtyPost(ctx, postID)
 }
 return fmt.Errorf("image processing failed: %w", err)
 }
+s.log.DebugContext(ctx, "import: image processing complete",
+slog.Int("post_id", int(postID)),
+slog.String("filename", res.Filename),
+slog.Int("width", res.Width),
+slog.Int("height", res.Height),
+slog.String("elapsed", time.Since(procStart).String()),
+)
 
 h := res.PerceptionHash.GetHash()
 
 if s.store != nil {
+finalizeStart := time.Now()
 if err := s.store.FinalizePost(ctx, db.FinalizePostParams{
 ID:                postID,
 Filename:          res.Filename,
@@ -462,8 +491,16 @@ Height:            int32(res.Height),
 _ = s.store.DeleteDirtyPost(ctx, postID)
 return fmt.Errorf("finalize post: %w", err)
 }
+s.log.DebugContext(ctx, "import: post finalized",
+slog.Int("post_id", int(postID)),
+slog.String("elapsed", time.Since(finalizeStart).String()),
+)
 }
 
+s.log.DebugContext(ctx, "import: processAndFinalizeDirtyPost complete",
+slog.Int("post_id", int(postID)),
+slog.String("total_elapsed", time.Since(fnStart).String()),
+)
 return nil
 }
 
@@ -772,12 +809,16 @@ func (s *Server) LoadNewFromPr0gramm(c fiber.Ctx) error {
 			olderID      int64
 		)
 
+		batchStart := time.Now()
 		for inserted < targetDirty {
 			page++
+			pageStart := time.Now()
 			resp, err := fetchPr0grammNewPage(newFlags, olderID)
 			if err != nil {
 				s.log.ErrorContext(ctx, "load-new: page fetch failed",
-					slog.Int("page", page), slog.Any("err", err))
+					slog.Int("page", page),
+					slog.String("elapsed", time.Since(pageStart).String()),
+					slog.Any("err", err))
 				// Emit final done event with what we have so far and stop.
 				writeSSE(w, sseLoadNewDone{
 					Phase:        phDone,
@@ -831,6 +872,14 @@ func (s *Server) LoadNewFromPr0gramm(c fiber.Ctx) error {
 				}
 			}
 
+			s.log.DebugContext(ctx, "load-new: page processed",
+				slog.Int("page", page),
+				slog.Int("items_this_page", len(resp.Items)),
+				slog.Int("inserted_so_far", inserted),
+				slog.Int("skipped_dedup", skippedDedup),
+				slog.String("page_elapsed", time.Since(pageStart).String()),
+				slog.String("total_elapsed", time.Since(batchStart).String()),
+			)
 			writeSSE(w, sseLoadNewProgress{
 				Phase:        "progress",
 				Page:         page,
@@ -853,6 +902,14 @@ func (s *Server) LoadNewFromPr0gramm(c fiber.Ctx) error {
 			s.queue.Notify()
 		}
 
+		s.log.InfoContext(ctx, "load-new: batch complete",
+			slog.Int("inserted", inserted),
+			slog.Int("skipped_dedup", skippedDedup),
+			slog.Int("filtered_ext", filteredExt),
+			slog.Int("pages_read", page),
+			slog.Int("total_read", totalRead),
+			slog.String("total_elapsed", time.Since(batchStart).String()),
+		)
 		writeSSE(w, sseLoadNewDone{
 			Phase:        phDone,
 			Total:        inserted,
