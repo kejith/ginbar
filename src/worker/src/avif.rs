@@ -81,6 +81,7 @@ pub(crate) fn encoder_thread_count() -> u32 {
 /// - `crf`: quality (0 = lossless, 63 = worst; 18 ≈ visually lossless)
 /// - `preset`: SVT-AV1 speed (0 = slowest, 13 = fastest; 8 = good balance)
 /// - `max_width`: scale down so width ≤ this value (0 = no scaling)
+/// - `threads`: SVT-AV1 thread count (0 = auto via `encoder_thread_count()`)
 ///
 /// Returns `(width, height)` of the encoded output.
 ///
@@ -93,17 +94,50 @@ pub fn encode_avif(
     crf: u32,
     preset: u32,
     max_width: u32,
+    threads: u32,
 ) -> Result<(i32, i32)> {
+    let fn_start = std::time::Instant::now();
+    let threads = if threads == 0 { encoder_thread_count() } else { threads };
+
     // ── Step 1: Resize if needed ─────────────────────────────────────────────
+    //
+    // Optimizations:
+    // • **Skip threshold**: when the source is within 15 % of `max_width`,
+    //   skip the resize entirely.  The quality impact on a CRF-18 AVIF is
+    //   imperceptible, and the resize itself costs 300-700 ms.
+    // • **Triangle filter**: for downscales that *are* needed, `Triangle`
+    //   (bilinear) is ~2× faster than `CatmullRom` (bicubic).  At web
+    //   resolutions the difference is invisible after AV1 compression.
+    const RESIZE_SKIP_RATIO: f64 = 1.15; // 15 %
     let (src_w, src_h) = (img.width(), img.height());
+    let resize_start = std::time::Instant::now();
     let img = if max_width > 0 && src_w > max_width {
-        let scale = max_width as f64 / src_w as f64;
-        let new_w = max_width;
-        let new_h = ((src_h as f64 * scale).round() as u32).max(1);
-        // Ensure even dimensions for YUV420
-        let new_w = new_w & !1;
-        let new_h = new_h & !1;
-        std::borrow::Cow::Owned(img.resize_exact(new_w, new_h, image::imageops::FilterType::CatmullRom))
+        let ratio = src_w as f64 / max_width as f64;
+        if ratio <= RESIZE_SKIP_RATIO {
+            // Source is close enough to target — just ensure even dims.
+            debug!(
+                src_w,
+                max_width,
+                ratio = %format!("{:.2}", ratio),
+                "encode_avif: skipping resize (within {:.0}% threshold)",
+                (RESIZE_SKIP_RATIO - 1.0) * 100.0,
+            );
+            let ew = src_w & !1;
+            let eh = src_h & !1;
+            if ew != src_w || eh != src_h {
+                std::borrow::Cow::Owned(img.crop_imm(0, 0, ew, eh))
+            } else {
+                std::borrow::Cow::Borrowed(img)
+            }
+        } else {
+            let scale = max_width as f64 / src_w as f64;
+            let new_w = max_width;
+            let new_h = ((src_h as f64 * scale).round() as u32).max(1);
+            // Ensure even dimensions for YUV420
+            let new_w = new_w & !1;
+            let new_h = new_h & !1;
+            std::borrow::Cow::Owned(img.resize_exact(new_w, new_h, image::imageops::FilterType::Triangle))
+        }
     } else {
         // Ensure even dimensions
         let ew = src_w & !1;
@@ -117,6 +151,14 @@ pub fn encode_avif(
 
     let width = img.width();
     let height = img.height();
+    debug!(
+        src_w,
+        src_h,
+        out_w = width,
+        out_h = height,
+        elapsed_ms = resize_start.elapsed().as_millis(),
+        "encode_avif: resize/crop step"
+    );
 
     // ── Fallback: dimensions below SVT-AV1 64×64 minimum ────────────────────
     if width < 64 || height < 64 {
@@ -125,10 +167,18 @@ pub fn encode_avif(
     }
 
     // ── Step 2: Convert RGB → YUV420 (BT.601 limited range) ─────────────────
+    let yuv_start = std::time::Instant::now();
     let rgb = img.to_rgb8();
     let (y_plane, u_plane, v_plane) = rgb_to_yuv420(&rgb, width, height);
+    debug!(
+        width,
+        height,
+        elapsed_ms = yuv_start.elapsed().as_millis(),
+        "encode_avif: RGB→YUV420 conversion"
+    );
 
     // ── Step 3: Encode with SVT-AV1 ─────────────────────────────────────────
+    let svt_start = std::time::Instant::now();
     match encode_av1_raw(
         &y_plane,
         &u_plane,
@@ -137,13 +187,28 @@ pub fn encode_avif(
         height,
         crf,
         preset,
+        threads,
     ) {
         Ok(av1_data) => {
+            debug!(
+                width,
+                height,
+                av1_bytes = av1_data.len(),
+                elapsed_ms = svt_start.elapsed().as_millis(),
+                "encode_avif: SVT-AV1 encode"
+            );
+
             // ── Step 4: Wrap in AVIF container ───────────────────────────────
+            let wrap_start = std::time::Instant::now();
             let avif_data = wrap_avif_container(&av1_data, width, height)?;
 
             // ── Step 5: Write to disk ─────────────────────────────────────────
             std::fs::write(dst, &avif_data).context("write AVIF file")?;
+            debug!(
+                avif_bytes = avif_data.len(),
+                elapsed_ms = wrap_start.elapsed().as_millis(),
+                "encode_avif: AVIF container wrap + write"
+            );
 
             debug!(
                 dst = %dst.display(),
@@ -151,7 +216,8 @@ pub fn encode_avif(
                 height,
                 av1_bytes = av1_data.len(),
                 avif_bytes = avif_data.len(),
-                "AVIF encoded in-process via SVT-AV1"
+                total_elapsed_ms = fn_start.elapsed().as_millis(),
+                "encode_avif: complete (SVT-AV1)"
             );
 
             Ok((width as i32, height as i32))
@@ -255,31 +321,37 @@ pub(crate) fn encode_av1_raw(
     height: u32,
     crf: u32,
     preset: u32,
+    threads: u32,
 ) -> Result<Vec<u8>> {
-    let mut cfg = SvtAv1EncoderConfig::new(width, height, Some(preset as i8));
+    // Wrap the entire config creation + encoder init in suppress_stdio_for so
+    // SVT-AV1's "Svt[info]: ---…" banner (printed during EbInitEncoder inside
+    // SvtAv1EncoderConfig::new) is fully silenced, not just the into_encoder step.
+    let encoder = suppress_stdio_for(|| {
+        let mut cfg = SvtAv1EncoderConfig::new(width, height, Some(preset as i8));
 
-    // CRF mode (rate_control_mode=0 means CQP/CRF)
-    cfg.config.rate_control_mode = 0;
-    cfg.config.qp = crf;
+        // CRF mode (rate_control_mode=0 means CQP/CRF)
+        cfg.config.rate_control_mode = 0;
+        cfg.config.qp = crf;
 
-    // LOW_DELAY_P prediction structure: the encoder outputs each frame
-    // immediately without buffering a GOP.  Essential for single-frame
-    // still-image encoding — the default RANDOM_ACCESS (2) buffers frames
-    // and may produce no output for a one-frame stream even after send_eos.
-    // SVT-AV1 v2.3.0 only accepts 1 (LOW_DELAY_P) or 2 (RANDOM_ACCESS);
-    // the old value 0 was removed.
-    cfg.config.pred_structure = 1;
+        // LOW_DELAY_P prediction structure: the encoder outputs each frame
+        // immediately without buffering a GOP.  Essential for single-frame
+        // still-image encoding — the default RANDOM_ACCESS (2) buffers frames
+        // and may produce no output for a one-frame stream even after send_eos.
+        // SVT-AV1 v2.3.0 only accepts 1 (LOW_DELAY_P) or 2 (RANDOM_ACCESS);
+        // the old value 0 was removed.
+        cfg.config.pred_structure = 1;
 
-    // Let the encoder auto-set the intra period based on pred_structure.
-    // -1 means auto; combined with LOW_DELAY_P the single frame is always
-    // a keyframe.
-    cfg.config.intra_period_length = -1;
+        // Let the encoder auto-set the intra period based on pred_structure.
+        // -1 means auto; combined with LOW_DELAY_P the single frame is always
+        // a keyframe.
+        cfg.config.intra_period_length = -1;
 
-    // Thread control
-    cfg.config.logical_processors = encoder_thread_count();
+        // Thread control
+        cfg.config.logical_processors = threads;
 
-    let encoder = suppress_stdio_for(|| cfg.into_encoder())
-        .map_err(|e| anyhow::anyhow!("SVT-AV1 init: {:?}", e))?;
+        cfg.into_encoder()
+    })
+    .map_err(|e| anyhow::anyhow!("SVT-AV1 init: {:?}", e))?;
 
     let frame = Frame::new(
         y_plane,
@@ -351,6 +423,88 @@ pub fn wrap_avif_container(av1_data: &[u8], width: u32, height: u32) -> Result<V
         .to_vec(av1_data, None, width, height, 8);
 
     Ok(avif)
+}
+
+/// Encode raw **full-range** YUV420 planes to an AV1 bitstream.
+///
+/// Identical to [`encode_av1_raw`] except that it sets
+/// `color_range = CrFullRange` so the AV1 bitstream signals full-range
+/// values (0-255 for Y, Cb, Cr), as produced by `turbojpeg::decompress_to_yuv`.
+fn encode_av1_raw_full_range(
+    y_plane: &[u8],
+    u_plane: &[u8],
+    v_plane: &[u8],
+    width: u32,
+    height: u32,
+    crf: u32,
+    preset: u32,
+    threads: u32,
+) -> Result<Vec<u8>> {
+    let encoder = suppress_stdio_for(|| {
+        let mut cfg = SvtAv1EncoderConfig::new(width, height, Some(preset as i8));
+        cfg.config.rate_control_mode = 0;
+        cfg.config.qp = crf;
+        cfg.config.pred_structure = 1;
+        cfg.config.intra_period_length = -1;
+        cfg.config.logical_processors = threads;
+        cfg.config.color_range = svt_av1_enc::ffi::ColorRange::CrFullRange;
+        cfg.into_encoder()
+    })
+    .map_err(|e| anyhow::anyhow!("SVT-AV1 init: {:?}", e))?;
+
+    let frame = Frame::new(
+        y_plane,
+        u_plane,
+        v_plane,
+        width,
+        width / 2,
+        width / 2,
+        (width * height * 3 / 2) as u32,
+    );
+
+    encoder
+        .send_picture(frame, Some(0), true)
+        .map_err(|e| anyhow::anyhow!("SVT-AV1 send_picture: {:?}", e))?;
+
+    encoder
+        .send_eos()
+        .map_err(|e| anyhow::anyhow!("SVT-AV1 send_eos: {:?}", e))?;
+
+    let packet = encoder
+        .get_packet(1)
+        .map_err(|e| anyhow::anyhow!("SVT-AV1 get_packet: {:?}", e))?;
+
+    Ok(packet.to_vec())
+}
+
+/// Encode pre-decoded full-range YUV420 planes directly into an AVIF file.
+///
+/// Used by `process_image_v_d` to skip the `rgb_to_yuv420` conversion step
+/// by feeding turbojpeg's native YUV output directly to SVT-AV1.
+/// The resulting AVIF is tagged full-range in the AV1 bitstream.
+pub fn encode_avif_from_yuv_planes(
+    y_plane: &[u8],
+    u_plane: &[u8],
+    v_plane: &[u8],
+    width: u32,
+    height: u32,
+    dst: &Path,
+    crf: u32,
+    preset: u32,
+    threads: u32,
+) -> Result<(i32, i32)> {
+    let av1 = encode_av1_raw_full_range(
+        y_plane, u_plane, v_plane, width, height, crf, preset, threads,
+    )?;
+    let avif_bytes = wrap_avif_container(&av1, width, height)?;
+    std::fs::write(dst, &avif_bytes).context("write AVIF file (yuv planes)")?;
+    debug!(
+        dst = %dst.display(),
+        width,
+        height,
+        "AVIF encoded from YUV planes (full-range)"
+    );
+    Ok((width as i32, height as i32))
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
@@ -494,7 +648,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let dst = tmp.path().join("out.avif");
         let img = solid_dyn(128, 64, 32, 32, 32);
-        let (w, h) = encode_avif(&img, &dst, 18, 8, 0).unwrap();
+        let (w, h) = encode_avif(&img, &dst, 18, 8, 0, 0).unwrap();
         assert_eq!(w, 32);
         assert_eq!(h, 32);
         assert!(dst.exists(), "AVIF file must exist");
@@ -506,7 +660,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let dst = tmp.path().join("out.avif");
         let img = solid_dyn(100, 150, 200, 128, 128);
-        let result = encode_avif(&img, &dst, 18, 8, 0);
+        let result = encode_avif(&img, &dst, 18, 8, 0, 0);
         assert!(result.is_ok(), "encode_avif failed: {:?}", result.err());
         assert!(dst.exists(), "output AVIF file must exist");
         assert!(std::fs::metadata(&dst).unwrap().len() > 0);
@@ -517,7 +671,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let dst = tmp.path().join("out.avif");
         let img = solid_dyn(80, 80, 80, 128, 96);
-        let (w, h) = encode_avif(&img, &dst, 18, 8, 0).unwrap();
+        let (w, h) = encode_avif(&img, &dst, 18, 8, 0, 0).unwrap();
         // Output dimensions may be even-clipped but should match the input
         assert!((w - 128).abs() <= 2, "width should be near 128, got {}", w);
         assert!((h - 96).abs() <= 2, "height should be near 96, got {}", h);
@@ -529,7 +683,7 @@ mod tests {
         let dst = tmp.path().join("out.avif");
         // Input is 200×200; max_width=100 must scale it down.
         let img = solid_dyn(200, 100, 50, 200, 200);
-        let (w, h) = encode_avif(&img, &dst, 18, 8, 100).unwrap();
+        let (w, h) = encode_avif(&img, &dst, 18, 8, 100, 0).unwrap();
         assert!(w <= 100, "width {} should be ≤ max_width 100", w);
         assert!(h > 0, "height should be positive");
     }
@@ -540,9 +694,43 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let dst = tmp.path().join("out.avif");
         let img = solid_dyn(128, 128, 128, 131, 97);
-        let (w, h) = encode_avif(&img, &dst, 18, 8, 0).unwrap();
+        let (w, h) = encode_avif(&img, &dst, 18, 8, 0, 0).unwrap();
         assert_eq!(w % 2, 0, "output width {} must be even", w);
         assert_eq!(h % 2, 0, "output height {} must be even", h);
+    }
+
+    // ── resize skip threshold ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_encode_avif_skip_resize_within_threshold() {
+        // 1050×700 with max_width=920: ratio = 1050/920 ≈ 1.14 < 1.15
+        // Should skip resize → output width stays ≈ 1050
+        let tmp = TempDir::new().unwrap();
+        let dst = tmp.path().join("skip.avif");
+        let img = solid_dyn(128, 128, 128, 1050, 700);
+        let (w, _h) = encode_avif(&img, &dst, 18, 8, 920, 0).unwrap();
+        assert!(w >= 1048, "width {} should be near 1050 (skip resize)", w);
+    }
+
+    #[test]
+    fn test_encode_avif_does_resize_beyond_threshold() {
+        // 1200×800 with max_width=920: ratio = 1200/920 ≈ 1.30 > 1.15
+        // Should resize → output width ≤ 920
+        let tmp = TempDir::new().unwrap();
+        let dst = tmp.path().join("resize.avif");
+        let img = solid_dyn(128, 128, 128, 1200, 800);
+        let (w, _h) = encode_avif(&img, &dst, 18, 8, 920, 0).unwrap();
+        assert!(w <= 920, "width {} should be ≤ 920 after resize", w);
+    }
+
+    #[test]
+    fn test_encode_avif_explicit_threads() {
+        // Verify that passing explicit thread count (1) works.
+        let tmp = TempDir::new().unwrap();
+        let dst = tmp.path().join("1thread.avif");
+        let img = solid_dyn(100, 150, 200, 128, 128);
+        let result = encode_avif(&img, &dst, 18, 8, 0, 1);
+        assert!(result.is_ok(), "encode with 1 thread failed: {:?}", result.err());
     }
 
     // ── encode_avif_ravif (direct) ────────────────────────────────────────────
@@ -567,6 +755,45 @@ mod tests {
         let img = solid_dyn(255, 0, 0, 4, 4);
         let result = encode_avif_ravif(&img, &dst);
         assert!(result.is_ok(), "ravif should handle 4×4 images: {:?}", result.err());
+    }
+
+    // ── suppress_stdio_for ────────────────────────────────────────────────────
+
+    // ── encode_avif_from_yuv_planes ───────────────────────────────────────────
+
+    #[test]
+    fn test_encode_avif_from_yuv_planes_creates_file() {
+        // Build YUV420 planes from a solid-green image and ensure the output
+        // AVIF file is created and non-empty.
+        let tmp = TempDir::new().unwrap();
+        let dst = tmp.path().join("out.avif");
+        let rgb = solid_rgb(0, 200, 0, 64, 64);
+        let w = rgb.width();
+        let h = rgb.height();
+        let (y, u, v) = rgb_to_yuv420(&rgb, w, h);
+        let result = encode_avif_from_yuv_planes(&y, &u, &v, w, h, &dst, 50, 10, 1);
+        assert!(result.is_ok(), "encode_avif_from_yuv_planes failed: {:?}", result.err());
+        let (rw, rh) = result.unwrap();
+        assert_eq!(rw as u32, w);
+        assert_eq!(rh as u32, h);
+        assert!(dst.exists(), "output AVIF file must exist");
+        assert!(std::fs::metadata(&dst).unwrap().len() > 0, "output must be non-empty");
+    }
+
+    #[test]
+    fn test_encode_avif_from_yuv_planes_has_ftyp_box() {
+        // The produced bytes must start with an AVIF ftyp box (magic bytes).
+        let tmp = TempDir::new().unwrap();
+        let dst = tmp.path().join("out.avif");
+        let rgb = solid_rgb(100, 100, 100, 64, 64);
+        let w = rgb.width();
+        let h = rgb.height();
+        let (y, u, v) = rgb_to_yuv420(&rgb, w, h);
+        encode_avif_from_yuv_planes(&y, &u, &v, w, h, &dst, 50, 10, 1).unwrap();
+        let bytes = std::fs::read(&dst).unwrap();
+        // AVIF/ISOBMFF: offset 4-7 must be "ftyp"
+        assert!(bytes.len() > 8, "file too short to contain ftyp box");
+        assert_eq!(&bytes[4..8], b"ftyp", "AVIF must start with ftyp box");
     }
 
     // ── suppress_stdio_for ────────────────────────────────────────────────────

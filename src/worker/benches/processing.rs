@@ -94,7 +94,7 @@ fn bench_convert_to_avif_fullres(c: &mut Criterion) {
             b.iter(|| {
                 let (dirs, _tmp) = bench_dirs();
                 let dst = dirs.image.join("out.avif");
-                avif::encode_avif(img, &dst, 18, 8, 920).unwrap();
+                avif::encode_avif(img, &dst, 18, 8, 920, 0).unwrap();
             });
         });
     }
@@ -244,7 +244,7 @@ fn bench_avif_preset_comparison(c: &mut Criterion) {
                 b.iter(|| {
                     let (dirs, _tmp) = bench_dirs();
                     let dst = dirs.image.join("out.avif");
-                    avif::encode_avif(img, &dst, 18, preset, 0).unwrap();
+                    avif::encode_avif(img, &dst, 18, preset, 0, 0).unwrap();
                 });
             },
         );
@@ -271,8 +271,37 @@ criterion_group!(
     bench_region_gradient_energy,
     bench_encode_avif_ravif,
     bench_generate_name,
+    bench_prepare_thumbnail_pixels,
+    bench_decode_jpeg,
 );
 criterion_main!(benches);
+
+// ── prepare_thumbnail_pixels (smart_crop + resize, no encode) ─────────────────
+
+fn bench_prepare_thumbnail_pixels(c: &mut Criterion) {
+    let mut group = c.benchmark_group("prepare_thumbnail_pixels");
+    group.measurement_time(std::time::Duration::from_secs(8));
+
+    for &(name, path) in TEST_INPUTS {
+        if !input_available(path) {
+            continue;
+        }
+
+        let img = image::open(path).expect("load image for prepare_thumbnail_pixels bench");
+
+        group.bench_with_input(
+            BenchmarkId::new("crop_resize_150x150", name),
+            &img,
+            |b, img| {
+                b.iter(|| {
+                    std::hint::black_box(processing::prepare_thumbnail_pixels(img));
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
 
 // ── rgb_to_yuv420 ─────────────────────────────────────────────────────────────
 
@@ -431,7 +460,7 @@ fn bench_encode_avif_ravif(c: &mut Criterion) {
                     let dst = dirs.image.join("ravif_out.avif");
                     // Access the crate-public encode function via the full path
                     // (avif::encode_avif with max_width=0 and small preset to minimise time).
-                    avif::encode_avif(img, &dst, 50, 12, 0).unwrap();
+                    avif::encode_avif(img, &dst, 50, 12, 0, 0).unwrap();
                 });
             },
         );
@@ -451,6 +480,59 @@ fn bench_generate_name(c: &mut Criterion) {
             std::hint::black_box(processing::generate_name());
         });
     });
+
+    group.finish();
+}
+
+// ── decode_jpeg (turbojpeg vs image crate) ────────────────────────────────────
+
+fn bench_decode_jpeg(c: &mut Criterion) {
+    let mut group = c.benchmark_group("decode_jpeg");
+    group.sample_size(10);
+    group.measurement_time(std::time::Duration::from_secs(10));
+
+    for &(name, path) in TEST_INPUTS {
+        if !input_available(path) {
+            continue;
+        }
+
+        // turbojpeg (libjpeg-turbo) — no DCT downscale
+        group.bench_with_input(
+            BenchmarkId::new("turbojpeg_full", name),
+            &path,
+            |b, &p| {
+                b.iter(|| {
+                    std::hint::black_box(
+                        processing::decode_jpeg_turbo(Path::new(p), 0).unwrap()
+                    );
+                });
+            },
+        );
+
+        // turbojpeg with DCT 1/2 downscale (for images > 2× target width)
+        group.bench_with_input(
+            BenchmarkId::new("turbojpeg_half", name),
+            &path,
+            |b, &p| {
+                b.iter(|| {
+                    std::hint::black_box(
+                        processing::decode_jpeg_turbo(Path::new(p), 920).unwrap()
+                    );
+                });
+            },
+        );
+
+        // image crate (zune-jpeg under the hood)
+        group.bench_with_input(
+            BenchmarkId::new("image_crate", name),
+            &path,
+            |b, &p| {
+                b.iter(|| {
+                    std::hint::black_box(image::open(p).unwrap());
+                });
+            },
+        );
+    }
 
     group.finish();
 }

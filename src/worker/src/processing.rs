@@ -7,26 +7,45 @@
 //!    ffprobe subprocess for images (eliminates fork/exec overhead, double
 //!    decode, and IPC).  ffmpeg is only used for video operations.
 //!
-//! 2. **Skip ffmpeg normalization for common formats** – JPEG, PNG, WebP,
+//! 2. **Turbojpeg JPEG decode** – JPEG files (≈90 % of input) are decoded
+//!    via libjpeg-turbo's TurboJPEG API for SIMD-accelerated decoding.
+//!    When the JPEG is more than 2× wider than the output target, DCT
+//!    downscaling decodes at half resolution (~4× fewer pixels).
+//!
+//! 3. **Skip ffmpeg normalization for common formats** – JPEG, PNG, WebP,
 //!    GIF, BMP and TIFF are decoded directly by the `image` crate.
 //!
-//! 3. **Sequential then blocking** – phash + thumbnail run first (cheap,
-//!    ~5-60 ms), then the image is moved (not cloned) to a blocking thread
-//!    for SVT-AV1 encoding.  This eliminates a full pixel-buffer copy.
+//! 4. **Parallel encode** – after phash, the image is split: a 150×150
+//!    thumbnail crop is extracted (cheap, ~5 ms), then both thumbnail and
+//!    full-res SVT-AV1 encodes run simultaneously via `tokio::join!` on
+//!    separate blocking threads. No pixel-buffer clone — the crop produces
+//!    a small 150×150 buffer, and the full image is moved to the other thread.
 //!
-//! 4. **Content-aware thumbnails** – gradient-saliency crop replaces the
+//! 5. **Smart thread budget** – thumbnail encodes use 1 thread (negligible
+//!    benefit from more at 150 px / preset 10), full-res encodes get the
+//!    remaining cores: `max(1, cpus/concurrency - 1)`.
+//!
+//! 6. **Resize skip + Triangle filter** – when the source is within 15 %
+//!    of `max_width`, the resize is skipped entirely (saves 300-700 ms).
+//!    For larger downscales, `Triangle` (bilinear) replaces `CatmullRom`
+//!    (bicubic) — ~2× faster with imperceptible quality difference after
+//!    AV1 compression.
+//!
+//! 7. **Content-aware thumbnails** – gradient-saliency crop replaces the
 //!    naïve center crop, matching the Go `smartcrop` behaviour.
 //!
-//! 5. **CatmullRom resize** – ~2× faster than Lanczos3 for downscaling.
+//! 8. **UUID filenames** prevent timestamp-collision races.
 //!
-//! 6. **UUID filenames** prevent timestamp-collision races.
+//! 9. **DCT perceptual hash** in-process (no `img_hash` dep).
 //!
-//! 7. **DCT perceptual hash** in-process (no `img_hash` dep).
+//! 10. **Download/process pipeline** – downloads stream into processing via a
+//!     bounded channel, so CPU-bound workers are busy from the first download.
 
 use anyhow::{Context, Result};
 use image::imageops::FilterType;
 use std::path::{Path, PathBuf};
 use tokio::fs;
+use tracing::{debug, warn};
 
 use crate::avif;
 use crate::ffmpeg;
@@ -101,10 +120,109 @@ pub(crate) fn can_decode_natively(path: &Path) -> bool {
     )
 }
 
+/// Decode a JPEG file using turbojpeg (libjpeg-turbo) for SIMD-accelerated
+/// decoding with optional DCT downscaling.
+///
+/// When `max_decode_width > 0` and the JPEG is more than 2× wider than
+/// `max_decode_width`, the image is decoded at half resolution using
+/// libjpeg-turbo's built-in IDCT scaling.  This computes only 1/4 of the
+/// DCT coefficients, making decode roughly 4× faster for large images.
+///
+/// The resulting `DynamicImage` is still large enough for all downstream
+/// work (phash, thumbnail, full-res encode) since `max_decode_width` is
+/// set to the AVIF output width (920 px).
+pub fn decode_jpeg_turbo(path: &Path, max_decode_width: u32) -> Result<image::DynamicImage> {
+    let data = std::fs::read(path).context("read JPEG file")?;
+
+    let mut decompressor = turbojpeg::Decompressor::new()
+        .map_err(|e| anyhow::anyhow!("turbojpeg init: {}", e))?;
+
+    let header = decompressor.read_header(&data)
+        .map_err(|e| anyhow::anyhow!("turbojpeg header: {}", e))?;
+
+    // DCT downscaling: if the JPEG is much larger than our output target,
+    // decode at half resolution. libjpeg-turbo's IDCT scaling is very
+    // efficient — roughly 4× fewer pixels to process.
+    let use_half = max_decode_width > 0
+        && header.width > max_decode_width as usize * 2;
+
+    let (width, height) = if use_half {
+        let scale = turbojpeg::ScalingFactor::new(1, 2);
+        decompressor.set_scaling_factor(scale)
+            .map_err(|e| anyhow::anyhow!("turbojpeg set scale: {}", e))?;
+        let scaled = header.scaled(scale);
+        debug!(
+            original_w = header.width,
+            original_h = header.height,
+            scaled_w = scaled.width,
+            scaled_h = scaled.height,
+            "decode_jpeg_turbo: DCT downscale 1/2"
+        );
+        (scaled.width, scaled.height)
+    } else {
+        (header.width, header.height)
+    };
+
+    let pitch = width * 3; // RGB, tightly packed
+    let mut pixels = vec![0u8; pitch * height];
+    let dest = turbojpeg::Image {
+        pixels: &mut pixels[..],
+        width,
+        pitch,
+        height,
+        format: turbojpeg::PixelFormat::RGB,
+    };
+
+    decompressor.decompress(&data, dest)
+        .map_err(|e| anyhow::anyhow!("turbojpeg decompress: {}", e))?;
+
+    let rgb = image::RgbImage::from_raw(width as u32, height as u32, pixels)
+        .context("convert decoded pixels to RgbImage")?;
+
+    Ok(image::DynamicImage::ImageRgb8(rgb))
+}
+
+/// Number of threads for the thumbnail SVT-AV1 encode.
+///
+/// Thumbnails are 150×150 at preset 10 — so fast that multi-threading has
+/// no measurable benefit. Always returns 1.
+pub(crate) fn thumbnail_encode_threads() -> u32 {
+    1
+}
+
+/// Number of threads for the full-resolution SVT-AV1 encode.
+///
+/// Each worker runs one thumbnail encode (1 thread) and one full-res encode
+/// (N threads) simultaneously.  Budget: `N = max(1, cpus/concurrency - 1)`
+/// so total threads ≈ `concurrency × (1 + N) ≤ cpus`.
+///
+/// Override with `SVT_AV1_THREADS` to set an explicit value.
+pub(crate) fn fullres_encode_threads() -> u32 {
+    if let Ok(v) = std::env::var("SVT_AV1_THREADS") {
+        if let Ok(n) = v.parse::<u32>() {
+            if n > 0 {
+                return n;
+            }
+        }
+    }
+    let cpus = num_cpus::get() as u32;
+    let concurrency: u32 = std::env::var("WORKER_CONCURRENCY")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(4);
+    // Each worker's thumbnail uses 1 thread; give the rest to full-res.
+    ((cpus / concurrency).saturating_sub(1)).max(1)
+}
+
 /// Load an image into memory.
 ///
-/// For natively-decodable formats (JPEG/PNG/WebP/GIF/BMP/TIFF) the file is
-/// opened directly — no subprocess required.
+/// For JPEG files, uses turbojpeg (libjpeg-turbo) for SIMD-accelerated
+/// decoding with optional DCT downscaling.  When the JPEG is more than
+/// 2× wider than `max_decode_width`, it is decoded at half resolution
+/// directly during the IDCT step — roughly 4× fewer pixels to process.
+///
+/// For other natively-decodable formats (PNG/WebP/GIF/BMP/TIFF) the file
+/// is opened via the `image` crate — no subprocess required.
 ///
 /// For everything else (AVIF, JXL, …) an ffmpeg subprocess normalizes it to
 /// a temporary JPEG first, which is then decoded and cleaned up.
@@ -115,10 +233,47 @@ async fn load_image(
     dirs: &Directories,
 ) -> Result<(image::DynamicImage, Option<PathBuf>)> {
     if can_decode_natively(input) {
+        let is_jpeg = matches!(
+            input.extension().map(|e| e.to_string_lossy().to_lowercase()).as_deref(),
+            Some("jpg" | "jpeg")
+        );
         let input = input.to_path_buf();
-        let img = tokio::task::spawn_blocking(move || image::open(&input))
-            .await?
-            .context("decode image")?;
+        let decode_start = std::time::Instant::now();
+        let img = if is_jpeg {
+            // Fast path: turbojpeg with optional DCT downscaling.
+            let p = input.clone();
+            match tokio::task::spawn_blocking(move || decode_jpeg_turbo(&p, 920)).await? {
+                Ok(img) => {
+                    debug!(
+                        elapsed_ms = decode_start.elapsed().as_millis(),
+                        "load_image: turbojpeg decode"
+                    );
+                    img
+                }
+                Err(e) => {
+                    // Fallback to image crate if turbojpeg fails.
+                    warn!(err = %e, "turbojpeg decode failed, falling back to image::open");
+                    let fb_start = std::time::Instant::now();
+                    let img = tokio::task::spawn_blocking(move || image::open(&input))
+                        .await?
+                        .context("decode image (fallback)")?;
+                    debug!(
+                        elapsed_ms = fb_start.elapsed().as_millis(),
+                        "load_image: fallback native decode"
+                    );
+                    img
+                }
+            }
+        } else {
+            let img = tokio::task::spawn_blocking(move || image::open(&input))
+                .await?
+                .context("decode image")?;
+            debug!(
+                elapsed_ms = decode_start.elapsed().as_millis(),
+                "load_image: native decode"
+            );
+            img
+        };
         return Ok((img, None));
     }
 
@@ -126,12 +281,23 @@ async fn load_image(
     let tmp_name = format!("{}.jpg", generate_name());
     let tmp_path = dirs.tmp.join("thumbnails").join(&tmp_name);
 
+    let ffmpeg_start = std::time::Instant::now();
     ffmpeg::normalize_to_jpeg(input, &tmp_path).await?;
+    debug!(
+        path = %input.display(),
+        elapsed_ms = ffmpeg_start.elapsed().as_millis(),
+        "load_image: ffmpeg normalization to JPEG"
+    );
 
     let tmp_clone = tmp_path.clone();
+    let decode_start = std::time::Instant::now();
     let img = tokio::task::spawn_blocking(move || image::open(&tmp_clone))
         .await?
         .context("decode normalized JPEG")?;
+    debug!(
+        elapsed_ms = decode_start.elapsed().as_millis(),
+        "load_image: decode of normalized JPEG"
+    );
 
     Ok((img, Some(tmp_path)))
 }
@@ -139,61 +305,655 @@ async fn load_image(
 /// Process a single image: encode to AVIF, compute perceptual hash, create thumbnail.
 ///
 /// Everything runs in-process via SVT-AV1 native bindings — no ffmpeg subprocess.
-/// Phash + thumbnail are computed first (cheap, ~5-60 ms), then the image is
-/// moved (not cloned) to a blocking thread for full-res AVIF encoding.
-/// This avoids copying the entire pixel buffer.
+///
+/// **Fast path** (JPEG ≤ 1058 px wide):
+///   1. Read bytes; concurrently decode to:
+///      a. Full-res YUV420 planes (turbojpeg native — skips rgb_to_yuv420,
+///         saving ~80-110 ms).
+///      b. ≤512 px RGB image (for phash and thumbnail).
+///   2. Three threads/tasks run simultaneously:
+///      - Thread A: compute perceptual hash on the 512 px image.
+///      - Thread B: smart-crop + resize → encode thumbnail AVIF.
+///      - Task  C: encode full-res AVIF directly from YUV420 planes.
+///
+/// **Fallback** (non-JPEG or JPEG > 1058 px):
+///   1. Decode via load_image; downscale to 512 px.
+///   2. Same three-way parallel layout, but with the standard limited-range
+///      RGB→YUV420 conversion in the full-res encode.
+///
+/// Typical speedup vs. the old sequential pipeline: ~1.7× for 1052 px JPEGs.
 pub async fn process_image(input: &Path, dirs: &Directories) -> Result<ImageResult> {
+    let fn_start = std::time::Instant::now();
+    let file_name   = input
+        .file_name()
+        .context("no filename")?
+        .to_string_lossy()
+        .to_string();
+    let avif_name   = format!("{}.avif", file_name);
+    let output_path = dirs.image.join(&avif_name);
+
+    // Fast path only applies to JPEG input.
+    let is_jpeg = matches!(
+        input.extension().map(|e| e.to_string_lossy().to_lowercase()).as_deref(),
+        Some("jpg" | "jpeg")
+    );
+    if !is_jpeg {
+        return process_image_fallback(input, dirs).await;
+    }
+
+    // Read bytes once; share between the two concurrent decode tasks.
+    let data = std::sync::Arc::new(
+        tokio::fs::read(input).await.context("read JPEG bytes")?,
+    );
+
+    // Check JPEG width: only use YUV-native path when no resize is needed.
+    // max_width=920, resize-skip ratio=1.15 → threshold ≈ 1058 px.
+    const MAX_ENCODE_WIDTH: u32 = 920;
+    const RESIZE_SKIP_RATIO: f64 = 1.15;
+    let threshold_w = (MAX_ENCODE_WIDTH as f64 * RESIZE_SKIP_RATIO) as u32;
+
+    let hdr = turbojpeg::read_header(&*data)
+        .map_err(|e| anyhow::anyhow!("turbojpeg header peek: {}", e))?;
+    // Fall back if the image needs resizing OR if the JPEG chroma subsampling
+    // is not 4:2:0.  `turbojpeg::decompress_to_yuv` always outputs in the
+    // *source* subsampling (the `subsamp` field in `YuvImage` is ignored by
+    // libjpeg-turbo).  SVT-AV1 requires 4:2:0 input, so 4:4:4 or 4:2:2
+    // source images must go through the standard RGB→YUV420 conversion path.
+    if hdr.width as u32 > threshold_w
+        || hdr.subsamp != turbojpeg::Subsamp::Sub2x2
+    {
+        return process_image_fallback(input, dirs).await;
+    }
+
+    let data_yuv = data.clone();
+    let data_rgb = data.clone();
+
+    // Decode full-res → YUV420 planes (no RGB conversion) and ≤512 px RGB
+    // (for phash + thumbnail), concurrently.
+    let (yuv_r, small_r) = tokio::join!(
+        tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, u32, u32, usize, usize)> {
+            decode_jpeg_to_yuv_planes(&data_yuv)
+        }),
+        tokio::task::spawn_blocking(move || -> Result<image::DynamicImage> {
+            let img = decode_jpeg_turbo_from_data(&data_rgb, 512)?;
+            let img = if img.width() > 512 {
+                img.resize(512, 512, image::imageops::FilterType::Triangle)
+            } else {
+                img
+            };
+            Ok(img)
+        }),
+    );
+
+    let (yuv_buf, yuv_w, yuv_h, y_len, uv_len) =
+        yuv_r.context("YUV decode task panic")?.context("YUV decode failed")?;
+    let small =
+        small_r.context("RGB-512 decode task panic")?.context("RGB-512 decode failed")?;
+
+    // Ensure even dimensions for SVT-AV1 / YUV420.
+    let enc_w      = yuv_w & !1;
+    let enc_h      = yuv_h & !1;
+    let y_stride   = enc_w as usize;
+    let uv_stride  = enc_w as usize / 2;
+    let y_enc_len  = y_stride * enc_h as usize;
+    let uv_enc_len = uv_stride * enc_h as usize / 2;
+
+    let thumb_name  = format!("{}.avif", file_name);
+    let thumb_path  = dirs.thumbnail.join(&thumb_name);
+    let avif_output = output_path.clone();
+
+    // Three-way parallel: (phash ∥ crop→thumb-encode)  vs  full-res YUV encode.
+    let (phash_thumb_result, fullres_result) = tokio::join!(
+        tokio::task::spawn_blocking(move || -> Result<([i64; 4], ())> {
+            let img = &small;
+            let mut p_hash = [0i64; 4];
+            let mut thumb_img: Option<image::DynamicImage> = None;
+            std::thread::scope(|s| {
+                let ph = s.spawn(|| compute_phash(img));
+                let th = s.spawn(|| prepare_thumbnail_pixels(img));
+                p_hash    = ph.join().expect("phash panic");
+                thumb_img = Some(th.join().expect("crop panic"));
+            });
+            avif::encode_avif(
+                &thumb_img.unwrap(), &thumb_path, 40, 10, 150,
+                thumbnail_encode_threads(),
+            )
+            .context("thumbnail AVIF encode failed")?;
+            Ok((p_hash, ()))
+        }),
+        tokio::task::spawn_blocking(move || -> Result<(i32, i32)> {
+            let y = &yuv_buf[..y_enc_len];
+            let u = &yuv_buf[y_len..y_len + uv_enc_len];
+            let v = &yuv_buf[y_len + uv_len..y_len + uv_len + uv_enc_len];
+            avif::encode_avif_from_yuv_planes(
+                y, u, v, enc_w, enc_h, &avif_output,
+                18, 8, fullres_encode_threads(),
+            )
+        }),
+    );
+
+    let (p_hash, _) = phash_thumb_result?.context("phash/thumb task failed")?;
+    let (out_w, out_h) = fullres_result?.context("full-res YUV encode failed")?;
+
+    debug!(
+        path = %input.display(),
+        total_elapsed_ms = fn_start.elapsed().as_millis(),
+        "processing: process_image complete (yuv-native path)"
+    );
+    Ok(ImageResult {
+        filename:           avif_name,
+        thumbnail_filename: thumb_name,
+        uploaded_filename:  file_name,
+        p_hash,
+        width:  out_w,
+        height: out_h,
+    })
+}
+
+// ── Decode helpers for the parallel pipeline ─────────────────────────────────
+
+/// Decode JPEG bytes to tight-packed (align=1) full-range YUV420 planes.
+///
+/// Returns `(buf, width, height, y_len, uv_len)`.  The YUV buffer layout is
+/// `[Y | Cb | Cr]` with no row padding (strides: y_stride = width,
+/// uv_stride = ceil(width/2)).
+///
+/// **Caller contract**: only call when the source JPEG uses 4:2:0 subsampling
+/// (`hdr.subsamp == Sub2x2`).  `turbojpeg::decompress_to_yuv` ignores the
+/// `subsamp` field in `YuvImage` and always outputs in the *source* format, so
+/// calling this for 4:4:4 or 4:2:2 images would overflow the buffer and cause
+/// undefined behaviour.  Returns an error if the source is not Sub2x2.
+pub fn decode_jpeg_to_yuv_planes(
+    data: &[u8],
+) -> Result<(Vec<u8>, u32, u32, usize, usize)> {
+    let mut d = turbojpeg::Decompressor::new()
+        .map_err(|e| anyhow::anyhow!("turbojpeg init: {}", e))?;
+    let header = d
+        .read_header(data)
+        .map_err(|e| anyhow::anyhow!("turbojpeg header: {}", e))?;
+
+    // Safety: turbojpeg always outputs in the *source* subsampling.
+    // Buffer is allocated for Sub2x2, which is only correct if the source is
+    // already Sub2x2.  Return early for any other subsampling.
+    anyhow::ensure!(
+        header.subsamp == turbojpeg::Subsamp::Sub2x2,
+        "decode_jpeg_to_yuv_planes: source subsamp is {:?}, require Sub2x2 (4:2:0)",
+        header.subsamp
+    );
+
+    let w = header.width;
+    let h = header.height;
+
+    // Allocate tight-packed YUV buffer (align=1 → no row padding).
+    // Buffer size is for the SOURCE Sub2x2 layout (validated above).
+    let total = turbojpeg::yuv_pixels_len(w, 1, h, turbojpeg::Subsamp::Sub2x2)
+        .map_err(|e| anyhow::anyhow!("yuv_pixels_len: {}", e))?;
+    let mut buf = vec![0u8; total];
+
+    let yuv_out = turbojpeg::YuvImage {
+        pixels: &mut buf[..],
+        width:  w,
+        align:  1,
+        height: h,
+        subsamp: turbojpeg::Subsamp::Sub2x2, // field is ignored by turbojpeg
+    };
+    d.decompress_to_yuv(data, yuv_out)
+        .map_err(|e| anyhow::anyhow!("turbojpeg YUV decode: {}", e))?;
+
+    // Compute per-plane lengths using Sub2x2 metadata.
+    let meta = turbojpeg::YuvImage {
+        pixels: &[] as &[u8],
+        width:  w,
+        align:  1,
+        height: h,
+        subsamp: turbojpeg::Subsamp::Sub2x2,
+    };
+    let y_len  = meta.y_width()  * meta.y_height();
+    let uv_len = meta.uv_width() * meta.uv_height();
+
+    Ok((buf, w as u32, h as u32, y_len, uv_len))
+}
+
+/// Decode JPEG from in-memory bytes to a `DynamicImage`, with optional DCT
+/// downscaling.
+///
+/// Same logic as [`decode_jpeg_turbo`] but accepts pre-read bytes instead of a
+/// file path — useful when the data is already in memory for variant D where
+/// the same bytes are also decoded to YUV in a concurrent task.
+pub fn decode_jpeg_turbo_from_data(
+    data: &[u8],
+    max_decode_width: u32,
+) -> Result<image::DynamicImage> {
+    let mut decompressor = turbojpeg::Decompressor::new()
+        .map_err(|e| anyhow::anyhow!("turbojpeg init: {}", e))?;
+    let header = decompressor
+        .read_header(data)
+        .map_err(|e| anyhow::anyhow!("turbojpeg header: {}", e))?;
+
+    let use_half = max_decode_width > 0
+        && header.width > max_decode_width as usize * 2;
+
+    let (width, height) = if use_half {
+        let scale = turbojpeg::ScalingFactor::new(1, 2);
+        decompressor
+            .set_scaling_factor(scale)
+            .map_err(|e| anyhow::anyhow!("turbojpeg set scale: {}", e))?;
+        let scaled = header.scaled(scale);
+        (scaled.width, scaled.height)
+    } else {
+        (header.width, header.height)
+    };
+
+    let pitch = width * 3;
+    let mut pixels = vec![0u8; pitch * height];
+    let dest = turbojpeg::Image {
+        pixels: &mut pixels[..],
+        width,
+        pitch,
+        height,
+        format: turbojpeg::PixelFormat::RGB,
+    };
+
+    decompressor
+        .decompress(data, dest)
+        .map_err(|e| anyhow::anyhow!("turbojpeg decompress: {}", e))?;
+
+    let rgb = image::RgbImage::from_raw(width as u32, height as u32, pixels)
+        .context("convert decoded pixels to RgbImage")?;
+    Ok(image::DynamicImage::ImageRgb8(rgb))
+}
+
+// ── Fallback pipeline (large / non-JPEG images) ─────────────────────────────
+
+/// Three-way concurrent pipeline used when `process_image` cannot take the
+/// YUV-native fast path (non-JPEG or JPEG > 1058 px).
+///
+/// After a one-time 512 px downscale, three operations run simultaneously:
+///   1. Thread A: compute phash on the small image.
+///   2. Thread B: smart-crop + resize → encode thumbnail AVIF.
+///   3. Task  C: SVT-AV1 full-resolution encode (with RGB→YUV420 conversion).
+async fn process_image_fallback(input: &Path, dirs: &Directories) -> Result<ImageResult> {
+    let fn_start = std::time::Instant::now();
+    let file_name   = input
+        .file_name()
+        .context("no filename")?
+        .to_string_lossy()
+        .to_string();
+    let avif_name   = format!("{}.avif", file_name);
+    let output_path = dirs.image.join(&avif_name);
+
+    let (img, tmp_path) = load_image(input, dirs).await?;
+    let img = std::sync::Arc::new(img);
+
+    // Pre-downscale to ≤512 px for phash and thumbnail.
+    let img_c = img.clone();
+    let small = tokio::task::spawn_blocking(move || {
+        img_c.resize(512, 512, image::imageops::FilterType::Triangle)
+    })
+    .await?;
+
+    let thumb_name  = format!("{}.avif", file_name);
+    let thumb_path  = dirs.thumbnail.join(&thumb_name);
+    let avif_output = output_path.clone();
+    let img_full    = img.clone();
+
+    // Three-way parallel: (phash ∥ crop→thumb-encode)  vs  full-res encode.
+    let (phash_thumb_result, fullres_result) = tokio::join!(
+        tokio::task::spawn_blocking(move || -> Result<([i64; 4], ())> {
+            let img = &small;
+            let mut p_hash = [0i64; 4];
+            let mut thumb_img: Option<image::DynamicImage> = None;
+            std::thread::scope(|s| {
+                let ph = s.spawn(|| compute_phash(img));
+                let th = s.spawn(|| prepare_thumbnail_pixels(img));
+                p_hash    = ph.join().expect("phash panic");
+                thumb_img = Some(th.join().expect("crop panic"));
+            });
+            avif::encode_avif(
+                &thumb_img.unwrap(), &thumb_path, 40, 10, 150,
+                thumbnail_encode_threads(),
+            )
+            .context("thumbnail AVIF encode failed")?;
+            Ok((p_hash, ()))
+        }),
+        tokio::task::spawn_blocking(move || {
+            avif::encode_avif(&*img_full, &avif_output, 18, 8, 920,
+                              fullres_encode_threads())
+        }),
+    );
+
+    let (p_hash, _) = phash_thumb_result?.context("phash/thumb task failed")?;
+    let (out_w, out_h) = fullres_result?.context("full-res AVIF encode failed")?;
+
+    if let Some(p) = tmp_path {
+        let _ = fs::remove_file(&p).await;
+    }
+
+    debug!(
+        path = %input.display(),
+        total_elapsed_ms = fn_start.elapsed().as_millis(),
+        "processing: process_image complete (fallback path)"
+    );
+    Ok(ImageResult {
+        filename:           avif_name,
+        thumbnail_filename: thumb_name,
+        uploaded_filename:  file_name,
+        p_hash,
+        width:  out_w,
+        height: out_h,
+    })
+}
+
+/// **Variant B** – pre-downscale to 512 px, then parallel phash + crop.
+///
+/// A one-time 512 px resize reduces phash input (needs 256 px) and thumbnail
+/// crop input (needs 150 px) to ~25 % of the original pixel count, so both
+/// complete much faster.  Full-res encode still uses the original image.
+pub async fn process_image_v_b(input: &Path, dirs: &Directories) -> Result<ImageResult> {
+    let fn_start = std::time::Instant::now();
     let file_name = input
         .file_name()
         .context("no filename")?
         .to_string_lossy()
         .to_string();
-    let avif_name = format!("{}.avif", file_name);
+    let avif_name   = format!("{}.avif", file_name);
     let output_path = dirs.image.join(&avif_name);
 
-    // ── Decode the source image first (shared by all in-process work). ───────
     let (img, tmp_path) = load_image(input, dirs).await?;
+    let img = std::sync::Arc::new(img);
 
-    // ── Fast in-process work first (phash + thumbnail) ── ~5-60 ms total ─────
-    // These are cheap, so finish them before handing the image off to SVT-AV1.
-    // This avoids cloning the full image buffer.
+    // One-time downscale to ≤512 px (feeds phash and thumbnail crop).
+    let img_b = img.clone();
+    let small = tokio::task::spawn_blocking(move || {
+        img_b.resize(512, 512, image::imageops::FilterType::Triangle)
+    })
+    .await?;
+    let small = std::sync::Arc::new(small);
 
-    // Perceptual hash — pure in-process, fast (~1-5 ms).
-    let p_hash = compute_phash(&img);
+    // Parallel phash + crop on the small image.
+    let small_a = small.clone();
+    let (p_hash, thumb_img) = tokio::task::spawn_blocking(move || {
+        let s = &*small_a;
+        let mut p_hash = [0i64; 4];
+        let mut thumb: Option<image::DynamicImage> = None;
+        std::thread::scope(|sc| {
+            let ph = sc.spawn(|| compute_phash(s));
+            let th = sc.spawn(|| prepare_thumbnail_pixels(s));
+            p_hash = ph.join().expect("phash panic");
+            thumb  = Some(th.join().expect("crop panic"));
+        });
+        (p_hash, thumb.unwrap())
+    })
+    .await?;
 
-    // Thumbnail: smart-crop + CatmullRom resize + ravif encode (in-process).
-    let thumb_name = format!("{}.avif", file_name);
-    let thumb_path = dirs.thumbnail.join(&thumb_name);
-    create_thumbnail(&img, &thumb_path, dirs).await?;
-
-    // ── Full-resolution AVIF encode on a blocking thread. ────────────────────
-    // Uses SVT-AV1 native bindings — no subprocess, no double decode.
-    // Image is moved (not cloned) since phash + thumbnail are already done.
+    let thumb_name  = format!("{}.avif", file_name);
+    let thumb_path  = dirs.thumbnail.join(&thumb_name);
     let avif_output = output_path.clone();
-    let avif_handle = tokio::task::spawn_blocking(move || {
-        avif::encode_avif(&img, &avif_output, 18, 8, 920)
-    });
+    let img_full    = img.clone();
 
-    // ── Await the AVIF encode and collect output dimensions. ─────────────────
-    let (out_w, out_h) = avif_handle
-        .await?
-        .context("AVIF encode failed")?;
+    let (thumb_result, fullres_result) = tokio::join!(
+        tokio::task::spawn_blocking(move || {
+            avif::encode_avif(&thumb_img, &thumb_path, 40, 10, 150,
+                              thumbnail_encode_threads())
+        }),
+        tokio::task::spawn_blocking(move || {
+            avif::encode_avif(&*img_full, &avif_output, 18, 8, 920,
+                              fullres_encode_threads())
+        }),
+    );
 
-    // Clean up temp normalization file (exotic formats only).
+    thumb_result?.context("thumbnail AVIF encode failed")?;
+    let (out_w, out_h) = fullres_result?.context("full-res AVIF encode failed")?;
+
     if let Some(p) = tmp_path {
         let _ = fs::remove_file(&p).await;
     }
 
-    let (w, h) = (out_w, out_h);
-
+    debug!(
+        total_elapsed_ms = fn_start.elapsed().as_millis(),
+        "process_image_v_b complete"
+    );
     Ok(ImageResult {
-        filename: avif_name,
+        filename:           avif_name,
         thumbnail_filename: thumb_name,
-        uploaded_filename: file_name,
+        uploaded_filename:  file_name,
         p_hash,
-        width: w,
-        height: h,
+        width:  out_w,
+        height: out_h,
     })
+}
+
+/// **Variant C** – three-way concurrent pipeline (recommended).
+///
+/// After a one-time 512 px downscale, three operations run simultaneously:
+///   1. Thread A: compute phash on the small image.
+///   2. Thread B: smart-crop + resize, then thumbnail AVIF encode.
+///   3. Task  C: SVT-AV1 full-resolution encode.
+///
+/// Threads A and B are launched via `std::thread::scope` inside one
+/// `spawn_blocking` task; task C runs in a separate `spawn_blocking` task.
+/// Both blocking tasks are driven concurrently via `tokio::join!`.
+pub async fn process_image_v_c(input: &Path, dirs: &Directories) -> Result<ImageResult> {
+    let fn_start = std::time::Instant::now();
+    let file_name   = input
+        .file_name()
+        .context("no filename")?
+        .to_string_lossy()
+        .to_string();
+    let avif_name   = format!("{}.avif", file_name);
+    let output_path = dirs.image.join(&avif_name);
+
+    let (img, tmp_path) = load_image(input, dirs).await?;
+    let img = std::sync::Arc::new(img);
+
+    // Pre-downscale to ≤512 px.
+    let img_c = img.clone();
+    let small = tokio::task::spawn_blocking(move || {
+        img_c.resize(512, 512, image::imageops::FilterType::Triangle)
+    })
+    .await?;
+
+    let thumb_name  = format!("{}.avif", file_name);
+    let thumb_path  = dirs.thumbnail.join(&thumb_name);
+    let avif_output = output_path.clone();
+    let img_full    = img.clone();
+
+    // Three-way parallel: (phash ∥ crop→thumb-encode)  vs  full-res encode.
+    let (phash_thumb_result, fullres_result) = tokio::join!(
+        tokio::task::spawn_blocking(move || -> Result<([i64; 4], ())> {
+            let img = &small;
+            let mut p_hash = [0i64; 4];
+            let mut thumb_img: Option<image::DynamicImage> = None;
+            std::thread::scope(|s| {
+                let ph = s.spawn(|| compute_phash(img));
+                let th = s.spawn(|| prepare_thumbnail_pixels(img));
+                p_hash    = ph.join().expect("phash panic");
+                thumb_img = Some(th.join().expect("crop panic"));
+            });
+            avif::encode_avif(
+                &thumb_img.unwrap(), &thumb_path, 40, 10, 150,
+                thumbnail_encode_threads(),
+            )
+            .context("thumbnail AVIF encode failed")?;
+            Ok((p_hash, ()))
+        }),
+        tokio::task::spawn_blocking(move || {
+            avif::encode_avif(&*img_full, &avif_output, 18, 8, 920,
+                              fullres_encode_threads())
+        }),
+    );
+
+    let (p_hash, _) = phash_thumb_result?.context("phash/thumb task failed")?;
+    let (out_w, out_h) = fullres_result?.context("full-res AVIF encode failed")?;
+
+    if let Some(p) = tmp_path {
+        let _ = fs::remove_file(&p).await;
+    }
+
+    debug!(
+        total_elapsed_ms = fn_start.elapsed().as_millis(),
+        "process_image_v_c complete"
+    );
+    Ok(ImageResult {
+        filename:           avif_name,
+        thumbnail_filename: thumb_name,
+        uploaded_filename:  file_name,
+        p_hash,
+        width:  out_w,
+        height: out_h,
+    })
+}
+
+/// **Variant D** – turbojpeg YUV-native full-res decode + variant-C parallelism.
+///
+/// For JPEG input whose width is ≤ `MAX_ENCODE_WIDTH × RESIZE_SKIP_RATIO`
+/// (920 × 1.15 ≈ 1058 px), avoids the `rgb_to_yuv420` conversion by decoding
+/// the full-resolution image directly to YUV420 planes and feeding them
+/// straight to SVT-AV1.  A second concurrent turbojpeg decode produces the
+/// 512 px RGB image used for phash and thumbnail.
+///
+/// For larger images (width > 1058 px) or non-JPEG input the function falls
+/// back to [`process_image_v_c`], which applies the usual resize and
+/// limited-range RGB→YUV conversion.
+pub async fn process_image_v_d(input: &Path, dirs: &Directories) -> Result<ImageResult> {
+    let fn_start = std::time::Instant::now();
+    let file_name   = input
+        .file_name()
+        .context("no filename")?
+        .to_string_lossy()
+        .to_string();
+    let avif_name   = format!("{}.avif", file_name);
+    let output_path = dirs.image.join(&avif_name);
+
+    // Non-JPEG: turbojpeg YUV decode not applicable → fall back.
+    let is_jpeg = matches!(
+        input.extension().map(|e| e.to_string_lossy().to_lowercase()).as_deref(),
+        Some("jpg" | "jpeg")
+    );
+    if !is_jpeg {
+        return process_image_v_c(input, dirs).await;
+    }
+
+    // Read bytes once; share between the two concurrent decode tasks.
+    let data = std::sync::Arc::new(
+        tokio::fs::read(input).await.context("read JPEG bytes")?,
+    );
+
+    // Peek at JPEG dimensions to decide whether variant D applies.
+    // max_width=920, resize-skip ratio=1.15 → threshold ≈ 1058 px.
+    // Images wider than this get resized by encode_avif; our YUV path encodes
+    // at native resolution (no resize), so the output would be too large.
+    const MAX_ENCODE_WIDTH: u32 = 920;
+    const RESIZE_SKIP_RATIO: f64 = 1.15;
+    let threshold_w = (MAX_ENCODE_WIDTH as f64 * RESIZE_SKIP_RATIO) as u32;
+
+    let hdr = turbojpeg::read_header(&*data)
+        .map_err(|e| anyhow::anyhow!("turbojpeg header peek: {}", e))?;
+    if hdr.width as u32 > threshold_w {
+        return process_image_v_c(input, dirs).await;
+    }
+
+    let data_yuv = data.clone();
+    let data_rgb = data.clone();
+
+    // Decode full-res → YUV420 planes (for SVT-AV1, no RGB conversion).
+    // Decode full-res → ≤512 px RGB (for phash + thumbnail), concurrently.
+    let (yuv_r, small_r) = tokio::join!(
+        tokio::task::spawn_blocking(move || -> Result<(Vec<u8>, u32, u32, usize, usize)> {
+            decode_jpeg_to_yuv_planes(&data_yuv)
+        }),
+        tokio::task::spawn_blocking(move || -> Result<image::DynamicImage> {
+            let img = decode_jpeg_turbo_from_data(&data_rgb, 512)?;
+            // Resize further if turbojpeg DCT downscale didn't reach ≤512.
+            let img = if img.width() > 512 {
+                img.resize(512, 512, image::imageops::FilterType::Triangle)
+            } else {
+                img
+            };
+            Ok(img)
+        }),
+    );
+
+    let (yuv_buf, yuv_w, yuv_h, y_len, uv_len) =
+        yuv_r.context("YUV decode task panic")?.context("YUV decode failed")?;
+    let small =
+        small_r.context("RGB-512 decode task panic")?.context("RGB-512 decode failed")?;
+
+    // Ensure even dimensions for SVT-AV1 / YUV420.
+    // turbojpeg rounds the allocated buffer up to even rows, so we can safely
+    // slice the buffer to enc_w × enc_h without referencing out-of-range data.
+    let enc_w      = yuv_w & !1;
+    let enc_h      = yuv_h & !1;
+    let y_stride   = enc_w as usize;
+    let uv_stride  = enc_w as usize / 2;          // enc_w is guaranteed even
+    let y_enc_len  = y_stride * enc_h as usize;
+    let uv_enc_len = uv_stride * enc_h as usize / 2;
+
+    let thumb_name  = format!("{}.avif", file_name);
+    let thumb_path  = dirs.thumbnail.join(&thumb_name);
+    let avif_output = output_path.clone();
+
+    // Three-way parallel: (phash ∥ crop→thumb-encode)  vs  full-res YUV encode.
+    let (phash_thumb_result, fullres_result) = tokio::join!(
+        tokio::task::spawn_blocking(move || -> Result<([i64; 4], ())> {
+            let img = &small;
+            let mut p_hash = [0i64; 4];
+            let mut thumb_img: Option<image::DynamicImage> = None;
+            std::thread::scope(|s| {
+                let ph = s.spawn(|| compute_phash(img));
+                let th = s.spawn(|| prepare_thumbnail_pixels(img));
+                p_hash    = ph.join().expect("phash panic");
+                thumb_img = Some(th.join().expect("crop panic"));
+            });
+            avif::encode_avif(
+                &thumb_img.unwrap(), &thumb_path, 40, 10, 150,
+                thumbnail_encode_threads(),
+            )
+            .context("thumbnail AVIF encode failed")?;
+            Ok((p_hash, ()))
+        }),
+        tokio::task::spawn_blocking(move || -> Result<(i32, i32)> {
+            // Slice the tight-packed YUV buffer into separate planes.
+            // y_len / uv_len are the *allocated* sizes (may include a padding
+            // row when the original height was odd); y_enc_len / uv_enc_len
+            // are the *encoding* sizes (always even-dimensioned).
+            let y = &yuv_buf[..y_enc_len];
+            let u = &yuv_buf[y_len..y_len + uv_enc_len];
+            let v = &yuv_buf[y_len + uv_len..y_len + uv_len + uv_enc_len];
+            avif::encode_avif_from_yuv_planes(
+                y, u, v, enc_w, enc_h, &avif_output,
+                18, 8, fullres_encode_threads(),
+            )
+        }),
+    );
+
+    let (p_hash, _) = phash_thumb_result?.context("phash/thumb task failed")?;
+    let (out_w, out_h) = fullres_result?.context("full-res YUV encode failed")?;
+
+    debug!(
+        total_elapsed_ms = fn_start.elapsed().as_millis(),
+        "process_image_v_d complete"
+    );
+    Ok(ImageResult {
+        filename:           avif_name,
+        thumbnail_filename: thumb_name,
+        uploaded_filename:  file_name,
+        p_hash,
+        width:  out_w,
+        height: out_h,
+    })
+}
+
+/// Extract a 150×150 thumbnail-ready image via smart-crop + Triangle resize.
+///
+/// Uses `Triangle` (bilinear) instead of `CatmullRom` (bicubic) — about 2×
+/// faster with imperceptible quality difference at 150 px.  This is a pure
+/// CPU operation that runs synchronously. The resulting `DynamicImage` is
+/// small (150×150 ≈ 67 KB RGB) and can be moved cheaply to a blocking
+/// thread for encoding.
+pub fn prepare_thumbnail_pixels(img: &image::DynamicImage) -> image::DynamicImage {
+    let cropped = smart_crop(img, THUMB_SIZE, THUMB_SIZE);
+    cropped.resize_exact(THUMB_SIZE, THUMB_SIZE, FilterType::Triangle)
 }
 
 // ── Perceptual hash (DCT, 256-bit) ────────────────────────────────────────────
@@ -304,25 +1064,39 @@ const HASH_BITS_LEN: usize = 256;
 /// Pipeline:
 ///   1. Smart-crop to a square (gradient saliency) — in-process, <5 ms.
 ///   2. Resize to 150×150 with CatmullRom (2× faster than Lanczos3) — in-process.
-///   3. Encode as AVIF via `ravif`/`rav1e` — in-process on a blocking thread, ~30-60 ms.
+///   3. Encode as AVIF via SVT-AV1 — in-process on a blocking thread, ~5-10 ms.
 ///
-/// No ffmpeg subprocess, no temporary JPEG files.  Runs concurrently with the
-/// full-resolution AVIF encode; critical path = ~1.2 s (full-res AVIF only).
+/// No ffmpeg subprocess, no temporary JPEG files.
+/// Used by the video path; images use `prepare_thumbnail_pixels` + parallel encode.
 pub async fn create_thumbnail(img: &image::DynamicImage, dst: &Path, _dirs: &Directories) -> Result<()> {
-    // In-process: smart crop + fast resize.
-    let cropped = smart_crop(img, THUMB_SIZE, THUMB_SIZE);
-    let resized = cropped.resize_exact(THUMB_SIZE, THUMB_SIZE, FilterType::CatmullRom);
+    let crop_start = std::time::Instant::now();
+    let thumb_img = prepare_thumbnail_pixels(img);
+    debug!(
+        elapsed_ms = crop_start.elapsed().as_millis(),
+        "create_thumbnail: smart_crop + resize"
+    );
 
+    let encode_start = std::time::Instant::now();
     let dst = dst.to_path_buf();
-    tokio::task::spawn_blocking(move || encode_avif_inprocess(&resized, &dst))
+    tokio::task::spawn_blocking(move || {
+        avif::encode_avif(&thumb_img, &dst, 40, 10, 150, thumbnail_encode_threads())
+    })
         .await?
-        .context("in-process avif thumbnail encode")?;
+        .context("SVT-AV1 thumbnail encode")?;
+    debug!(
+        elapsed_ms = encode_start.elapsed().as_millis(),
+        "create_thumbnail: SVT-AV1 AVIF encode"
+    );
 
     Ok(())
 }
 
 /// Encode a `DynamicImage` as AVIF using `ravif` (rav1e backend).
-/// Quality 65.0 / speed 6 ≈ ffmpeg CRF 30 / preset 6 for a 150×150 image.
+///
+/// Kept as a fallback encoder for tests and edge cases where SVT-AV1
+/// is not suitable. The primary image pipeline now uses `avif::encode_avif`
+/// (SVT-AV1) for both thumbnails and full-res.
+#[allow(dead_code)]
 pub(crate) fn encode_avif_inprocess(img: &image::DynamicImage, dst: &Path) -> Result<()> {
     use ravif::{Encoder, Img};
     use rgb::RGB8;
@@ -471,6 +1245,7 @@ pub struct VideoResult {
 
 /// Process a video: move to final directory, create thumbnail, probe dimensions.
 pub async fn process_video(input: &Path, dirs: &Directories) -> Result<VideoResult> {
+    let fn_start = std::time::Instant::now();
     let ext = input
         .extension()
         .map(|e| format!(".{}", e.to_string_lossy()))
@@ -489,20 +1264,51 @@ pub async fn process_video(input: &Path, dirs: &Directories) -> Result<VideoResu
     let thumb_name = format!("{}.avif", base);
     let tmp_jpg = dirs.tmp.join(format!("{}.jpg", base));
 
+    let frame_start = std::time::Instant::now();
     ffmpeg::extract_video_frame(&dst, &tmp_jpg).await?;
+    debug!(
+        path = %dst.display(),
+        elapsed_ms = frame_start.elapsed().as_millis(),
+        "processing: video frame extraction complete"
+    );
 
     // Load the extracted frame and create thumbnail in-process.
+    let decode_start = std::time::Instant::now();
     let tmp_clone = tmp_jpg.clone();
     let img = tokio::task::spawn_blocking(move || image::open(&tmp_clone))
         .await?
         .context("decode video frame")?;
+    debug!(
+        elapsed_ms = decode_start.elapsed().as_millis(),
+        "processing: video frame decode complete"
+    );
 
+    let thumb_start = std::time::Instant::now();
     let thumb_dst = dirs.thumbnail.join(&thumb_name);
     create_thumbnail(&img, &thumb_dst, dirs).await?;
     let _ = fs::remove_file(&tmp_jpg).await;
+    debug!(
+        elapsed_ms = thumb_start.elapsed().as_millis(),
+        "processing: video thumbnail complete"
+    );
 
     // Probe dimensions.
+    let probe_start = std::time::Instant::now();
     let (w, h) = ffmpeg::get_dimensions(&dst).await;
+    debug!(
+        width = w,
+        height = h,
+        elapsed_ms = probe_start.elapsed().as_millis(),
+        "processing: video dimension probe complete"
+    );
+
+    debug!(
+        path = %input.display(),
+        width = w,
+        height = h,
+        total_elapsed_ms = fn_start.elapsed().as_millis(),
+        "processing: process_video complete"
+    );
 
     Ok(VideoResult {
         filename: dst_name,
@@ -1219,5 +2025,218 @@ mod tests {
             let h2 = compute_phash(&img);
             assert_eq!(h1, h2, "phash must be deterministic for {:?}", img_path);
         }
+    }
+
+    // ── decode_jpeg_turbo ─────────────────────────────────────────────────────
+
+    #[test]
+    fn test_decode_jpeg_turbo_basic() {
+        // Create a synthetic JPEG on disk and decode via turbojpeg.
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("test.jpg");
+        let img = solid_rgb(100, 150, 200, 256, 256);
+        img.save(&src).unwrap();
+
+        let decoded = decode_jpeg_turbo(&src, 0).unwrap();
+        assert_eq!(decoded.width(), 256);
+        assert_eq!(decoded.height(), 256);
+    }
+
+    #[test]
+    fn test_decode_jpeg_turbo_dct_downscale() {
+        // Image is 2000×2000 → with max_decode_width=920, it should
+        // decode at 1/2 resolution (1000×1000) since 2000 > 920*2.
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("large.jpg");
+        let img = solid_rgb(80, 80, 80, 2000, 2000);
+        img.save(&src).unwrap();
+
+        let decoded = decode_jpeg_turbo(&src, 920).unwrap();
+        // Half of 2000 = 1000
+        assert_eq!(decoded.width(), 1000, "expected DCT 1/2 width");
+        assert_eq!(decoded.height(), 1000, "expected DCT 1/2 height");
+    }
+
+    #[test]
+    fn test_decode_jpeg_turbo_no_downscale_when_close() {
+        // Image is 1200×800 → with max_decode_width=920, 1200 < 920*2=1840
+        // so no DCT downscaling should occur.
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("medium.jpg");
+        let img = solid_rgb(60, 120, 180, 1200, 800);
+        img.save(&src).unwrap();
+
+        let decoded = decode_jpeg_turbo(&src, 920).unwrap();
+        assert_eq!(decoded.width(), 1200, "no downscale expected");
+        assert_eq!(decoded.height(), 800, "no downscale expected");
+    }
+
+    #[test]
+    fn test_decode_jpeg_turbo_small_image() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("small.jpg");
+        let img = solid_rgb(255, 0, 0, 64, 64);
+        img.save(&src).unwrap();
+
+        let decoded = decode_jpeg_turbo(&src, 920).unwrap();
+        assert_eq!(decoded.width(), 64);
+        assert_eq!(decoded.height(), 64);
+    }
+
+    #[test]
+    fn test_decode_jpeg_turbo_invalid_file_returns_error() {
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("bad.jpg");
+        std::fs::write(&src, b"not a jpeg").unwrap();
+
+        let result = decode_jpeg_turbo(&src, 0);
+        assert!(result.is_err(), "invalid JPEG should return error");
+    }
+
+    #[test]
+    fn test_decode_jpeg_turbo_matches_image_crate() {
+        // Verify that the turbojpeg decode produces the same dimensions
+        // as the image crate decode.
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("compare.jpg");
+        let img = solid_rgb(128, 64, 192, 640, 480);
+        img.save(&src).unwrap();
+
+        let turbo = decode_jpeg_turbo(&src, 0).unwrap();
+        let img_crate = image::open(&src).unwrap();
+        assert_eq!(turbo.width(), img_crate.width());
+        assert_eq!(turbo.height(), img_crate.height());
+    }
+
+    // ── decode_jpeg_to_yuv_planes ─────────────────────────────────────────────
+
+    /// Create a synthetic JPEG in-memory using turbojpeg with the given
+    /// subsampling, to exercise the YUV decode path with known format.
+    fn make_jpeg_bytes(w: usize, h: usize, subsamp: turbojpeg::Subsamp) -> Vec<u8> {
+        let pixels: Vec<u8> = (0..w * h * 3).map(|i| (i % 256) as u8).collect();
+        let img = turbojpeg::Image {
+            pixels: pixels.as_slice(),
+            width:  w,
+            pitch:  w * 3,
+            height: h,
+            format: turbojpeg::PixelFormat::RGB,
+        };
+        turbojpeg::compress(img, 85, subsamp)
+            .expect("turbojpeg compress failed")
+            .to_vec()
+    }
+
+    #[test]
+    fn test_decode_jpeg_to_yuv_planes_basic() {
+        // 4:2:0 JPEG → YUV planes should decode successfully with correct sizes.
+        let data = make_jpeg_bytes(128, 64, turbojpeg::Subsamp::Sub2x2);
+        let (buf, w, h, y_len, uv_len) = decode_jpeg_to_yuv_planes(&data)
+            .expect("Sub2x2 JPEG should decode to YUV planes");
+        assert_eq!(w, 128, "width from header");
+        assert_eq!(h, 64,  "height from header");
+        assert_eq!(y_len, 128 * 64,     "Y plane size for 128×64");
+        assert_eq!(uv_len, 64 * 32,     "UV plane size for 128×64 Sub2x2");
+        assert_eq!(buf.len(), y_len + 2 * uv_len, "total buffer = Y + U + V");
+    }
+
+    #[test]
+    fn test_decode_jpeg_to_yuv_planes_rejects_non_420() {
+        // 4:4:4 JPEG → must return an error (turbojpeg would overflow the buffer).
+        let data = make_jpeg_bytes(64, 64, turbojpeg::Subsamp::None);
+        let result = decode_jpeg_to_yuv_planes(&data);
+        assert!(
+            result.is_err(),
+            "4:4:4 JPEG should be rejected by decode_jpeg_to_yuv_planes"
+        );
+        let msg = result.unwrap_err().to_string().to_lowercase();
+        assert!(msg.contains("sub2x2") || msg.contains("subsamp"),
+                "error should mention subsampling: {msg}");
+    }
+
+    #[test]
+    fn test_decode_jpeg_to_yuv_planes_slices_non_overlapping() {
+        // Verify that Y | U | V regions in the returned buffer don't overlap.
+        let data = make_jpeg_bytes(256, 256, turbojpeg::Subsamp::Sub2x2);
+        let (buf, _w, _h, y_len, uv_len) = decode_jpeg_to_yuv_planes(&data)
+            .expect("decode should succeed");
+        // Y: [0, y_len), U: [y_len, y_len+uv_len), V: [y_len+uv_len, end)
+        assert!(y_len > 0);
+        assert!(uv_len > 0);
+        assert!(y_len + 2 * uv_len == buf.len(), "planes fill buffer exactly");
+    }
+
+    // ── decode_jpeg_turbo_from_data ──────────────────────────────────────────
+
+    #[test]
+    fn test_decode_jpeg_turbo_from_data_basic() {
+        let data = make_jpeg_bytes(200, 150, turbojpeg::Subsamp::Sub2x2);
+        let img = decode_jpeg_turbo_from_data(&data, 0)
+            .expect("should decode from bytes");
+        assert_eq!(img.width(), 200);
+        assert_eq!(img.height(), 150);
+    }
+
+    #[test]
+    fn test_decode_jpeg_turbo_from_data_dct_downscale() {
+        // Image wider than max_decode_width * 2 → should be halved.
+        let data = make_jpeg_bytes(2000, 1000, turbojpeg::Subsamp::Sub2x2);
+        let img = decode_jpeg_turbo_from_data(&data, 920)
+            .expect("should DCT-downscale");
+        // libjpeg-turbo 1/2 scaling: 2000 → 1000
+        assert_eq!(img.width(), 1000, "expected DCT 1/2 width");
+        assert_eq!(img.height(), 500, "expected DCT 1/2 height");
+    }
+
+    #[test]
+    fn test_decode_jpeg_turbo_from_data_matches_from_file() {
+        // Bytes path and file path should produce the same dimensions.
+        let tmp = TempDir::new().unwrap();
+        let src = tmp.path().join("test.jpg");
+        let img = solid_rgb(128, 200, 50, 320, 240);
+        img.save(&src).unwrap();
+        let data = std::fs::read(&src).unwrap();
+
+        let from_file = decode_jpeg_turbo(&src, 0).unwrap();
+        let from_data = decode_jpeg_turbo_from_data(&data, 0).unwrap();
+        assert_eq!(from_file.width(), from_data.width());
+        assert_eq!(from_file.height(), from_data.height());
+    }
+
+    // ── Thread budget helpers ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_thumbnail_encode_threads_is_one() {
+        assert_eq!(thumbnail_encode_threads(), 1);
+    }
+
+    #[test]
+    fn test_fullres_encode_threads_at_least_one() {
+        assert!(fullres_encode_threads() >= 1);
+    }
+
+    // ── Resize skip in encode_avif ────────────────────────────────────────────
+
+    #[test]
+    fn test_encode_avif_resize_skip_near_target() {
+        // Source is 1000×1000 with max_width=920 → ratio=1.087 < 1.15
+        // → should skip resize and output ~1000px instead of 920px.
+        let tmp = TempDir::new().unwrap();
+        let dst = tmp.path().join("skip.avif");
+        let img = solid_rgb(128, 128, 128, 1000, 1000);
+        let (w, h) = avif::encode_avif(&img, &dst, 18, 8, 920, 0).unwrap();
+        // Width should remain near 1000 (even-clipped: 1000).
+        assert!(w >= 998, "width {} should be near 1000 (skip resize)", w);
+        assert!(h >= 998, "height {} should be near 1000 (skip resize)", h);
+    }
+
+    #[test]
+    fn test_encode_avif_resize_applied_far_from_target() {
+        // Source is 2000×2000 with max_width=920 → ratio=2.17 > 1.15
+        // → should resize down to ≤920px.
+        let tmp = TempDir::new().unwrap();
+        let dst = tmp.path().join("resize.avif");
+        let img = solid_rgb(80, 80, 80, 2000, 2000);
+        let (w, _h) = avif::encode_avif(&img, &dst, 18, 8, 920, 0).unwrap();
+        assert!(w <= 920, "width {} should be ≤ 920 after resize", w);
     }
 }
