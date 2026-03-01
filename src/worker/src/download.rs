@@ -14,10 +14,17 @@ use tracing::debug;
 const DOWNLOAD_TIMEOUT_SECS: u64 = 30;
 
 /// Build a `reqwest::Client` suitable for file downloads.
+///
 /// Call once at startup and clone the handle throughout the program.
-pub fn build_client() -> Result<reqwest::Client> {
+/// `max_idle_per_host` controls the connection-pool size — set it to at
+/// least `download_concurrency` so all concurrent downloads can reuse
+/// keep-alive connections.
+pub fn build_client(max_idle_per_host: usize) -> Result<reqwest::Client> {
     reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(DOWNLOAD_TIMEOUT_SECS))
+        .tcp_keepalive(std::time::Duration::from_secs(60))
+        .pool_max_idle_per_host(max_idle_per_host.max(4))
+        .pool_idle_timeout(std::time::Duration::from_secs(90))
         .build()
         .context("build reqwest client")
 }
@@ -108,15 +115,15 @@ mod tests {
     #[test]
     fn test_build_client_succeeds() {
         // TLS backend initialisation and socket config must not fail.
-        let result = build_client();
+        let result = build_client(8);
         assert!(result.is_ok(), "build_client must succeed: {:?}", result.err());
     }
 
     #[test]
     fn test_build_client_returns_usable_handle() {
         // Each call produces an independent, usable client handle.
-        let a = build_client().expect("first client");
-        let b = build_client().expect("second client");
+        let a = build_client(8).expect("first client");
+        let b = build_client(8).expect("second client");
         // Both built successfully — drop them to avoid any Tokio runtime warnings.
         drop(a);
         drop(b);

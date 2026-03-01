@@ -11,10 +11,11 @@ use anyhow::Result;
 use futures_util::StreamExt;
 use redis::AsyncCommands;
 use sqlx::PgPool;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
-use tracing::{info, warn};
+use tokio_stream::wrappers::ReceiverStream;
+use tracing::{debug, info, warn};
 
 use crate::config::Config;
 use crate::db::{self, DirtyPost};
@@ -62,6 +63,7 @@ pub async fn run(
     let state = Arc::new(QueueState::new());
     let poll_interval = std::time::Duration::from_secs(cfg.poll_interval_secs);
     let concurrency = cfg.concurrency;
+    let download_concurrency = cfg.download_concurrency;
 
     // Spawn Redis subscriber for wake-up notifications.
     let (wake_tx, mut wake_rx) = tokio::sync::mpsc::channel::<()>(16);
@@ -77,6 +79,7 @@ pub async fn run(
 
     info!(
         concurrency,
+        download_concurrency,
         poll_secs = cfg.poll_interval_secs,
         "processing queue started"
     );
@@ -85,7 +88,7 @@ pub async fn run(
     let mut ticker = tokio::time::interval(poll_interval);
 
     // Drain on startup so posts from a previous run are picked up immediately.
-    drain(&pool, &redis_client, &dirs, &http_client, &state, concurrency).await;
+    drain(&pool, &redis_client, &dirs, &http_client, &state, concurrency, download_concurrency).await;
 
     loop {
         tokio::select! {
@@ -96,10 +99,10 @@ pub async fn run(
             _ = wake_rx.recv() => {
                 // Drain any extra pending notifications.
                 while wake_rx.try_recv().is_ok() {}
-                drain(&pool, &redis_client, &dirs, &http_client, &state, concurrency).await;
+                drain(&pool, &redis_client, &dirs, &http_client, &state, concurrency, download_concurrency).await;
             }
             _ = ticker.tick() => {
-                drain(&pool, &redis_client, &dirs, &http_client, &state, concurrency).await;
+                drain(&pool, &redis_client, &dirs, &http_client, &state, concurrency, download_concurrency).await;
             }
         }
     }
@@ -125,12 +128,17 @@ async fn subscribe_loop(
     Ok(())
 }
 
-/// Fetch all dirty posts and process them up to `concurrency` at a time.
+/// Fetch all dirty posts and process them using a two-stage pipeline:
 ///
-/// Uses `for_each_concurrent(concurrency)` so:
-/// - At most `concurrency` posts are in-flight simultaneously.
-/// - No more than `len(dirty)` Tokio tasks are ever spawned.
-/// - Counter updates (`pending`/`active`) happen at the correct moment.
+/// **Stage 1 (download):** Downloads run concurrently with `download_concurrency`.
+/// Completed downloads are streamed into a bounded channel.
+///
+/// **Stage 2 (process):** Processing consumes downloaded posts from the channel
+/// with `concurrency` in-flight workers.
+///
+/// This keeps CPU-bound workers busy from the very first completed download
+/// instead of waiting for all downloads to finish. IO is never blocked by
+/// a CPU slot.
 async fn drain(
     pool: &PgPool,
     redis_client: &redis::Client,
@@ -138,6 +146,7 @@ async fn drain(
     http_client: &reqwest::Client,
     state: &Arc<QueueState>,
     concurrency: usize,
+    download_concurrency: usize,
 ) {
     let dirty = match db::get_dirty_posts(pool).await {
         Ok(d) => d,
@@ -167,20 +176,36 @@ async fn drain(
     state.running.store(true, Ordering::Relaxed);
     let _ = publish_status(redis_client, state).await;
 
-    futures_util::stream::iter(dirty)
-        .for_each_concurrent(Some(concurrency), |post| {
+    let drain_start = std::time::Instant::now();
+
+    // ── Two-stage pipeline: download → process via bounded channel ──────────
+    let chan_size = download_concurrency.max(concurrency) * 2;
+    let (dl_tx, dl_rx) = tokio::sync::mpsc::channel::<DownloadedPost>(chan_size);
+
+    // Stage 1: spawn download tasks — runs all downloads concurrently and
+    // streams results into the channel as they complete.
+    let dl_dirs = dirs.clone();
+    let dl_http = http_client.clone();
+    let dl_pool = pool.clone();
+    let dl_handle = tokio::spawn(async move {
+        download_stage(dirty, &dl_dirs, &dl_http, &dl_pool, download_concurrency, dl_tx).await;
+    });
+
+    // Stage 2: process posts as they arrive from the download channel.
+    // Uses `for_each_concurrent(concurrency)` on the receiver stream.
+    ReceiverStream::new(dl_rx)
+        .for_each_concurrent(Some(concurrency), |item| {
             let pool = pool.clone();
             let dirs = dirs.clone();
             let state = state.clone();
             let redis_client = redis_client.clone();
-            let http_client = http_client.clone();
 
             async move {
-                // Counters updated BEFORE processing starts.
                 state.pending.fetch_sub(1, Ordering::Relaxed);
                 state.active.fetch_add(1, Ordering::Relaxed);
 
-                let result = process_post(&pool, &redis_client, &dirs, &http_client, &post).await;
+                let post_id = item.post.id;
+                let result = process_downloaded_post(&pool, &redis_client, &dirs, item).await;
 
                 state.active.fetch_sub(1, Ordering::Relaxed);
                 state.processed.fetch_add(1, Ordering::Relaxed);
@@ -191,14 +216,12 @@ async fn drain(
                     }
                     Err(e) => {
                         state.failed.fetch_add(1, Ordering::Relaxed);
-                        // Build a single-line error chain so the compact tracing
-                        // formatter shows all causes (not just the outermost one).
                         let err_chain = e
                             .chain()
                             .map(|c| c.to_string())
                             .collect::<Vec<_>>()
                             .join(": ");
-                        warn!(post_id = post.id, err = err_chain, "post processing failed");
+                        warn!(post_id, err = err_chain, "post processing failed");
                     }
                 }
 
@@ -206,6 +229,9 @@ async fn drain(
             }
         })
         .await;
+
+    // Ensure download stage is done (should already be — tx was dropped).
+    let _ = dl_handle.await;
 
     state.running.store(false, Ordering::Relaxed);
     state.pending.store(0, Ordering::Relaxed);
@@ -216,64 +242,148 @@ async fn drain(
         total = n,
         imported = state.imported.load(Ordering::Relaxed),
         failed = state.failed.load(Ordering::Relaxed),
+        elapsed_ms = drain_start.elapsed().as_millis(),
         "batch complete"
     );
 }
 
-/// Process a single dirty post end-to-end.
-async fn process_post(
+/// A post that has been downloaded and is ready for processing.
+pub(crate) struct DownloadedPost {
+    pub post: DirtyPost,
+    pub path: PathBuf,
+    pub is_temp: bool,
+}
+
+/// Stage 1: download all posts concurrently, streaming results into the channel.
+///
+/// Each post is downloaded (or resolved from a local upload path) and sent
+/// into `tx`. Failed downloads are logged and the dirty post is deleted so
+/// they don't retry forever — they never enter the processing stage.
+async fn download_stage(
+    posts: Vec<DirtyPost>,
+    dirs: &Directories,
+    http_client: &reqwest::Client,
     pool: &PgPool,
-    redis_client: &redis::Client,
+    download_concurrency: usize,
+    tx: tokio::sync::mpsc::Sender<DownloadedPost>,
+) {
+    futures_util::stream::iter(posts)
+        .for_each_concurrent(Some(download_concurrency), |post| {
+            let dirs = dirs.clone();
+            let http_client = http_client.clone();
+            let pool = pool.clone();
+            let tx = tx.clone();
+
+            async move {
+                let result = resolve_source(&pool, &dirs, &http_client, &post).await;
+                match result {
+                    Ok(item) => {
+                        if tx.send(item).await.is_err() {
+                            warn!(post_id = post.id, "download stage: receiver dropped");
+                        }
+                    }
+                    Err(e) => {
+                        let err_chain = e
+                            .chain()
+                            .map(|c| c.to_string())
+                            .collect::<Vec<_>>()
+                            .join(": ");
+                        warn!(post_id = post.id, err = err_chain, "download failed, skipping post");
+                        let _ = db::delete_dirty_post(&pool, post.id).await;
+                    }
+                }
+            }
+        })
+        .await;
+    // tx is dropped here, closing the channel → ReceiverStream completes.
+}
+
+/// Resolve the source file for a post: either from a local upload path or download.
+async fn resolve_source(
+    pool: &PgPool,
     dirs: &Directories,
     http_client: &reqwest::Client,
     post: &DirtyPost,
-) -> Result<()> {
-    // Determine where the source file is.
-    let (tmp_path, is_temp) = if !post.uploaded_filename.is_empty() {
-        (std::path::PathBuf::from(&post.uploaded_filename), false)
-    } else if !post.url.is_empty() {
+) -> Result<DownloadedPost> {
+    if !post.uploaded_filename.is_empty() {
+        return Ok(DownloadedPost {
+            post: post.clone(),
+            path: PathBuf::from(&post.uploaded_filename),
+            is_temp: false,
+        });
+    }
+
+    if !post.url.is_empty() {
+        let download_start = std::time::Instant::now();
         let path = if post.url.starts_with(PR0GRAMM_IMG_BASE) {
             crate::download::download_pr0gramm_file(http_client, &post.url, &dirs.tmp).await
         } else {
             crate::download::download_file(http_client, &post.url, &dirs.tmp).await
         };
         match path {
-            Ok(p) => (p, true),
+            Ok(p) => {
+                debug!(
+                    post_id = post.id,
+                    url = post.url,
+                    elapsed_ms = download_start.elapsed().as_millis(),
+                    "worker: download complete"
+                );
+                return Ok(DownloadedPost {
+                    post: post.clone(),
+                    path: p,
+                    is_temp: true,
+                });
+            }
             Err(e) => {
-                let _ = db::delete_dirty_post(pool, post.id).await;
                 return Err(e.context("download failed"));
             }
         }
-    } else {
-        let _ = db::delete_dirty_post(pool, post.id).await;
-        anyhow::bail!("dirty post {} has neither URL nor uploaded file", post.id);
-    };
+    }
 
-    let file_type = classify_file(&tmp_path);
+    let _ = db::delete_dirty_post(pool, post.id).await;
+    anyhow::bail!("dirty post {} has neither URL nor uploaded file", post.id);
+}
 
+/// Process a post that has already been downloaded.
+async fn process_downloaded_post(
+    pool: &PgPool,
+    redis_client: &redis::Client,
+    dirs: &Directories,
+    item: DownloadedPost,
+) -> Result<()> {
+    let post_start = std::time::Instant::now();
+
+    let file_type = classify_file(&item.path);
+
+    let proc_start = std::time::Instant::now();
     let result = match file_type {
         FileType::Image => {
-            process_image_post(pool, redis_client, dirs, post, &tmp_path).await
+            process_image_post(pool, redis_client, dirs, &item.post, &item.path).await
         }
         FileType::Video(mime) => {
-            process_video_post(pool, dirs, post, &tmp_path, &mime).await
+            process_video_post(pool, dirs, &item.post, &item.path, &mime).await
         }
         FileType::Unknown(mime) => {
-            let _ = db::delete_dirty_post(pool, post.id).await;
+            let _ = db::delete_dirty_post(pool, item.post.id).await;
             anyhow::bail!("unsupported file type: {}", mime);
         }
     };
 
-    if is_temp {
-        let _ = tokio::fs::remove_file(&tmp_path).await;
+    if item.is_temp {
+        let _ = tokio::fs::remove_file(&item.path).await;
     }
 
-    // If processing failed (encode error, corrupt image, etc.) delete the
-    // dirty post so it doesn't retry forever on every poll cycle.
     if result.is_err() {
-        if let Err(e) = db::delete_dirty_post(pool, post.id).await {
-            warn!(post_id = post.id, err = %e, "failed to delete dirty post after processing error");
+        if let Err(e) = db::delete_dirty_post(pool, item.post.id).await {
+            warn!(post_id = item.post.id, err = %e, "failed to delete dirty post after processing error");
         }
+    } else {
+        debug!(
+            post_id = item.post.id,
+            proc_elapsed_ms = proc_start.elapsed().as_millis(),
+            total_elapsed_ms = post_start.elapsed().as_millis(),
+            "worker: post processing complete"
+        );
     }
 
     result
@@ -287,14 +397,30 @@ pub(crate) async fn process_image_post(
     post: &DirtyPost,
     input: &Path,
 ) -> Result<()> {
+    let proc_start = std::time::Instant::now();
     let res = crate::processing::process_image(input, dirs).await?;
+    debug!(
+        post_id = post.id,
+        filename = res.filename,
+        width = res.width,
+        height = res.height,
+        elapsed_ms = proc_start.elapsed().as_millis(),
+        "worker: image encode complete"
+    );
 
+    let dedup_start = std::time::Instant::now();
     let [h0, h1, h2, h3] = res.p_hash;
     let dups = db::get_possible_duplicates(pool, h0, h1, h2, h3).await?;
     let real_dups: Vec<_> = dups
         .into_iter()
         .filter(|d| d.id != post.id && !d.dirty)
         .collect();
+    debug!(
+        post_id = post.id,
+        dup_candidates = real_dups.len(),
+        elapsed_ms = dedup_start.elapsed().as_millis(),
+        "worker: phash dedup check complete"
+    );
 
     if !real_dups.is_empty() {
         let _ = tokio::fs::remove_file(dirs.image.join(&res.filename)).await;
@@ -323,6 +449,7 @@ pub(crate) async fn process_image_post(
         anyhow::bail!("duplicate: found {} similar post(s)", real_dups.len());
     }
 
+    let finalize_start = std::time::Instant::now();
     db::finalize_post(
         pool,
         &db::FinalizeParams {
@@ -340,6 +467,11 @@ pub(crate) async fn process_image_post(
         },
     )
     .await?;
+    debug!(
+        post_id = post.id,
+        elapsed_ms = finalize_start.elapsed().as_millis(),
+        "worker: post finalized in db"
+    );
 
     Ok(())
 }
@@ -352,7 +484,18 @@ pub(crate) async fn process_video_post(
     input: &Path,
     mime: &str,
 ) -> Result<()> {
+    let proc_start = std::time::Instant::now();
     let res = crate::processing::process_video(input, dirs).await?;
+    debug!(
+        post_id = post.id,
+        filename = res.filename,
+        width = res.width,
+        height = res.height,
+        elapsed_ms = proc_start.elapsed().as_millis(),
+        "worker: video processing complete"
+    );
+
+    let finalize_start = std::time::Instant::now();
 
     db::finalize_post(
         pool,
@@ -374,6 +517,11 @@ pub(crate) async fn process_video_post(
         },
     )
     .await?;
+    debug!(
+        post_id = post.id,
+        elapsed_ms = finalize_start.elapsed().as_millis(),
+        "worker: video post finalized in db"
+    );
 
     Ok(())
 }

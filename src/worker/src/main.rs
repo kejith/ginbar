@@ -11,8 +11,12 @@ async fn main() -> Result<()> {
     info!("wallium-worker starting");
 
     // ── HTTP client (shared across all download tasks) ────────────────────────
-    let http_client = download::build_client()?;
-    info!("http client ready");
+    let http_client = download::build_client(cfg.download_concurrency)?;
+    info!(
+        download_concurrency = cfg.download_concurrency,
+        processing_concurrency = cfg.concurrency,
+        "http client ready"
+    );
 
     // ── Database ──────────────────────────────────────────────────────────────
     let pool = sqlx::postgres::PgPoolOptions::new()
