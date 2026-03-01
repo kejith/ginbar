@@ -9,6 +9,7 @@ import {
 import Tabs from "../components/Tabs.jsx";
 import ProgressBar from "../components/ProgressBar.jsx";
 import UserLink from "../components/UserLink.jsx";
+import useJobStore from "../stores/jobStore.js";
 
 // ── tiny helpers ─────────────────────────────────────────────────────────────
 
@@ -72,7 +73,7 @@ function ProcessQueueCard() {
       es.addEventListener("message", (e) => {
         try {
           setSnap(JSON.parse(e.data));
-        } catch (_) {}
+        } catch (_) { }
       });
 
       es.addEventListener("error", () => {
@@ -102,11 +103,10 @@ function ProcessQueueCard() {
           Process Queue
         </p>
         <span
-          className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-            snap?.running
+          className={`rounded-full px-2 py-0.5 text-xs font-medium ${snap?.running
               ? "bg-(--color-accent)/20 text-(--color-accent)"
               : "bg-(--color-border) text-(--color-muted)"
-          }`}
+            }`}
         >
           {snap == null ? "connecting…" : snap.running ? "● active" : "○ idle"}
         </span>
@@ -850,6 +850,163 @@ function MaintenanceSection() {
   );
 }
 
+// ── Section: Jobs ─────────────────────────────────────────────────────────────
+
+const STATUS_COLORS = {
+  pending: "bg-(--color-border) text-(--color-muted)",
+  running: "bg-(--color-accent)/20 text-(--color-accent)",
+  done: "bg-(--color-success)/20 text-(--color-success)",
+  failed: "bg-(--color-danger)/20 text-(--color-danger)",
+  cancelled: "bg-(--color-border) text-(--color-muted)",
+};
+
+const VISIBILITY_ICON = {
+  global: "🌐",
+  user: "👤",
+  role: "🔒",
+};
+
+function JobsSection() {
+  const { jobs, connect, disconnect, cancelJob } = useJobStore();
+  const [cancelling, setCancelling] = useState(null);
+
+  useEffect(() => {
+    connect(true); // admin stream
+    return () => disconnect();
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function handleCancel(id) {
+    setCancelling(id);
+    try {
+      await cancelJob(id);
+    } catch (e) {
+      alert(e.message ?? "Cancel failed");
+    } finally {
+      setCancelling(null);
+    }
+  }
+
+  const running = jobs.filter((j) => j.status === "running" || j.status === "pending");
+  const finished = jobs.filter((j) => j.status !== "running" && j.status !== "pending");
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-(--color-muted)">
+        All tracked background jobs. Admin view shows every job regardless of visibility.
+      </p>
+
+      {jobs.length === 0 && (
+        <div className="rounded-lg border border-(--color-border) bg-(--color-surface) p-8 text-center">
+          <p className="text-sm text-(--color-muted)">No jobs running or recently completed.</p>
+        </div>
+      )}
+
+      {running.length > 0 && (
+        <div className="space-y-3">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-(--color-muted)">
+            Active ({running.length})
+          </h3>
+          {running.map((j) => (
+            <AdminJobCard key={j.id} job={j} onCancel={handleCancel} cancelling={cancelling} />
+          ))}
+        </div>
+      )}
+
+      {finished.length > 0 && (
+        <div className="space-y-3">
+          <h3 className="text-xs font-semibold uppercase tracking-wider text-(--color-muted)">
+            Recently completed ({finished.length})
+          </h3>
+          {finished.map((j) => (
+            <AdminJobCard key={j.id} job={j} onCancel={handleCancel} cancelling={cancelling} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AdminJobCard({ job, onCancel, cancelling }) {
+  const isActive = job.status === "running" || job.status === "pending";
+  const pct = job.total > 0 ? Math.round((job.progress / job.total) * 100) : 0;
+
+  return (
+    <div className="rounded-lg border border-(--color-border) bg-(--color-surface) p-4 space-y-2">
+      {/* Header row */}
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="text-sm" title={job.visibility}>
+              {VISIBILITY_ICON[job.visibility] ?? ""}
+            </span>
+            <h4 className="font-semibold text-(--color-text) truncate">{job.name}</h4>
+            <span
+              className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_COLORS[job.status] ?? ""}`}
+            >
+              {job.status}
+            </span>
+          </div>
+          {job.description && (
+            <p className="mt-0.5 text-xs text-(--color-muted) line-clamp-1">{job.description}</p>
+          )}
+        </div>
+
+        {isActive && (
+          <button
+            disabled={cancelling === job.id}
+            onClick={() => onCancel(job.id)}
+            className="shrink-0 rounded-sm bg-(--color-danger) px-2.5 py-1 text-xs font-medium text-white disabled:opacity-50 hover:opacity-90 transition-opacity"
+          >
+            {cancelling === job.id ? "cancelling…" : "cancel"}
+          </button>
+        )}
+      </div>
+
+      {/* Progress bar */}
+      {isActive && job.total > 0 && (
+        <div className="space-y-1">
+          <ProgressBar value={pct} status="active" height="md" />
+          <div className="flex justify-between text-xs text-(--color-muted)">
+            <span>{job.message || `${job.progress} / ${job.total}`}</span>
+            <span>
+              {pct}%
+              {job.eta_sec > 0 && ` · ~${fmtDuration(job.eta_sec)} left`}
+              {job.rate_per_sec > 0 && ` · ${job.rate_per_sec.toFixed(1)}/s`}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {/* Indeterminate pulse for pending/running with no total */}
+      {isActive && job.total === 0 && (
+        <ProgressBar value={100} status="pulse" height="sm" />
+      )}
+
+      {/* Result line for completed jobs */}
+      {!isActive && (
+        <div className="flex items-center gap-3 text-xs text-(--color-muted)">
+          {job.message && <span>{job.message}</span>}
+          {job.error && (
+            <span className="text-(--color-danger)">{job.error}</span>
+          )}
+          {job.finished_at && (
+            <span className="ml-auto">
+              {new Date(job.finished_at).toLocaleTimeString()}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Owner info */}
+      {job.owner_user_name && (
+        <p className="text-xs text-(--color-muted)">
+          started by <UserLink name={job.owner_user_name} className="text-xs" />
+        </p>
+      )}
+    </div>
+  );
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function Admin() {
@@ -859,6 +1016,7 @@ export default function Admin() {
     { id: "stats", label: "stats" },
     { id: "users", label: "users" },
     { id: "content", label: "content" },
+    { id: "jobs", label: "jobs" },
     { id: "maintenance", label: "maintenance" },
   ];
 
@@ -880,6 +1038,7 @@ export default function Admin() {
       {section === "stats" && <StatsSection />}
       {section === "users" && <UsersSection />}
       {section === "content" && <ContentSection />}
+      {section === "jobs" && <JobsSection />}
       {section === "maintenance" && <MaintenanceSection />}
     </main>
   );

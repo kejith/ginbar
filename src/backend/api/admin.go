@@ -3,6 +3,7 @@ package api
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -278,6 +279,9 @@ func removeFiles(paths ...string) {
 // This is a one-time admin operation for content uploaded before the
 // dimension columns were added; it is safe to call multiple times.
 //
+// The operation is registered as a tracked job so it's visible in the admin
+// jobs panel with progress and ETA.
+//
 // POST /api/admin/posts/backfill-dimensions
 func (s *Server) BackfillPostDimensions(c fiber.Ctx) error {
 	ctx := c.Context()
@@ -287,26 +291,46 @@ func (s *Server) BackfillPostDimensions(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusInternalServerError, "query failed: "+err.Error())
 	}
 
+	job := s.jobs.Register("Backfill post dimensions", JobOpts{
+		Description: "Reading real dimensions from disk for posts missing width/height",
+		Visibility:  VisibilityGlobal,
+		Total:       len(posts),
+	})
+	job.Start()
+
 	var updated, skipped, failed int
-	for _, p := range posts {
+	for i, p := range posts {
+		if job.Ctx().Err() != nil {
+			break // cancelled
+		}
 		w, h, dimErr := dimensionsForPost(p, s.dirs)
 		if dimErr != nil || w == 0 || h == 0 {
 			failed++
+			job.SetProgress(i+1, len(posts), fmt.Sprintf("updated %d · failed %d", updated, failed))
 			continue
 		}
 		if updateErr := s.store.UpdatePostDimensions(ctx, p.ID, int32(w), int32(h)); updateErr != nil {
 			failed++
+			job.SetProgress(i+1, len(posts), fmt.Sprintf("updated %d · failed %d", updated, failed))
 			continue
 		}
 		updated++
+		job.SetProgress(i+1, len(posts), fmt.Sprintf("updated %d · failed %d", updated, failed))
 	}
 	skipped = len(posts) - updated - failed
+
+	if job.Ctx().Err() != nil {
+		// Job was cancelled — it's already marked by the manager.
+	} else {
+		job.Complete(fmt.Sprintf("updated %d · failed %d · skipped %d", updated, failed, skipped))
+	}
 
 	return c.JSON(fiber.Map{
 		"total":   len(posts),
 		"updated": updated,
 		"failed":  failed,
 		"skipped": skipped,
+		"job_id":  job.ID,
 	})
 }
 
@@ -341,6 +365,7 @@ type regenDoneEvent struct {
 // Images are processed in parallel: runtime.NumCPU()/4 workers (min 2, max 8)
 // so that SVT-AV1's own multi-threading doesn't over-subscribe the machine.
 // Progress is streamed via SSE — first event carries the total count.
+// The operation is also registered as a tracked job.
 //
 // POST /api/admin/posts/regenerate-images
 func (s *Server) RegenerateImages(c fiber.Ctx) error {
@@ -348,6 +373,12 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "query failed: "+err.Error())
 	}
+
+	job := s.jobs.Register("Regenerate images as AVIF", JobOpts{
+		Description: "Re-encoding every stored image as high-quality AVIF with new thumbnails",
+		Visibility:  VisibilityGlobal,
+		Total:       len(posts),
+	})
 
 	c.Set("Content-Type", "text/event-stream")
 	c.Set("Cache-Control", "no-cache")
@@ -371,6 +402,7 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 
 	c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
 		ctx := context.Background()
+		job.Start()
 
 		total := len(posts)
 		writeSSE(w, regenStartEvent{Phase: "start", Total: total})
@@ -384,11 +416,15 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 		)
 
 		sendProgress := func() {
+			cur := int(current.Load())
+			msg := fmt.Sprintf("updated %d · failed %d · skipped %d",
+				int(updated.Load()), int(failed.Load()), int(skipped.Load()))
+			job.SetProgress(cur, total, msg)
 			mu.Lock()
 			writeSSE(w, regenProgressEvent{
 				Phase:   "progress",
 				Total:   total,
-				Current: int(current.Load()),
+				Current: cur,
 				Updated: int(updated.Load()),
 				Failed:  int(failed.Load()),
 				Skipped: int(skipped.Load()),
@@ -400,12 +436,22 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 		var wg sync.WaitGroup
 
 		for _, p := range posts {
+			// Check for cancellation before starting a new item.
+			if job.Ctx().Err() != nil {
+				break
+			}
+
 			wg.Add(1)
 			p := p
 			sem <- struct{}{}
 			go func() {
 				defer wg.Done()
 				defer func() { <-sem }()
+
+				// Check cancellation inside the goroutine too.
+				if job.Ctx().Err() != nil {
+					return
+				}
 
 				srcPath := filepath.Join(dirs.Image, p.Filename)
 				if _, statErr := os.Stat(srcPath); statErr != nil {
@@ -490,6 +536,13 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 			Phase: "done", Total: total,
 			Updated: u, Failed: f, Skipped: sk,
 		})
+
+		if job.Ctx().Err() != nil {
+			// Was cancelled — already marked by JobManager.
+		} else {
+			job.Complete(fmt.Sprintf("updated %d · failed %d · skipped %d", u, f, sk))
+		}
+
 		log.InfoContext(ctx, "image regeneration complete",
 			"total", total, "updated", u, "failed", f, "skipped", sk,
 			"workers", workers,
