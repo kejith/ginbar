@@ -1,4 +1,11 @@
+//! File download helpers.
+//!
+//! Accepts a shared `reqwest::Client` (created once at startup for TLS/TCP
+//! connection reuse) and streams the response body directly to disk rather
+//! than buffering the entire body in memory first.
+
 use anyhow::{Context, Result};
+use futures_util::StreamExt;
 use std::path::{Path, PathBuf};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
@@ -6,19 +13,24 @@ use tracing::debug;
 
 const DOWNLOAD_TIMEOUT_SECS: u64 = 30;
 
-/// Download a file from `url` into `dir`, returning the local path.
+/// Build a `reqwest::Client` suitable for file downloads.
+/// Call once at startup and clone the handle throughout the program.
+pub fn build_client() -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(DOWNLOAD_TIMEOUT_SECS))
+        .build()
+        .context("build reqwest client")
+}
+
+/// Download a file from `url` into `dir`, streaming the body directly to disk.
 /// The filename is derived from the URL path.
-pub async fn download_file(url: &str, dir: &Path) -> Result<PathBuf> {
+pub async fn download_file(client: &reqwest::Client, url: &str, dir: &Path) -> Result<PathBuf> {
     let parsed: reqwest::Url = url.parse().context("invalid download URL")?;
     let basename = parsed
         .path_segments()
         .and_then(|s| s.last())
         .unwrap_or("download");
     let dst = dir.join(basename);
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(DOWNLOAD_TIMEOUT_SECS))
-        .build()?;
 
     let resp = client
         .get(url)
@@ -30,27 +42,24 @@ pub async fn download_file(url: &str, dir: &Path) -> Result<PathBuf> {
         anyhow::bail!("download: unexpected status {} for {}", resp.status(), url);
     }
 
-    let bytes = resp.bytes().await.context("download: read body")?;
-    let mut f = fs::File::create(&dst).await.context("download: create file")?;
-    f.write_all(&bytes).await.context("download: write file")?;
-    f.flush().await?;
+    stream_to_file(resp, &dst).await.context("download: stream to file")?;
 
     debug!(url, path = %dst.display(), "downloaded file");
     Ok(dst)
 }
 
-/// Download a file from pr0gramm CDN with the required headers.
-pub async fn download_pr0gramm_file(url: &str, dir: &Path) -> Result<PathBuf> {
+/// Download a file from pr0gramm CDN with the required headers, streaming to disk.
+pub async fn download_pr0gramm_file(
+    client: &reqwest::Client,
+    url: &str,
+    dir: &Path,
+) -> Result<PathBuf> {
     let parsed: reqwest::Url = url.parse().context("invalid pr0gramm URL")?;
     let basename = parsed
         .path_segments()
         .and_then(|s| s.last())
         .unwrap_or("download");
     let dst = dir.join(basename);
-
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(DOWNLOAD_TIMEOUT_SECS))
-        .build()?;
 
     let resp = client
         .get(url)
@@ -68,13 +77,22 @@ pub async fn download_pr0gramm_file(url: &str, dir: &Path) -> Result<PathBuf> {
         );
     }
 
-    let bytes = resp.bytes().await.context("pr0gramm download: read body")?;
-    let mut f = fs::File::create(&dst).await.context("pr0gramm download: create file")?;
-    f.write_all(&bytes)
-        .await
-        .context("pr0gramm download: write file")?;
-    f.flush().await?;
+    stream_to_file(resp, &dst).await.context("pr0gramm download: stream to file")?;
 
     debug!(url, path = %dst.display(), "downloaded pr0gramm file");
     Ok(dst)
+}
+
+/// Stream a response body directly to `dst`, writing in chunks.
+async fn stream_to_file(resp: reqwest::Response, dst: &Path) -> Result<()> {
+    let mut f = fs::File::create(dst).await.context("create file")?;
+    let mut stream = resp.bytes_stream();
+
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.context("read response chunk")?;
+        f.write_all(&chunk).await.context("write chunk")?;
+    }
+
+    f.flush().await.context("flush file")?;
+    Ok(())
 }

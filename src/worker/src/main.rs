@@ -1,4 +1,4 @@
-use wallium_worker::{config, processing, queue};
+use wallium_worker::{config, download, processing, queue};
 
 use anyhow::Result;
 use tracing::info;
@@ -9,6 +9,10 @@ async fn main() -> Result<()> {
     config::init_tracing(&cfg);
 
     info!("wallium-worker starting");
+
+    // ── HTTP client (shared across all download tasks) ────────────────────────
+    let http_client = download::build_client()?;
+    info!("http client ready");
 
     // ── Database ──────────────────────────────────────────────────────────────
     let pool = sqlx::postgres::PgPoolOptions::new()
@@ -24,5 +28,5 @@ async fn main() -> Result<()> {
     // ── Run the processing loop ───────────────────────────────────────────────
     let dirs = processing::Directories::from_cwd();
 
-    queue::run(pool, redis, dirs, &cfg).await
+    queue::run(pool, redis, dirs, http_client, &cfg).await
 }
