@@ -78,6 +78,13 @@ services:
       timeout: 5s
       retries: 5
       start_period: 10s
+    deploy:
+      resources:
+        limits:
+          # Go API is mostly I/O-bound; 2 cores is plenty.
+          # The remaining cores are left for the worker and host nginx.
+          cpus: "2.0"
+          memory: 2G
 
   # ── Rust processing worker ───────────────────────────────────────────────
   worker:
@@ -89,7 +96,7 @@ services:
     environment:
       DB_URL: postgres://${POSTGRES_USER:-wallium}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-wallium}?sslmode=disable
       REDIS_URL: redis://redis:6379
-      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-4}
+      WORKER_CONCURRENCY: ${WORKER_CONCURRENCY:-6}
       WORKER_POLL_INTERVAL: ${WORKER_POLL_INTERVAL:-5}
       LOG_FORMAT: json
       LOG_LEVEL: ${LOG_LEVEL:-info}
@@ -103,8 +110,9 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "1.5"
-          memory: 2G
+          # 8-core / 62 GB server: 2 cores reserved for host nginx + OS.
+          cpus: "${WORKER_CPUS:-6}"
+          memory: ${WORKER_MEM:-48G}
 
   # ── goose migrations (run once: docker compose run --rm migrate) ──────────
   migrate:
