@@ -17,6 +17,7 @@ RUN rm -f /etc/apt/sources.list.d/yarn.list \
     unzip \
     procps \
     redis-server \
+    nasm \
  && rm -rf /var/lib/apt/lists/*
 
 # ── sqlc (latest) ─────────────────────────────────────────────────────────────
@@ -34,6 +35,18 @@ RUN go install github.com/air-verse/air@v1.52.3
 RUN curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b /usr/local/bin
 
 # ── goose (alternative migrate, nice SQL-first feel) ─────────────────────────
-RUN go install github.com/pressly/goose/v3/cmd/goose@latest
+# v3.27.0 requires go >= 1.25; pin to last release compatible with Go 1.23.
+RUN go install github.com/pressly/goose/v3/cmd/goose@v3.24.2
+
+# ── Rust (stable) ─────────────────────────────────────────────────────────────
+# Install for all users by setting CARGO_HOME + RUSTUP_HOME to /usr/local.
+# This keeps Rust on PATH for both root and vscode without per-user init files.
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --no-modify-path --default-toolchain stable \
+ && rustup component add clippy rustfmt \
+ && chmod -R a+w /usr/local/rustup /usr/local/cargo
 
 USER vscode
