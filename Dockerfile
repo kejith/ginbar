@@ -53,13 +53,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 RUN git clone --depth 1 --branch v2.3.0 https://gitlab.com/AOMediaCodec/SVT-AV1.git /tmp/SVT-AV1 \
-    && cd /tmp/SVT-AV1 \
-    && mkdir Build && cd Build \
-    && cmake .. -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
+    && cmake -S /tmp/SVT-AV1 -B /tmp/SVT-AV1/cmake-build \
+       -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON \
        -DBUILD_APPS=OFF -DBUILD_DEC=OFF -DCMAKE_INSTALL_PREFIX=/usr/local \
        -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
-    && make -j$(nproc) \
-    && make install \
+    && cmake --build /tmp/SVT-AV1/cmake-build -j$(nproc) \
+    && cmake --install /tmp/SVT-AV1/cmake-build \
     && rm -rf /tmp/SVT-AV1
 
 
