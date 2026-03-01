@@ -74,7 +74,10 @@ COPY --from=svtav1-builder /usr/local/include/svt-av1/ /usr/local/include/svt-av
 RUN ldconfig
 
 # Install nasm for rav1e SIMD optimizations + libturbojpeg for fast JPEG decode
-RUN apt-get update && apt-get install -y --no-install-recommends nasm libturbojpeg0-dev \
+# pkg-config lets turbojpeg-sys detect the system lib instead of building from source
+# cmake is kept as a fallback in case turbojpeg-sys still tries a source build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    nasm libturbojpeg0-dev pkg-config cmake \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
