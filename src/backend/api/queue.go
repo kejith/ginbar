@@ -12,6 +12,8 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/redis/go-redis/v9"
+
+	"wallium/db"
 )
 
 const (
@@ -51,15 +53,19 @@ type QueueSnapshot struct {
 //   - publishes wake-up notifications via Redis Pub/Sub
 //   - reads queue status from a Redis key written by the worker
 //   - reads duplicate-post info from Redis keys written by the worker
+//   - falls back to counting dirty posts in the DB when the worker hasn't
+//     published status yet
 type ProcessQueue struct {
-	rdb *redis.Client
-	log *slog.Logger
+	rdb   *redis.Client
+	store *db.Store
+	log   *slog.Logger
 }
 
-func newProcessQueue(rdb *redis.Client, log *slog.Logger) *ProcessQueue {
+func newProcessQueue(rdb *redis.Client, store *db.Store, log *slog.Logger) *ProcessQueue {
 	return &ProcessQueue{
-		rdb: rdb,
-		log: log,
+		rdb:   rdb,
+		store: store,
+		log:   log,
 	}
 }
 
@@ -73,18 +79,22 @@ func (q *ProcessQueue) Notify() {
 }
 
 // Snapshot reads the current queue state from Redis (written by the Rust worker).
+// When the worker hasn't published status (key missing / expired), it falls
+// back to counting dirty posts in the database so the admin panel still
+// reflects the actual queue depth.
 func (q *ProcessQueue) Snapshot() QueueSnapshot {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	val, err := q.rdb.Get(ctx, redisQueueStatusKey).Result()
 	if err != nil {
-		return QueueSnapshot{ETASec: -1}
+		// No worker status in Redis — fall back to a DB count.
+		return q.dbFallbackSnapshot(ctx)
 	}
 
 	var snap QueueSnapshot
 	if err := json.Unmarshal([]byte(val), &snap); err != nil {
-		return QueueSnapshot{ETASec: -1}
+		return q.dbFallbackSnapshot(ctx)
 	}
 
 	// Compute ETA from the snapshot if the worker didn't provide it.
@@ -96,6 +106,26 @@ func (q *ProcessQueue) Snapshot() QueueSnapshot {
 	}
 
 	return snap
+}
+
+// dbFallbackSnapshot queries the database for the number of unprocessed posts
+// so the admin panel can display the queue depth even when the Rust worker
+// hasn't started or has crashed.
+func (q *ProcessQueue) dbFallbackSnapshot(ctx context.Context) QueueSnapshot {
+	count, err := q.store.CountDirtyPosts(ctx)
+	if err != nil {
+		q.log.Warn("queue: db fallback failed", slog.Any("err", err))
+		return QueueSnapshot{ETASec: -1}
+	}
+	if count == 0 {
+		return QueueSnapshot{ETASec: -1}
+	}
+	return QueueSnapshot{
+		Pending: int(count),
+		Total:   int(count),
+		ETASec:  -1,
+		Running: false,
+	}
 }
 
 // GetDupCache reads duplicate-post info for a specific post from Redis.

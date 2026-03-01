@@ -108,7 +108,7 @@ func NewServer(store *db.Store, rdb *redis.Client, sessionSecret string, log *sl
 		log:      log,
 		dirs:     dirs,
 	}
-	srv.queue = newProcessQueue(rdb, log)
+	srv.queue = newProcessQueue(rdb, store, log)
 
 	// ── Global middleware ─────────────────────────────────────────────────────
 	// requestIDMiddleware first — all subsequent middleware/handlers can read it.
