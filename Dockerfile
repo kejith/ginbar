@@ -81,7 +81,12 @@ WORKDIR /app
 
 # Cache deps by building with a dummy main + build.rs first
 COPY src/worker/Cargo.toml src/worker/build.rs ./
-RUN mkdir src && echo 'fn main() {}' > src/main.rs && cargo build --release && rm -rf src
+RUN mkdir -p src benches \
+    && echo 'fn main() {}' > src/main.rs \
+    && touch src/lib.rs \
+    && echo 'fn main() {}' > benches/processing.rs \
+    && cargo build --release \
+    && rm -rf src benches
 
 # Build actual worker
 COPY src/worker/ ./
