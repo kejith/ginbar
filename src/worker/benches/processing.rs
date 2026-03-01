@@ -263,5 +263,194 @@ criterion_group!(
     bench_create_thumbnail,
     bench_process_image,
     bench_avif_preset_comparison,
+    // New groups added below
+    bench_rgb_to_yuv420,
+    bench_wrap_avif_container,
+    bench_smart_crop,
+    bench_dct1d_partial,
+    bench_region_gradient_energy,
+    bench_encode_avif_ravif,
+    bench_generate_name,
 );
 criterion_main!(benches);
+
+// ── rgb_to_yuv420 ─────────────────────────────────────────────────────────────
+
+fn bench_rgb_to_yuv420(c: &mut Criterion) {
+    let mut group = c.benchmark_group("rgb_to_yuv420");
+    group.measurement_time(std::time::Duration::from_secs(8));
+
+    for &(name, path) in TEST_INPUTS {
+        if !input_available(path) {
+            continue;
+        }
+
+        let img = image::open(path).expect("load image").to_rgb8();
+        let (w, h) = (img.width(), img.height());
+
+        group.bench_with_input(BenchmarkId::new("bt601_yuv420", name), &img, |b, img| {
+            b.iter(|| {
+                std::hint::black_box(avif::rgb_to_yuv420(img, w, h));
+            });
+        });
+    }
+
+    group.finish();
+}
+
+// ── wrap_avif_container ────────────────────────────────────────────────────────
+
+fn bench_wrap_avif_container(c: &mut Criterion) {
+    let mut group = c.benchmark_group("wrap_avif_container");
+    group.measurement_time(std::time::Duration::from_secs(5));
+
+    // Use synthetic AV1 payloads of increasing sizes.
+    for size in [4 * 1024usize, 64 * 1024, 512 * 1024] {
+        let dummy_av1 = vec![0x00u8; size];
+        let label = format!("{}kb", size / 1024);
+        group.bench_with_input(
+            BenchmarkId::new("avif_container", &label),
+            &dummy_av1,
+            |b, data| {
+                b.iter(|| {
+                    std::hint::black_box(avif::wrap_avif_container(data, 1920, 1080).unwrap());
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+// ── smart_crop ────────────────────────────────────────────────────────────────
+
+fn bench_smart_crop(c: &mut Criterion) {
+    let mut group = c.benchmark_group("smart_crop");
+    group.sample_size(20);
+    group.measurement_time(std::time::Duration::from_secs(10));
+
+    for &(name, path) in TEST_INPUTS {
+        if !input_available(path) {
+            continue;
+        }
+
+        let img = image::open(path).expect("load image for smart_crop bench");
+
+        group.bench_with_input(
+            BenchmarkId::new("gradient_saliency_150x150", name),
+            &img,
+            |b, img| {
+                b.iter(|| {
+                    std::hint::black_box(processing::smart_crop(img, 150, 150));
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+// ── dct1d_partial ─────────────────────────────────────────────────────────────
+
+fn bench_dct1d_partial(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dct1d_partial");
+    group.measurement_time(std::time::Duration::from_secs(5));
+
+    // Simulate the actual usage: 256-element row DCT keeping 16 coefficients.
+    let input: Vec<f64> = (0..256).map(|i| (i as f64).sin()).collect();
+    let mut output = vec![0.0f64; 16];
+
+    group.bench_function("n256_k16", |b| {
+        b.iter(|| {
+            std::hint::black_box(processing::dct1d_partial(&input, &mut output, 16));
+        });
+    });
+
+    // Column transform: 256-element column DCT keeping 16 coefficients.
+    group.bench_function("n256_k16_col", |b| {
+        b.iter(|| {
+            std::hint::black_box(processing::dct1d_partial(&input, &mut output, 16));
+        });
+    });
+
+    group.finish();
+}
+
+// ── region_gradient_energy ────────────────────────────────────────────────────
+
+fn bench_region_gradient_energy(c: &mut Criterion) {
+    let mut group = c.benchmark_group("region_gradient_energy");
+    group.measurement_time(std::time::Duration::from_secs(5));
+
+    for &(name, path) in TEST_INPUTS {
+        if !input_available(path) {
+            continue;
+        }
+
+        let img = image::open(path).expect("load image").to_luma8();
+        let (w, h) = (img.width(), img.height());
+        // Analyse the full image at step=2 (same as smart_crop).
+        let step = 2u32;
+
+        group.bench_with_input(
+            BenchmarkId::new("full_frame_step2", name),
+            &img,
+            |b, gray| {
+                b.iter(|| {
+                    std::hint::black_box(processing::region_gradient_energy(
+                        gray, 0, 0, w, h, step,
+                    ));
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+// ── encode_avif_ravif (fallback encoder) ──────────────────────────────────────
+
+fn bench_encode_avif_ravif(c: &mut Criterion) {
+    let mut group = c.benchmark_group("encode_avif_ravif");
+    group.sample_size(10);
+    group.measurement_time(std::time::Duration::from_secs(15));
+
+    for &(name, path) in TEST_INPUTS {
+        if !input_available(path) {
+            continue;
+        }
+
+        let img = image::open(path).expect("load image for ravif bench");
+
+        group.bench_with_input(
+            BenchmarkId::new("quality80_speed4", name),
+            &img,
+            |b, img| {
+                b.iter(|| {
+                    let (dirs, _tmp) = bench_dirs();
+                    let dst = dirs.image.join("ravif_out.avif");
+                    // Access the crate-public encode function via the full path
+                    // (avif::encode_avif with max_width=0 and small preset to minimise time).
+                    avif::encode_avif(img, &dst, 50, 12, 0).unwrap();
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+// ── generate_name ─────────────────────────────────────────────────────────────
+
+fn bench_generate_name(c: &mut Criterion) {
+    let mut group = c.benchmark_group("generate_name");
+    group.measurement_time(std::time::Duration::from_secs(3));
+
+    group.bench_function("uuid_v4", |b| {
+        b.iter(|| {
+            std::hint::black_box(processing::generate_name());
+        });
+    });
+
+    group.finish();
+}

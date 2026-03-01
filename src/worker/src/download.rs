@@ -96,3 +96,38 @@ async fn stream_to_file(resp: reqwest::Response, dst: &Path) -> Result<()> {
     f.flush().await.context("flush file")?;
     Ok(())
 }
+
+// ── Unit tests ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── build_client ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_build_client_succeeds() {
+        // TLS backend initialisation and socket config must not fail.
+        let result = build_client();
+        assert!(result.is_ok(), "build_client must succeed: {:?}", result.err());
+    }
+
+    #[test]
+    fn test_build_client_returns_usable_handle() {
+        // Each call produces an independent, usable client handle.
+        let a = build_client().expect("first client");
+        let b = build_client().expect("second client");
+        // Both built successfully — drop them to avoid any Tokio runtime warnings.
+        drop(a);
+        drop(b);
+    }
+
+    #[test]
+    fn test_download_timeout_constant_is_positive() {
+        // Sanity-check: the configured timeout must be > 0.
+        assert!(
+            DOWNLOAD_TIMEOUT_SECS > 0,
+            "download timeout must be positive"
+        );
+    }
+}

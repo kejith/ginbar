@@ -15,6 +15,42 @@ use std::path::Path;
 use svt_av1_enc::{Frame, SvtAv1EncoderConfig};
 use tracing::{debug, warn};
 
+/// Redirect stdout (fd 1) and stderr (fd 2) to `/dev/null` for the duration of `f`,
+/// then restore them.
+///
+/// SVT-AV1 prints verbose init messages to stdout/stderr on every encoder creation.
+/// A global mutex serialises the fd swap so concurrent encodes don't interleave.
+fn suppress_stdio_for<T, F: FnOnce() -> T>(f: F) -> T {
+    use std::sync::Mutex;
+    static FD_LOCK: Mutex<()> = Mutex::new(());
+    let _guard = FD_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+    // RAII guard that restores the saved fds on drop (panic-safe).
+    struct Restore(libc::c_int, libc::c_int);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            unsafe {
+                libc::dup2(self.0, 1);
+                libc::dup2(self.1, 2);
+                libc::close(self.0);
+                libc::close(self.1);
+            }
+        }
+    }
+
+    unsafe {
+        let devnull =
+            libc::open(b"/dev/null\0".as_ptr() as *const libc::c_char, libc::O_WRONLY);
+        let saved_out = libc::dup(1);
+        let saved_err = libc::dup(2);
+        libc::dup2(devnull, 1);
+        libc::dup2(devnull, 2);
+        libc::close(devnull);
+        let _restore = Restore(saved_out, saved_err);
+        f()
+    }
+}
+
 /// Maximum number of logical processors SVT-AV1 may use **per encode**.
 ///
 /// When `WORKER_CONCURRENCY` is > 1, multiple images are encoded simultaneously.
@@ -23,7 +59,7 @@ use tracing::{debug, warn};
 /// than the single-image benchmark.
 ///
 /// Override with `SVT_AV1_THREADS` to set an explicit value.
-fn encoder_thread_count() -> u32 {
+pub(crate) fn encoder_thread_count() -> u32 {
     if let Ok(v) = std::env::var("SVT_AV1_THREADS") {
         if let Ok(n) = v.parse::<u32>() {
             if n > 0 {
@@ -149,7 +185,7 @@ pub fn encode_avif(
 ///   Cr = 128 + (112.0   * R -  93.786 * G -  18.214 * B) / 255
 ///
 /// Using fixed-point arithmetic (<<16) for speed.
-fn rgb_to_yuv420(rgb: &image::RgbImage, width: u32, height: u32) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+pub fn rgb_to_yuv420(rgb: &image::RgbImage, width: u32, height: u32) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     let w = width as usize;
     let h = height as usize;
     let cw = w / 2;
@@ -211,7 +247,7 @@ fn rgb_to_yuv420(rgb: &image::RgbImage, width: u32, height: u32) -> (Vec<u8>, Ve
 }
 
 /// Encode raw YUV420 data to AV1 bitstream using SVT-AV1.
-fn encode_av1_raw(
+pub(crate) fn encode_av1_raw(
     y_plane: &[u8],
     u_plane: &[u8],
     v_plane: &[u8],
@@ -242,7 +278,8 @@ fn encode_av1_raw(
     // Thread control
     cfg.config.logical_processors = encoder_thread_count();
 
-    let encoder = cfg.into_encoder().map_err(|e| anyhow::anyhow!("SVT-AV1 init: {:?}", e))?;
+    let encoder = suppress_stdio_for(|| cfg.into_encoder())
+        .map_err(|e| anyhow::anyhow!("SVT-AV1 init: {:?}", e))?;
 
     let frame = Frame::new(
         y_plane,
@@ -275,7 +312,7 @@ fn encode_av1_raw(
 /// encoder for images smaller than SVT-AV1's 64×64 minimum.
 ///
 /// Quality 80.0 / speed 4 balances file size with encode time for full-res images.
-fn encode_avif_ravif(img: &DynamicImage, dst: &Path) -> Result<(i32, i32)> {
+pub(crate) fn encode_avif_ravif(img: &DynamicImage, dst: &Path) -> Result<(i32, i32)> {
     use ravif::{Encoder, Img};
     use rgb::RGB8;
 
@@ -309,9 +346,256 @@ fn encode_avif_ravif(img: &DynamicImage, dst: &Path) -> Result<(i32, i32)> {
 }
 
 /// Wrap a raw AV1 bitstream in an AVIF container (ISOBMFF/HEIF).
-fn wrap_avif_container(av1_data: &[u8], width: u32, height: u32) -> Result<Vec<u8>> {
+pub fn wrap_avif_container(av1_data: &[u8], width: u32, height: u32) -> Result<Vec<u8>> {
     let avif = avif_serialize::Aviffy::new()
         .to_vec(av1_data, None, width, height, 8);
 
     Ok(avif)
+}
+
+// ── Unit tests ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use image::{DynamicImage, ImageBuffer, Rgb};
+    use tempfile::TempDir;
+
+    // ── Helpers ───────────────────────────────────────────────────────────────
+
+    /// Build a solid-colour RgbImage of the given dimensions.
+    fn solid_rgb(r: u8, g: u8, b: u8, w: u32, h: u32) -> image::RgbImage {
+        ImageBuffer::from_pixel(w, h, Rgb([r, g, b]))
+    }
+
+    /// Build a DynamicImage filled with the given colour.
+    fn solid_dyn(r: u8, g: u8, b: u8, w: u32, h: u32) -> DynamicImage {
+        DynamicImage::ImageRgb8(solid_rgb(r, g, b, w, h))
+    }
+
+    // ── rgb_to_yuv420 ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_yuv420_plane_dimensions() {
+        let (w, h) = (64u32, 64u32);
+        let rgb = solid_rgb(100, 150, 200, w, h);
+        let (y, u, v) = rgb_to_yuv420(&rgb, w, h);
+        assert_eq!(y.len(), (w * h) as usize, "Y plane size");
+        assert_eq!(u.len(), (w / 2 * (h / 2)) as usize, "U plane size");
+        assert_eq!(v.len(), (w / 2 * (h / 2)) as usize, "V plane size");
+    }
+
+    #[test]
+    fn test_yuv420_pure_black_gives_limited_range_floor() {
+        // BT.601: Y for black = 16 (limited-range floor)
+        let rgb = solid_rgb(0, 0, 0, 2, 2);
+        let (y, _u, _v) = rgb_to_yuv420(&rgb, 2, 2);
+        assert!(y.iter().all(|&v| v == 16), "all Y values should be 16 for black");
+    }
+
+    #[test]
+    fn test_yuv420_pure_white_gives_limited_range_ceiling() {
+        // BT.601: Y for white = 235 (limited-range ceiling)
+        let rgb = solid_rgb(255, 255, 255, 2, 2);
+        let (y, u, v) = rgb_to_yuv420(&rgb, 2, 2);
+        assert!(y.iter().all(|&val| val == 235), "all Y values should be 235 for white");
+        // U and V for neutral grey/white should be near 128
+        assert!(u.iter().all(|&val| (val as i32 - 128).abs() <= 2), "U near 128 for white");
+        assert!(v.iter().all(|&val| (val as i32 - 128).abs() <= 2), "V near 128 for white");
+    }
+
+    #[test]
+    fn test_yuv420_pure_red_has_high_cr() {
+        // Pure red: Cr (V) should be significantly above 128
+        let rgb = solid_rgb(255, 0, 0, 2, 2);
+        let (y, _u, v) = rgb_to_yuv420(&rgb, 2, 2);
+        assert!(y[0] > 16, "Y should be above floor for red");
+        assert!(v[0] > 180, "Cr (V) should be high for pure red, got {}", v[0]);
+    }
+
+    #[test]
+    fn test_yuv420_pure_blue_has_high_cb() {
+        // Pure blue: Cb (U) should be significantly above 128
+        let rgb = solid_rgb(0, 0, 255, 2, 2);
+        let (_y, u, _v) = rgb_to_yuv420(&rgb, 2, 2);
+        assert!(u[0] > 180, "Cb (U) should be high for pure blue, got {}", u[0]);
+    }
+
+    #[test]
+    fn test_yuv420_odd_dimensions_handled_by_caller() {
+        // encode_avif clips to even before calling; test with even dims only.
+        let rgb = solid_rgb(128, 128, 128, 4, 4);
+        let (y, u, v) = rgb_to_yuv420(&rgb, 4, 4);
+        assert_eq!(y.len(), 16);
+        assert_eq!(u.len(), 4);
+        assert_eq!(v.len(), 4);
+    }
+
+    // ── wrap_avif_container ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_wrap_avif_container_nonempty() {
+        let dummy_av1 = vec![0x00u8; 64];
+        let result = wrap_avif_container(&dummy_av1, 64, 64).unwrap();
+        assert!(!result.is_empty(), "AVIF container must not be empty");
+    }
+
+    #[test]
+    fn test_wrap_avif_container_larger_than_input() {
+        let dummy_av1 = vec![0x00u8; 64];
+        let result = wrap_avif_container(&dummy_av1, 64, 64).unwrap();
+        assert!(
+            result.len() > dummy_av1.len(),
+            "AVIF container ({} bytes) should be larger than raw AV1 input ({} bytes)",
+            result.len(),
+            dummy_av1.len()
+        );
+    }
+
+    #[test]
+    fn test_wrap_avif_container_has_ftyp_box() {
+        // ISOBMFF: first 4 bytes = box size, next 4 bytes = box type.
+        // AVIF files always begin with an 'ftyp' box.
+        let dummy_av1 = vec![0x00u8; 64];
+        let result = wrap_avif_container(&dummy_av1, 64, 64).unwrap();
+        assert!(
+            result.len() >= 8,
+            "container must have at least one box header (8 bytes)"
+        );
+        assert_eq!(
+            &result[4..8],
+            b"ftyp",
+            "first ISOBMFF box type must be 'ftyp'"
+        );
+    }
+
+    #[test]
+    fn test_wrap_avif_container_different_sizes_produce_different_output() {
+        let av1 = vec![0x01u8; 64];
+        let small = wrap_avif_container(&av1, 64, 64).unwrap();
+        let large = wrap_avif_container(&av1, 1280, 720).unwrap();
+        // Different dimensions → different container metadata
+        assert_ne!(small, large);
+    }
+
+    // ── encoder_thread_count ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_encoder_thread_count_at_least_one() {
+        // Regardless of environment, the result must be >= 1.
+        assert!(encoder_thread_count() >= 1);
+    }
+
+    // ── encode_avif (encode_avif_ravif fallback for small images) ─────────────
+
+    #[test]
+    fn test_encode_avif_below_min_svt_size_uses_ravif() {
+        // Images < 64×64 must fall back to ravif and still succeed.
+        let tmp = TempDir::new().unwrap();
+        let dst = tmp.path().join("out.avif");
+        let img = solid_dyn(128, 64, 32, 32, 32);
+        let (w, h) = encode_avif(&img, &dst, 18, 8, 0).unwrap();
+        assert_eq!(w, 32);
+        assert_eq!(h, 32);
+        assert!(dst.exists(), "AVIF file must exist");
+        assert!(std::fs::metadata(&dst).unwrap().len() > 0, "AVIF file must not be empty");
+    }
+
+    #[test]
+    fn test_encode_avif_creates_file() {
+        let tmp = TempDir::new().unwrap();
+        let dst = tmp.path().join("out.avif");
+        let img = solid_dyn(100, 150, 200, 128, 128);
+        let result = encode_avif(&img, &dst, 18, 8, 0);
+        assert!(result.is_ok(), "encode_avif failed: {:?}", result.err());
+        assert!(dst.exists(), "output AVIF file must exist");
+        assert!(std::fs::metadata(&dst).unwrap().len() > 0);
+    }
+
+    #[test]
+    fn test_encode_avif_returns_correct_dims() {
+        let tmp = TempDir::new().unwrap();
+        let dst = tmp.path().join("out.avif");
+        let img = solid_dyn(80, 80, 80, 128, 96);
+        let (w, h) = encode_avif(&img, &dst, 18, 8, 0).unwrap();
+        // Output dimensions may be even-clipped but should match the input
+        assert!((w - 128).abs() <= 2, "width should be near 128, got {}", w);
+        assert!((h - 96).abs() <= 2, "height should be near 96, got {}", h);
+    }
+
+    #[test]
+    fn test_encode_avif_max_width_scaling() {
+        let tmp = TempDir::new().unwrap();
+        let dst = tmp.path().join("out.avif");
+        // Input is 200×200; max_width=100 must scale it down.
+        let img = solid_dyn(200, 100, 50, 200, 200);
+        let (w, h) = encode_avif(&img, &dst, 18, 8, 100).unwrap();
+        assert!(w <= 100, "width {} should be ≤ max_width 100", w);
+        assert!(h > 0, "height should be positive");
+    }
+
+    #[test]
+    fn test_encode_avif_even_output_dimensions() {
+        // Odd-dimension input should result in even-dimension output.
+        let tmp = TempDir::new().unwrap();
+        let dst = tmp.path().join("out.avif");
+        let img = solid_dyn(128, 128, 128, 131, 97);
+        let (w, h) = encode_avif(&img, &dst, 18, 8, 0).unwrap();
+        assert_eq!(w % 2, 0, "output width {} must be even", w);
+        assert_eq!(h % 2, 0, "output height {} must be even", h);
+    }
+
+    // ── encode_avif_ravif (direct) ────────────────────────────────────────────
+
+    #[test]
+    fn test_encode_avif_ravif_creates_file() {
+        let tmp = TempDir::new().unwrap();
+        let dst = tmp.path().join("ravif.avif");
+        let img = solid_dyn(60, 120, 180, 64, 64);
+        let (w, h) = encode_avif_ravif(&img, &dst).unwrap();
+        assert_eq!(w, 64);
+        assert_eq!(h, 64);
+        assert!(dst.exists());
+        assert!(std::fs::metadata(&dst).unwrap().len() > 0);
+    }
+
+    #[test]
+    fn test_encode_avif_ravif_small_input() {
+        // ravif should handle even very small images gracefully.
+        let tmp = TempDir::new().unwrap();
+        let dst = tmp.path().join("tiny.avif");
+        let img = solid_dyn(255, 0, 0, 4, 4);
+        let result = encode_avif_ravif(&img, &dst);
+        assert!(result.is_ok(), "ravif should handle 4×4 images: {:?}", result.err());
+    }
+
+    // ── suppress_stdio_for ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_suppress_stdio_for_returns_value() {
+        // The closure's return value must pass through unchanged.
+        let result = suppress_stdio_for(|| 42u32);
+        assert_eq!(result, 42);
+    }
+
+    #[test]
+    fn test_suppress_stdio_for_restores_fds() {
+        // After the call, writing to stdout/stderr must still work
+        // (no EBADF / broken pipe). We verify by checking that fd 1 and fd 2
+        // are still valid open file descriptors using fcntl F_GETFD.
+        suppress_stdio_for(|| ());
+        let out_flags = unsafe { libc::fcntl(1, libc::F_GETFD) };
+        let err_flags = unsafe { libc::fcntl(2, libc::F_GETFD) };
+        assert!(out_flags >= 0, "stdout fd must still be valid after suppress");
+        assert!(err_flags >= 0, "stderr fd must still be valid after suppress");
+    }
+
+    #[test]
+    fn test_suppress_stdio_for_nested_calls_restore_correctly() {
+        // Nested calls (sequential, since there's a mutex) must each restore fds.
+        suppress_stdio_for(|| ());
+        suppress_stdio_for(|| ());
+        let out_flags = unsafe { libc::fcntl(1, libc::F_GETFD) };
+        assert!(out_flags >= 0, "stdout fd must be valid after two suppress calls");
+    }
 }

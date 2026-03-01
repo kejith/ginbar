@@ -25,7 +25,7 @@ const REDIS_CHANNEL: &str = "wallium:queue:wake";
 const REDIS_STATUS_KEY: &str = "wallium:queue:status";
 
 /// Shared counters for the current batch (all atomics, no mutex needed).
-struct QueueState {
+pub(crate) struct QueueState {
     pending: AtomicI32,
     active: AtomicI32,
     total: AtomicI32,
@@ -280,7 +280,7 @@ async fn process_post(
 }
 
 /// Process an image post: encode, hash, dedup, thumbnail, finalize.
-async fn process_image_post(
+pub(crate) async fn process_image_post(
     pool: &PgPool,
     redis_client: &redis::Client,
     dirs: &Directories,
@@ -345,7 +345,7 @@ async fn process_image_post(
 }
 
 /// Process a video post: move, thumbnail, probe, finalize.
-async fn process_video_post(
+pub(crate) async fn process_video_post(
     pool: &PgPool,
     dirs: &Directories,
     post: &DirtyPost,
@@ -379,7 +379,7 @@ async fn process_video_post(
 }
 
 /// Publish current queue status to Redis.
-async fn publish_status(redis_client: &redis::Client, state: &Arc<QueueState>) -> Result<()> {
+pub(crate) async fn publish_status(redis_client: &redis::Client, state: &Arc<QueueState>) -> Result<()> {
     let status = serde_json::json!({
         "pending": state.pending.load(Ordering::Relaxed),
         "active": state.active.load(Ordering::Relaxed),
@@ -399,13 +399,14 @@ async fn publish_status(redis_client: &redis::Client, state: &Arc<QueueState>) -
 
 // ── File classification ───────────────────────────────────────────────────────
 
-enum FileType {
+#[derive(Debug, PartialEq)]
+pub(crate) enum FileType {
     Image,
     Video(String),
     Unknown(String),
 }
 
-fn classify_file(path: &Path) -> FileType {
+pub(crate) fn classify_file(path: &Path) -> FileType {
     let ext = path
         .extension()
         .map(|e| e.to_string_lossy().to_lowercase())
@@ -421,5 +422,293 @@ fn classify_file(path: &Path) -> FileType {
         "avi" => FileType::Video("video/x-msvideo".to_string()),
         "mkv" => FileType::Video("video/x-matroska".to_string()),
         other => FileType::Unknown(format!("unknown/{}", other)),
+    }
+}
+
+// ── Unit tests ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    // ── QueueState ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_queue_state_new_all_zero() {
+        let s = QueueState::new();
+        assert_eq!(s.pending.load(Ordering::Relaxed), 0);
+        assert_eq!(s.active.load(Ordering::Relaxed), 0);
+        assert_eq!(s.total.load(Ordering::Relaxed), 0);
+        assert_eq!(s.processed.load(Ordering::Relaxed), 0);
+        assert_eq!(s.imported.load(Ordering::Relaxed), 0);
+        assert_eq!(s.failed.load(Ordering::Relaxed), 0);
+        assert!(!s.running.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn test_queue_state_atomic_increments() {
+        let s = QueueState::new();
+        s.pending.fetch_add(5, Ordering::Relaxed);
+        s.active.fetch_add(2, Ordering::Relaxed);
+        s.total.fetch_add(10, Ordering::Relaxed);
+        assert_eq!(s.pending.load(Ordering::Relaxed), 5);
+        assert_eq!(s.active.load(Ordering::Relaxed), 2);
+        assert_eq!(s.total.load(Ordering::Relaxed), 10);
+    }
+
+    #[test]
+    fn test_queue_state_running_flag() {
+        let s = QueueState::new();
+        s.running.store(true, Ordering::Relaxed);
+        assert!(s.running.load(Ordering::Relaxed));
+        s.running.store(false, Ordering::Relaxed);
+        assert!(!s.running.load(Ordering::Relaxed));
+    }
+
+    // ── classify_file ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_classify_jpeg_is_image() {
+        assert_eq!(classify_file(Path::new("photo.jpg")), FileType::Image);
+        assert_eq!(classify_file(Path::new("photo.jpeg")), FileType::Image);
+    }
+
+    #[test]
+    fn test_classify_image_extensions() {
+        for ext in &["jpg", "jpeg", "png", "gif", "webp", "avif", "jxl", "bmp", "tiff", "tif"] {
+            let p = std::path::PathBuf::from("file").with_extension(ext);
+            assert_eq!(
+                classify_file(&p),
+                FileType::Image,
+                "expected Image for .{}",
+                ext
+            );
+        }
+    }
+
+    #[test]
+    fn test_classify_mp4_is_video() {
+        assert_eq!(
+            classify_file(Path::new("clip.mp4")),
+            FileType::Video("video/mp4".to_string())
+        );
+    }
+
+    #[test]
+    fn test_classify_video_extensions() {
+        let expected = [
+            ("mp4", "video/mp4"),
+            ("webm", "video/webm"),
+            ("mov", "video/quicktime"),
+            ("avi", "video/x-msvideo"),
+            ("mkv", "video/x-matroska"),
+        ];
+        for (ext, mime) in &expected {
+            let p = std::path::PathBuf::from("file").with_extension(ext);
+            assert_eq!(
+                classify_file(&p),
+                FileType::Video(mime.to_string()),
+                "wrong mime for .{}",
+                ext
+            );
+        }
+    }
+
+    #[test]
+    fn test_classify_unknown_extension() {
+        assert_eq!(
+            classify_file(Path::new("archive.tar")),
+            FileType::Unknown("unknown/tar".to_string())
+        );
+    }
+
+    #[test]
+    fn test_classify_no_extension() {
+        assert_eq!(
+            classify_file(Path::new("no_extension")),
+            FileType::Unknown("unknown/".to_string())
+        );
+    }
+
+    #[test]
+    fn test_classify_uppercase_extension() {
+        // Extensions must be matched case-insensitively.
+        assert_eq!(classify_file(Path::new("photo.JPG")), FileType::Image);
+        assert_eq!(classify_file(Path::new("clip.MP4")), FileType::Video("video/mp4".to_string()));
+    }
+
+    #[test]
+    fn test_classify_path_with_dirs() {
+        assert_eq!(
+            classify_file(Path::new("/some/deep/path/photo.png")),
+            FileType::Image
+        );
+    }
+
+    // ── Integration tests (require Postgres + Redis) ───────────────────────────
+    //
+    // Run with:
+    //   cargo test -p wallium-worker -- --ignored --test-threads=1
+
+    const TEST_DB_URL: &str =
+        "postgres://wallium:devpassword@localhost:5432/wallium?sslmode=disable";
+    const TEST_REDIS_URL: &str = "redis://localhost:6379";
+
+    async fn queue_test_pool() -> sqlx::PgPool {
+        sqlx::postgres::PgPoolOptions::new()
+            .max_connections(2)
+            .connect(TEST_DB_URL)
+            .await
+            .expect("postgres must be running — use the devcontainer")
+    }
+
+    fn queue_test_redis() -> redis::Client {
+        redis::Client::open(TEST_REDIS_URL).expect("redis must be running")
+    }
+
+    fn make_queue_dirs() -> (crate::processing::Directories, tempfile::TempDir) {
+        let tmp = tempfile::TempDir::new().unwrap();
+        let r = tmp.path();
+        let dirs = crate::processing::Directories {
+            image: r.join("images"),
+            thumbnail: r.join("thumbnails"),
+            video: r.join("videos"),
+            tmp: r.join("tmp"),
+            upload: r.join("upload"),
+        };
+        for d in [
+            &dirs.image, &dirs.thumbnail, &dirs.video,
+            &dirs.tmp, &dirs.upload, &dirs.tmp.join("thumbnails"),
+        ] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        (dirs, tmp)
+    }
+
+    async fn insert_queue_test_post(
+        pool: &sqlx::PgPool,
+        url: &str,
+        uploaded_filename: &str,
+    ) -> i32 {
+        sqlx::query(
+            "INSERT INTO users (name, email, password) \
+             VALUES ('test_worker_q', 'test_worker_q@test.local', 'X') \
+             ON CONFLICT (name) DO NOTHING",
+        )
+        .execute(pool)
+        .await
+        .expect("ensure test user");
+
+        let row: (i32,) = sqlx::query_as(
+            r#"
+            INSERT INTO posts
+                (url, uploaded_filename, filename, thumbnail_filename,
+                 content_type, user_name, dirty, released)
+            VALUES ($1, $2, 'pending.avif', 'pending_thumb.avif',
+                    'image', 'test_worker_q', TRUE, FALSE)
+            RETURNING id
+            "#,
+        )
+        .bind(url)
+        .bind(uploaded_filename)
+        .fetch_one(pool)
+        .await
+        .expect("insert test dirty post");
+        row.0
+    }
+
+    async fn cleanup_queue_test_post(pool: &sqlx::PgPool, id: i32) {
+        sqlx::query("DELETE FROM posts WHERE id = $1")
+            .bind(id)
+            .execute(pool)
+            .await
+            .ok();
+    }
+
+    /// Full image pipeline: place a real JPEG, call process_image_post, verify DB finalization.
+    #[tokio::test]
+    #[ignore] // requires Postgres at localhost:5432
+    async fn test_process_image_post_e2e() {
+        let pool = queue_test_pool().await;
+        let redis_client = queue_test_redis();
+        let (dirs, _tmp) = make_queue_dirs();
+
+        // Write a synthetic JPEG to the upload directory.
+        let img_path = dirs.upload.join("upload_e2e.jpg");
+        let img = image::DynamicImage::ImageRgb8(
+            image::ImageBuffer::from_pixel(256u32, 256u32, image::Rgb([100u8, 150, 200]))
+        );
+        img.save(&img_path).unwrap();
+
+        let unique_url = format!("https://test-queue/{}", uuid::Uuid::new_v4());
+        let id = insert_queue_test_post(
+            &pool, &unique_url, img_path.to_str().unwrap(),
+        ).await;
+
+        let post = crate::db::DirtyPost {
+            id,
+            url: unique_url,
+            uploaded_filename: img_path.to_string_lossy().to_string(),
+            user_name: "test_worker_q".to_string(),
+            filter: "sfw".to_string(),
+            released: false,
+        };
+
+        process_image_post(&pool, &redis_client, &dirs, &post, &img_path)
+            .await
+            .expect("process_image_post must succeed");
+
+        // Verify finalization.
+        let row: (String, bool, i32, i32) = sqlx::query_as(
+            "SELECT filename, dirty, width, height FROM posts WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .expect("fetch finalized post");
+
+        assert!(!row.0.is_empty(), "filename must be set after finalize");
+        assert!(!row.1, "dirty flag must be false after successful processing");
+        assert!(row.2 > 0, "width must be > 0");
+        assert!(row.3 > 0, "height must be > 0");
+        assert!(
+            dirs.image.join(&row.0).exists(),
+            "AVIF output file must exist in image dir"
+        );
+
+        cleanup_queue_test_post(&pool, id).await;
+    }
+
+    /// Verify publish_status writes a well-formed JSON status to Redis.
+    #[tokio::test]
+    #[ignore] // requires Redis at localhost:6379
+    async fn test_publish_status_writes_redis() {
+        let redis_client = queue_test_redis();
+        let state = Arc::new(QueueState::new());
+        state.pending.store(5, Ordering::Relaxed);
+        state.total.store(10, Ordering::Relaxed);
+        state.running.store(true, Ordering::Relaxed);
+
+        publish_status(&redis_client, &state)
+            .await
+            .expect("publish_status must succeed");
+
+        let mut conn = redis_client
+            .get_multiplexed_async_connection()
+            .await
+            .expect("redis connection");
+        let val: Option<String> = redis::cmd("GET")
+            .arg(REDIS_STATUS_KEY)
+            .query_async(&mut conn)
+            .await
+            .expect("GET status key");
+
+        let val = val.expect("status key must be set after publish_status");
+        let json: serde_json::Value = serde_json::from_str(&val).expect("valid JSON");
+
+        assert_eq!(json["pending"], 5, "pending counter mismatch");
+        assert_eq!(json["total"], 10, "total counter mismatch");
+        assert_eq!(json["running"], true, "running flag mismatch");
     }
 }

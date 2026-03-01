@@ -2,7 +2,7 @@
 # Targets delegate into src/ sub-projects.
 # Run from repo root inside devcontainer.
 
-.PHONY: dev dev-build dev-build-backend dev-build-worker dev-backend dev-frontend migrate sqlc lint build up down logs migrate-prod dev-clean
+.PHONY: dev dev-build dev-build-backend dev-build-worker dev-backend dev-frontend migrate sqlc lint build up down logs migrate-prod dev-clean test test-integration test-all test-e2e bench-e2e e2e-run e2e-bench-run
 
 # ── Dev ───────────────────────────────────────────────────────────────────────
 
@@ -79,6 +79,21 @@ migrate-prod:
 ## dev-clean: wipe dev database, media files, and tmp — then re-run migrations
 dev-clean:
 	@bash scripts/dev-clean.sh
+
+## test: run worker unit tests (10-image testset sample; set WALLIUM_TESTSET_SIZE=100 for full corpus)
+test:
+	cd src/worker && cargo test -p wallium-worker
+
+## test-integration: run DB/Redis integration tests (requires Postgres + Redis)
+test-integration:
+	cd src/worker && cargo test -p wallium-worker -- --ignored --test-threads=1
+
+## test-all: unit + integration tests
+test-all: test test-integration
+
+## test-data: download 100 pr0gramm testset images into src/worker/test_data/images/ (idempotent)
+test-data:
+	go run ./scripts/download_testset.go
 
 psql:
 	PGPASSWORD=devpassword psql -h localhost -U wallium wallium
