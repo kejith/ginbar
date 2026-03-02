@@ -9,8 +9,7 @@ import useAuthStore from "../stores/authStore.js";
 import useMessageStore from "../stores/messageStore.js";
 import usePostStore from "../stores/postStore.js";
 import UploadModal from "./UploadModal.jsx";
-import ThemeSwitcher from "./ThemeSwitcher.jsx";
-import FilterSelector from "./FilterSelector.jsx";
+import SettingsMenu from "./SettingsMenu.jsx";
 import { isAdmin } from "../utils/roles.js";
 
 export default function Nav() {
@@ -195,44 +194,92 @@ export default function Nav() {
         />
         <button
           type="submit"
-          className="shrink-0 rounded-sm bg-(--color-accent) px-3 text-sm font-medium text-(--color-accent-text)"
+          title="Search"
+          className="shrink-0 flex items-center justify-center h-8 w-8 rounded-sm bg-(--color-accent) text-(--color-accent-text)"
         >
-          go
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="h-4 w-4"
+          >
+            <circle cx="11" cy="11" r="7" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
         </button>
       </form>
 
-      {/* Feed filter */}
-      <FilterSelector />
+      {/* Upload */}
+      {user && (
+        <button
+          onClick={() => setShowUpload(true)}
+          title="Upload post"
+          className="shrink-0 flex items-center justify-center h-8 w-8 rounded-sm bg-(--color-accent) text-(--color-accent-text)"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className="h-4 w-4"
+          >
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="17 8 12 3 7 8" />
+            <line x1="12" y1="3" x2="12" y2="15" />
+          </svg>
+        </button>
+      )}
 
-      {/* Theme switcher */}
-      <ThemeSwitcher />
+      {/* Settings */}
+      <SettingsMenu />
 
       {/* Auth */}
       <div className="shrink-0 text-sm">
         {user ? (
           <div className="flex items-center gap-3">
-            <button
-              onClick={() => setShowUpload(true)}
-              className="rounded-sm bg-(--color-accent) px-2.5 py-1 text-xs font-semibold text-(--color-accent-text)"
-              title="Upload post"
-            >
-              + post
-            </button>
-            {isAdmin(user) && (
+            {/* Username with hover dropdown */}
+            <div className="relative group">
               <Link
-                to="/admin"
-                className="rounded-sm bg-(--color-admin) px-2.5 py-1 text-xs font-semibold text-white"
-                title="Admin panel"
+                to={`/user/${user.name}`}
+                className="text-(--color-text) hover:text-(--color-accent)"
               >
-                admin
+                {user.name}
               </Link>
-            )}
-            <Link
-              to={`/user/${user.name}`}
-              className="text-(--color-text) hover:text-(--color-accent)"
-            >
-              {user.name}
-            </Link>
+              <div className="absolute right-0 top-full pt-1 hidden group-hover:block z-[200]">
+                <div className="w-44 overflow-hidden rounded-[var(--radius-sm)] border border-(--color-border) bg-(--color-surface) shadow-xl">
+                  {isAdmin(user) && (
+                    <>
+                      <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-(--color-muted)">
+                        Admin
+                      </div>
+                      <Link
+                        to="/admin"
+                        className="flex w-full items-center gap-2 px-3 py-2 text-xs font-medium text-(--color-admin) transition-colors hover:bg-(--color-bg)"
+                      >
+                        Admin panel
+                      </Link>
+                      <div className="mx-2 my-1 border-t border-(--color-border)" />
+                    </>
+                  )}
+                  <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-(--color-muted)">
+                    Account
+                  </div>
+                  <button
+                    onClick={logout}
+                    className="flex w-full cursor-pointer items-center gap-2 px-3 py-2 text-left text-xs text-(--color-muted) transition-colors hover:bg-(--color-bg) hover:text-(--color-text)"
+                  >
+                    Sign out
+                  </button>
+                </div>
+              </div>
+            </div>
             {/* Envelope icon with unread badge */}
             <Link
               to="/messages"
@@ -258,12 +305,6 @@ export default function Nav() {
                 </span>
               )}
             </Link>
-            <button
-              onClick={logout}
-              className="text-(--color-muted) hover:text-(--color-text)"
-            >
-              out
-            </button>
           </div>
         ) : (
           <Link
