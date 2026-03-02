@@ -2239,4 +2239,244 @@ mod tests {
         let (w, _h) = avif::encode_avif(&img, &dst, 18, 8, 920, 0).unwrap();
         assert!(w <= 920, "width {} should be ≤ 920 after resize", w);
     }
+
+    // ── Phash-based output corruption tests ───────────────────────────────────
+
+    /// Hamming distance between two 256-bit phashes (4 × i64).
+    fn phash_hamming(a: &[i64; 4], b: &[i64; 4]) -> u32 {
+        a.iter()
+            .zip(b.iter())
+            .map(|(&x, &y)| (x ^ y).count_ones())
+            .sum()
+    }
+
+    /// Create a gradient JPEG image with real colour content (not solid).
+    /// The gradient goes from top-left (r_start, g_start, b_start)
+    /// to bottom-right (r_end, g_end, b_end), producing a non-trivial phash.
+    fn gradient_rgb(
+        r_start: u8, g_start: u8, b_start: u8,
+        r_end: u8, g_end: u8, b_end: u8,
+        w: u32, h: u32,
+    ) -> DynamicImage {
+        let mut buf = ImageBuffer::new(w, h);
+        for (x, y, p) in buf.enumerate_pixels_mut() {
+            let t = (x as f32 + y as f32) / (w as f32 + h as f32 - 2.0).max(1.0);
+            let r = (r_start as f32 * (1.0 - t) + r_end as f32 * t) as u8;
+            let g = (g_start as f32 * (1.0 - t) + g_end as f32 * t) as u8;
+            let b = (b_start as f32 * (1.0 - t) + b_end as f32 * t) as u8;
+            *p = Rgb([r, g, b]);
+        }
+        DynamicImage::ImageRgb8(buf)
+    }
+
+    /// Decode an AVIF file by converting it to JPEG via ffmpeg, then opening.
+    async fn decode_avif_via_ffmpeg(avif_path: &std::path::Path) -> DynamicImage {
+        let tmp = TempDir::new().unwrap();
+        let jpg_path = tmp.path().join("decoded.jpg");
+        crate::ffmpeg::normalize_to_jpeg(avif_path, &jpg_path)
+            .await
+            .expect("ffmpeg should decode AVIF to JPEG");
+        image::open(&jpg_path).expect("should decode converted JPEG")
+    }
+
+    /// Verify that the full-res AVIF produced by process_image is NOT a
+    /// solid white or solid black image.
+    ///
+    /// This catches bugs where the encoder receives zeroed / uninitialised
+    /// buffers, wrong strides, or swapped planes — all of which produce a
+    /// visually blank (white or black) output even though the file is valid
+    /// AVIF and has the correct dimensions.
+    ///
+    /// Strategy: compute the phash of a known white and black reference
+    /// image, then compute the phash of the process_image AVIF output
+    /// (decoded back via ffmpeg) and assert the hamming distance is large.
+    #[tokio::test]
+    async fn test_process_image_output_not_white_or_black_gradient() {
+        let white_phash = compute_phash(&solid_rgb(255, 255, 255, 256, 256));
+        let black_phash = compute_phash(&solid_rgb(0, 0, 0, 256, 256));
+
+        // A colourful gradient: red→cyan (lots of structure in all channels).
+        let input_img = gradient_rgb(200, 30, 30, 30, 200, 200, 800, 600);
+        let input_phash = compute_phash(&input_img);
+
+        let (dirs, _tmp) = make_dirs();
+        let src = dirs.upload.join("gradient_test.jpg");
+        input_img.save(&src).expect("save input JPEG");
+
+        let result = process_image(&src, &dirs)
+            .await
+            .expect("process_image should succeed");
+
+        // Decode the full-res AVIF back to a raster image.
+        let avif_path = dirs.image.join(&result.filename);
+        assert!(avif_path.exists(), "AVIF output must exist");
+        let decoded = decode_avif_via_ffmpeg(&avif_path).await;
+        let output_phash = compute_phash(&decoded);
+
+        // The output must NOT look like solid white.
+        let dist_white = phash_hamming(&output_phash, &white_phash);
+        assert!(
+            dist_white > 30,
+            "output phash is too close to white (hamming={dist_white}), \
+             likely a blank/corrupted image"
+        );
+
+        // The output must NOT look like solid black.
+        let dist_black = phash_hamming(&output_phash, &black_phash);
+        assert!(
+            dist_black > 30,
+            "output phash is too close to black (hamming={dist_black}), \
+             likely a blank/corrupted image"
+        );
+
+        // The output should be perceptually similar to the input.
+        // Lossy AVIF encoding (CRF 18) + ffmpeg AVIF→JPEG decode roundtrip
+        // can shift many DCT bins across the median, especially for smooth
+        // gradients.  A threshold of 120/256 bits still catches catastrophic
+        // corruption (random noise ≈ 128, solid colour ≈ 0 or 256).
+        let dist_input = phash_hamming(&output_phash, &input_phash);
+        assert!(
+            dist_input < 120,
+            "output phash drifted too far from input (hamming={dist_input}), \
+             content may be corrupted"
+        );
+    }
+
+    /// Same corruption check but for a landscape-style gradient (wide, ≤920 px
+    /// — exercises the YUV-native fast path for small JPEGs with 4:2:0).
+    #[tokio::test]
+    async fn test_process_image_output_not_white_or_black_small_jpeg() {
+        let white_phash = compute_phash(&solid_rgb(255, 255, 255, 256, 256));
+        let black_phash = compute_phash(&solid_rgb(0, 0, 0, 256, 256));
+
+        // 640×480 — below the 1058 px threshold, will use the YUV-native path
+        // (if the JPEG is 4:2:0, which standard encoders produce by default).
+        let input_img = gradient_rgb(50, 100, 200, 200, 50, 100, 640, 480);
+        let input_phash = compute_phash(&input_img);
+
+        let (dirs, _tmp) = make_dirs();
+        let src = dirs.upload.join("small_gradient.jpg");
+        input_img.save(&src).expect("save input JPEG");
+
+        let result = process_image(&src, &dirs)
+            .await
+            .expect("process_image should succeed for small JPEG");
+
+        let avif_path = dirs.image.join(&result.filename);
+        assert!(avif_path.exists(), "AVIF output must exist");
+        let decoded = decode_avif_via_ffmpeg(&avif_path).await;
+        let output_phash = compute_phash(&decoded);
+
+        let dist_white = phash_hamming(&output_phash, &white_phash);
+        assert!(
+            dist_white > 30,
+            "small JPEG output phash too close to white (hamming={dist_white})"
+        );
+
+        let dist_black = phash_hamming(&output_phash, &black_phash);
+        assert!(
+            dist_black > 30,
+            "small JPEG output phash too close to black (hamming={dist_black})"
+        );
+
+        let dist_input = phash_hamming(&output_phash, &input_phash);
+        assert!(
+            dist_input < 120,
+            "small JPEG output phash too far from input (hamming={dist_input})"
+        );
+    }
+
+    /// Verify the thumbnail output is also not white or black.
+    #[tokio::test]
+    async fn test_process_image_thumbnail_not_white_or_black() {
+        let white_phash = compute_phash(&solid_rgb(255, 255, 255, 256, 256));
+        let black_phash = compute_phash(&solid_rgb(0, 0, 0, 256, 256));
+
+        let input_img = gradient_rgb(180, 60, 120, 60, 180, 60, 800, 600);
+
+        let (dirs, _tmp) = make_dirs();
+        let src = dirs.upload.join("thumb_test.jpg");
+        input_img.save(&src).expect("save input JPEG");
+
+        let result = process_image(&src, &dirs)
+            .await
+            .expect("process_image should succeed");
+
+        let thumb_path = dirs.thumbnail.join(&result.thumbnail_filename);
+        assert!(thumb_path.exists(), "thumbnail AVIF must exist");
+        let decoded = decode_avif_via_ffmpeg(&thumb_path).await;
+        let thumb_phash = compute_phash(&decoded);
+
+        let dist_white = phash_hamming(&thumb_phash, &white_phash);
+        assert!(
+            dist_white > 30,
+            "thumbnail phash too close to white (hamming={dist_white})"
+        );
+
+        let dist_black = phash_hamming(&thumb_phash, &black_phash);
+        assert!(
+            dist_black > 30,
+            "thumbnail phash too close to black (hamming={dist_black})"
+        );
+    }
+
+    /// Sweep the entire testset and verify no processed image produces a
+    /// white or black output.  Requires `make test-data`.
+    #[tokio::test]
+    async fn test_process_image_testset_not_white_or_black() {
+        let images = testset_images();
+        if images.is_empty() {
+            return; // dataset not downloaded — skip without failure
+        }
+
+        let white_phash = compute_phash(&solid_rgb(255, 255, 255, 256, 256));
+        let black_phash = compute_phash(&solid_rgb(0, 0, 0, 256, 256));
+        let mut failures: Vec<String> = Vec::new();
+
+        for img_path in &images {
+            let (dirs, _tmp) = make_dirs();
+            let filename = img_path.file_name().unwrap();
+            let src = dirs.upload.join(filename);
+            if std::fs::copy(img_path, &src).is_err() {
+                continue;
+            }
+
+            let result = match process_image(&src, &dirs).await {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+
+            let avif_path = dirs.image.join(&result.filename);
+            if !avif_path.exists() {
+                failures.push(format!("{:?}: output AVIF missing", img_path));
+                continue;
+            }
+
+            let decoded = decode_avif_via_ffmpeg(&avif_path).await;
+            let out_phash = compute_phash(&decoded);
+
+            let dist_white = phash_hamming(&out_phash, &white_phash);
+            let dist_black = phash_hamming(&out_phash, &black_phash);
+
+            if dist_white <= 30 {
+                failures.push(format!(
+                    "{:?}: output too close to white (hamming={})",
+                    img_path, dist_white
+                ));
+            }
+            if dist_black <= 30 {
+                failures.push(format!(
+                    "{:?}: output too close to black (hamming={})",
+                    img_path, dist_black
+                ));
+            }
+        }
+
+        assert!(
+            failures.is_empty(),
+            "{} images produced white/black output:\n  {}",
+            failures.len(),
+            failures.join("\n  ")
+        );
+    }
 }
