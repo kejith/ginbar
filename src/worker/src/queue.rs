@@ -34,6 +34,10 @@ pub const REGEN_QUEUE_KEY: &str = "wallium:regen:queue";
 pub const REGEN_PROGRESS_CHANNEL: &str = "wallium:regen:progress";
 /// Redis Pub/Sub channel the backend publishes to wake the regen worker.
 pub const REGEN_WAKE_CHANNEL: &str = "wallium:regen:wake";
+/// Prefix for per-job completion counters: `REGEN_COUNTER_KEY_PREFIX + job_key`.
+/// Incremented atomically after every item (ok or fail) — the reliable
+/// fallback for progress tracking when Pub/Sub messages are dropped.
+pub const REGEN_COUNTER_KEY_PREFIX: &str = "wallium:regen:done:";
 
 /// The processing phase a post is currently in.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -671,6 +675,12 @@ pub struct RegenItem {
     pub post_id: i32,
     pub filename: String,
     pub thumbnail_filename: String,
+    /// UUID identifying the regen job this item belongs to.  Used to INCR
+    /// the per-job counter `wallium:regen:done:{job_key}` and to filter
+    /// Pub/Sub progress messages.  Empty string for legacy items without a
+    /// job key (counter update is skipped).
+    #[serde(default)]
+    pub job_key: String,
 }
 
 /// Run the image-regeneration worker queue until SIGINT/SIGTERM.
@@ -790,7 +800,7 @@ async fn drain_regen(
                 } else {
                     debug!(post_id = item.post_id, "regen: item complete");
                 }
-                publish_regen_progress(&redis_client, item.post_id, &result).await;
+                publish_regen_progress(&redis_client, &item, &result).await;
             }
         })
         .await;
@@ -855,22 +865,39 @@ pub(crate) async fn process_regen_item(
     Ok(())
 }
 
-/// Publish a per-item progress event to [`REGEN_PROGRESS_CHANNEL`].
+/// Publish a per-item progress event to [`REGEN_PROGRESS_CHANNEL`] and
+/// atomically increment the per-job completion counter.
+///
+/// The counter (`REGEN_COUNTER_KEY_PREFIX + job_key`) is the authoritative
+/// progress source — it is never lost even if Pub/Sub subscribers miss
+/// messages due to buffer overflow or network issues.
 async fn publish_regen_progress(
     redis_client: &redis::Client,
-    post_id: i32,
+    item: &RegenItem,
     result: &Result<()>,
 ) {
     let msg = match result {
-        Ok(()) => serde_json::json!({"post_id": post_id, "ok": true}).to_string(),
+        Ok(()) => serde_json::json!({
+            "post_id": item.post_id,
+            "job_key": item.job_key,
+            "ok": true
+        })
+        .to_string(),
         Err(e) => serde_json::json!({
-            "post_id": post_id,
+            "post_id": item.post_id,
+            "job_key": item.job_key,
             "ok": false,
             "err": e.to_string(),
         })
         .to_string(),
     };
     if let Ok(mut conn) = redis_client.get_multiplexed_async_connection().await {
+        // INCR the per-job counter first (atomic, persistent, never lost).
+        if !item.job_key.is_empty() {
+            let counter_key = format!("{}{}", REGEN_COUNTER_KEY_PREFIX, item.job_key);
+            let _: Result<i64, _> = conn.incr(&counter_key, 1i64).await;
+        }
+        // Then publish to Pub/Sub for live SSE updates.
         let _: Result<i64, _> = conn.publish(REGEN_PROGRESS_CHANNEL, &msg).await;
     }
 }
@@ -1285,22 +1312,34 @@ mod tests {
             post_id: 42,
             filename: "abc.avif".to_string(),
             thumbnail_filename: "abc_thumb.avif".to_string(),
+            job_key: "test-job-uuid".to_string(),
         };
         let json = serde_json::to_string(&item).expect("serialize RegenItem");
         let decoded: RegenItem = serde_json::from_str(&json).expect("deserialize RegenItem");
         assert_eq!(decoded.post_id, 42);
         assert_eq!(decoded.filename, "abc.avif");
         assert_eq!(decoded.thumbnail_filename, "abc_thumb.avif");
+        assert_eq!(decoded.job_key, "test-job-uuid");
     }
 
     #[test]
     fn test_regen_item_deserializes_snake_case_keys() {
         // Verify the expected key names match what the Go backend will emit.
-        let json = r#"{"post_id":7,"filename":"x.avif","thumbnail_filename":"x_t.avif"}"#;
+        let json = r#"{"post_id":7,"filename":"x.avif","thumbnail_filename":"x_t.avif","job_key":"abc-123"}"#;
         let item: RegenItem = serde_json::from_str(json).expect("deserialize");
         assert_eq!(item.post_id, 7);
         assert_eq!(item.filename, "x.avif");
         assert_eq!(item.thumbnail_filename, "x_t.avif");
+        assert_eq!(item.job_key, "abc-123");
+    }
+
+    #[test]
+    fn test_regen_item_job_key_defaults_to_empty() {
+        // Items without job_key (legacy / manual pushes) must deserialize without error.
+        let json = r#"{"post_id":99,"filename":"f.avif","thumbnail_filename":"t.avif"}"#;
+        let item: RegenItem = serde_json::from_str(json).expect("deserialize legacy item");
+        assert_eq!(item.post_id, 99);
+        assert!(item.job_key.is_empty(), "job_key must default to empty string");
     }
 
     // ── pop_regen_items ───────────────────────────────────────────────────────
@@ -1324,8 +1363,8 @@ mod tests {
             .unwrap();
 
         let items_to_push = vec![
-            RegenItem { post_id: 1, filename: "a.avif".to_string(), thumbnail_filename: "a_t.avif".to_string() },
-            RegenItem { post_id: 2, filename: "b.avif".to_string(), thumbnail_filename: "b_t.avif".to_string() },
+            RegenItem { post_id: 1, filename: "a.avif".to_string(), thumbnail_filename: "a_t.avif".to_string(), job_key: "pop-test".to_string() },
+            RegenItem { post_id: 2, filename: "b.avif".to_string(), thumbnail_filename: "b_t.avif".to_string(), job_key: "pop-test".to_string() },
         ];
         for item in &items_to_push {
             let json = serde_json::to_string(item).unwrap();
@@ -1375,7 +1414,7 @@ mod tests {
             .query_async(&mut conn)
             .await
             .unwrap();
-        let valid = RegenItem { post_id: 99, filename: "v.avif".to_string(), thumbnail_filename: "v_t.avif".to_string() };
+        let valid = RegenItem { post_id: 99, filename: "v.avif".to_string(), thumbnail_filename: "v_t.avif".to_string(), job_key: "skip-test".to_string() };
         let _: () = redis::cmd("RPUSH")
             .arg(REGEN_QUEUE_KEY)
             .arg(serde_json::to_string(&valid).unwrap())
@@ -1428,6 +1467,7 @@ mod tests {
             post_id: id,
             filename: original_filename.clone(),
             thumbnail_filename: original_thumb.clone(),
+            job_key: "e2e-test-job".to_string(),
         };
 
         process_regen_item(&pool, &dirs, &item)
@@ -1469,6 +1509,7 @@ mod tests {
             post_id: i32::MAX,
             filename: "nonexistent_file_that_does_not_exist.avif".to_string(),
             thumbnail_filename: "nonexistent_thumb.avif".to_string(),
+            job_key: "missing-test".to_string(),
         };
 
         let result = process_regen_item(&pool, &dirs, &item).await;

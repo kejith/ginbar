@@ -16,6 +16,7 @@ import (
 	"wallium/utils"
 
 	"github.com/gofiber/fiber/v3"
+	"github.com/google/uuid"
 )
 
 // ── Disk-usage helper ─────────────────────────────────────────────────────────
@@ -362,11 +363,15 @@ type regenQueueItem struct {
 	PostID            int32  `json:"post_id"`
 	Filename          string `json:"filename"`
 	ThumbnailFilename string `json:"thumbnail_filename"`
+	// JobKey namespaces per-job progress counters and lets the SSE handler
+	// ignore Pub/Sub messages from concurrent or previous regen jobs.
+	JobKey string `json:"job_key"`
 }
 
 // regenProgressMsg is the per-item progress event published by the Rust worker.
 type regenProgressMsg struct {
 	PostID int32  `json:"post_id"`
+	JobKey string `json:"job_key"`
 	OK     bool   `json:"ok"`
 	Err    string `json:"err,omitempty"`
 }
@@ -405,10 +410,23 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 		ctx := context.Background()
 		job.Start()
 
-		// Subscribe before pushing items so we cannot miss progress messages
-		// published by the worker for very fast completions.
+		// Unique key for this run — namespaces the Redis done-counter and
+		// lets us ignore Pub/Sub messages from concurrent/previous jobs.
+		jobKey := uuid.NewString()
+		regenDoneKey := "wallium:regen:done:" + jobKey
+
+		// Subscribe before pushing items so we never miss fast-path messages.
+		// Buffer size = 2×total + 200 so concurrent encodes never fill it.
+		bufSize := total*2 + 200
+		if bufSize < 200 {
+			bufSize = 200
+		}
 		sub := rdb.Subscribe(ctx, "wallium:regen:progress")
 		defer sub.Close()
+		ch := sub.ChannelSize(bufSize)
+
+		// Initialise the per-job counter with a 24-hour TTL.
+		rdb.Set(ctx, regenDoneKey, 0, 24*time.Hour)
 
 		// Push all regen items atomically via a pipeline.
 		pipe := rdb.Pipeline()
@@ -417,6 +435,7 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 				PostID:            p.ID,
 				Filename:          p.Filename,
 				ThumbnailFilename: p.ThumbnailFilename,
+				JobKey:            jobKey,
 			})
 			pipe.RPush(ctx, "wallium:regen:queue", string(b))
 		}
@@ -432,9 +451,14 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 		writeSSE(w, regenStartEvent{Phase: "start", Total: total})
 
 		var updated, failed int
-		ch := sub.Channel()
+		// Heartbeat keeps the SSE connection alive through idle periods.
 		heartbeat := time.NewTicker(25 * time.Second)
 		defer heartbeat.Stop()
+		// Poll ticker reads the authoritative Redis counter every 2 s as a
+		// reliable fallback in case Pub/Sub messages are dropped under load.
+		pollTick := time.NewTicker(2 * time.Second)
+		defer pollTick.Stop()
+		var lastPolledCount int
 
 		done := total == 0
 	loop:
@@ -448,6 +472,10 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 				if jsonErr := json.Unmarshal([]byte(msg.Payload), &progress); jsonErr != nil {
 					continue
 				}
+				// Ignore messages from a different job (startup drain, concurrent run).
+				if progress.JobKey != jobKey {
+					continue
+				}
 				if progress.OK {
 					updated++
 				} else {
@@ -456,6 +484,38 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 				cur := updated + failed
 				job.SetProgress(cur, total,
 					fmt.Sprintf("updated %d · failed %d", updated, failed))
+				writeSSE(w, regenProgressEvent{
+					Phase:   "progress",
+					Total:   total,
+					Current: cur,
+					Updated: updated,
+					Failed:  failed,
+					Skipped: 0,
+				})
+				if cur >= total {
+					done = true
+				}
+			case <-pollTick.C:
+				// The Redis INCR counter is the source of truth: it is
+				// incremented atomically and never lost, even when Pub/Sub
+				// messages are dropped due to buffer overflow.
+				n, pollErr := rdb.Get(ctx, regenDoneKey).Int()
+				if pollErr != nil || n <= lastPolledCount {
+					continue
+				}
+				lastPolledCount = n
+				// Sync the local counters with the ground truth.
+				cur := updated + failed
+				if n > cur {
+					// Some Pub/Sub messages were dropped; advance the counter.
+					delta := n - cur
+					// We cannot tell ok vs fail for dropped messages, so charge
+					// them to failed conservatively.
+					failed += delta
+					cur = n
+				}
+				job.SetProgress(cur, total,
+					fmt.Sprintf("processed %d · updated %d · failed %d", cur, updated, failed))
 				writeSSE(w, regenProgressEvent{
 					Phase:   "progress",
 					Total:   total,
