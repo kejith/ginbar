@@ -273,6 +273,7 @@ criterion_group!(
     bench_generate_name,
     bench_prepare_thumbnail_pixels,
     bench_decode_jpeg,
+    bench_regenerate_image,
 );
 criterion_main!(benches);
 
@@ -532,6 +533,45 @@ fn bench_decode_jpeg(c: &mut Criterion) {
                 });
             },
         );
+    }
+
+    group.finish();
+}
+
+// ── regenerate_image (re-encode stored image, full pipeline) ──────────────────
+
+/// Benchmark `regenerate_image` end-to-end: decode (JPEG → RGB via turbojpeg),
+/// parallel phash + thumbnail encode, and full-res SVT-AV1 encode.
+///
+/// The input is a JPEG, which is valid because stored images may be JPEG
+/// (from the pre-Rust-worker era) and in that case turbojpeg handles decode
+/// directly.  AVIF sources go through ffmpeg normalization instead — both paths
+/// exercise the parallel encode stage.
+fn bench_regenerate_image(c: &mut Criterion) {
+    let mut group = c.benchmark_group("regenerate_image");
+    group.sample_size(10);
+    group.measurement_time(std::time::Duration::from_secs(20));
+
+    for &(name, path) in TEST_INPUTS {
+        if !input_available(path) {
+            eprintln!("SKIP {name}: {path} not found — run scripts/gen_bench_inputs.sh");
+            continue;
+        }
+
+        group.bench_with_input(BenchmarkId::new("jpeg_source", name), &path, |b, &p| {
+            let rt = rt();
+            b.iter_batched(
+                || bench_dirs(),
+                |(dirs, _tmp)| {
+                    rt.block_on(async {
+                        processing::regenerate_image(std::path::Path::new(p), &dirs)
+                            .await
+                            .unwrap();
+                    });
+                },
+                criterion::BatchSize::PerIteration,
+            );
+        });
     }
 
     group.finish();

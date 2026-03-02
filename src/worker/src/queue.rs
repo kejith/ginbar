@@ -7,11 +7,11 @@
 //! Concurrency is controlled via `futures_util::StreamExt::for_each_concurrent`
 //! which limits in-flight work naturally — no unbounded task spawning.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use dashmap::DashMap;
 use futures_util::StreamExt;
 use redis::AsyncCommands;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -27,6 +27,13 @@ use crate::processing::Directories;
 const PR0GRAMM_IMG_BASE: &str = "https://img.pr0gramm.com/";
 const REDIS_CHANNEL: &str = "wallium:queue:wake";
 const REDIS_STATUS_KEY: &str = "wallium:queue:status";
+
+/// Redis list key where the backend pushes image-regen tasks.
+pub const REGEN_QUEUE_KEY: &str = "wallium:regen:queue";
+/// Redis Pub/Sub channel the worker publishes per-item progress to.
+pub const REGEN_PROGRESS_CHANNEL: &str = "wallium:regen:progress";
+/// Redis Pub/Sub channel the backend publishes to wake the regen worker.
+pub const REGEN_WAKE_CHANNEL: &str = "wallium:regen:wake";
 
 /// The processing phase a post is currently in.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -653,6 +660,221 @@ pub(crate) async fn publish_status(redis_client: &redis::Client, state: &Arc<Que
     Ok(())
 }
 
+// ── Regen queue ──────────────────────────────────────────────────────────────
+
+/// A single item in the image-regen Redis list.
+///
+/// The Go backend serialises one of these for each post it wants re-encoded
+/// and pushes it to [`REGEN_QUEUE_KEY`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegenItem {
+    pub post_id: i32,
+    pub filename: String,
+    pub thumbnail_filename: String,
+}
+
+/// Run the image-regeneration worker queue until SIGINT/SIGTERM.
+///
+/// Listens for wake-up notifications on [`REGEN_WAKE_CHANNEL`] (Pub/Sub) and
+/// also polls every 5 seconds as a fallback.  When woken, drains all items
+/// from [`REGEN_QUEUE_KEY`] (Redis list) and processes them concurrently via
+/// the fast [`crate::processing::regenerate_image`] SVT-AV1 pipeline.
+///
+/// For each item the worker:
+///   1. Loads the source file from `dirs.image/<filename>`.
+///   2. Calls `regenerate_image` (parallel turbojpeg decode + SVT-AV1 encode).
+///   3. Updates the DB with new filenames, width, height (`update_post_files`).
+///   4. Removes the old files from disk.
+///   5. Publishes a progress event to [`REGEN_PROGRESS_CHANNEL`].
+pub async fn run_regen_queue(
+    pool: PgPool,
+    redis_client: redis::Client,
+    dirs: Directories,
+    concurrency: usize,
+) -> Result<()> {
+    let (wake_tx, mut wake_rx) = tokio::sync::mpsc::channel::<()>(16);
+    {
+        let client = redis_client.clone();
+        let tx = wake_tx.clone();
+        tokio::spawn(async move {
+            if let Err(e) = subscribe_regen_loop(client, tx).await {
+                warn!("regen subscribe loop exited: {}", e);
+            }
+        });
+    }
+
+    info!(concurrency, "regen queue started");
+
+    let mut shutdown = Box::pin(tokio::signal::ctrl_c());
+    let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
+
+    // Drain on startup to pick up any items left from a previous run.
+    drain_regen(&pool, &redis_client, &dirs, concurrency).await;
+
+    loop {
+        tokio::select! {
+            _ = &mut shutdown => {
+                info!("regen queue: shutdown signal received");
+                break;
+            }
+            _ = wake_rx.recv() => {
+                while wake_rx.try_recv().is_ok() {}
+                drain_regen(&pool, &redis_client, &dirs, concurrency).await;
+            }
+            _ = ticker.tick() => {
+                drain_regen(&pool, &redis_client, &dirs, concurrency).await;
+            }
+        }
+    }
+
+    info!("regen queue stopped");
+    Ok(())
+}
+
+/// Subscribe to [`REGEN_WAKE_CHANNEL`] Pub/Sub to receive wake-up signals.
+async fn subscribe_regen_loop(
+    client: redis::Client,
+    tx: tokio::sync::mpsc::Sender<()>,
+) -> Result<()> {
+    let mut pubsub = client.get_async_pubsub().await?;
+    pubsub.subscribe(REGEN_WAKE_CHANNEL).await?;
+    info!("subscribed to redis channel {}", REGEN_WAKE_CHANNEL);
+
+    let mut stream = pubsub.on_message();
+    while let Some(_msg) = stream.next().await {
+        let _ = tx.try_send(());
+    }
+    Ok(())
+}
+
+/// Pop all current items from [`REGEN_QUEUE_KEY`] and process them in parallel.
+async fn drain_regen(
+    pool: &PgPool,
+    redis_client: &redis::Client,
+    dirs: &Directories,
+    concurrency: usize,
+) {
+    let items = match pop_regen_items(redis_client).await {
+        Ok(v) => v,
+        Err(e) => {
+            warn!(err = %e, "regen: failed to pop items from queue");
+            return;
+        }
+    };
+
+    if items.is_empty() {
+        return;
+    }
+
+    let n = items.len();
+    info!(count = n, "regen: processing batch");
+    let drain_start = std::time::Instant::now();
+
+    futures_util::stream::iter(items)
+        .for_each_concurrent(Some(concurrency), |item| {
+            let pool = pool.clone();
+            let redis_client = redis_client.clone();
+            let dirs = dirs.clone();
+            async move {
+                let result = process_regen_item(&pool, &dirs, &item).await;
+                let ok = result.is_ok();
+                if !ok {
+                    let err_chain = result
+                        .as_ref()
+                        .unwrap_err()
+                        .chain()
+                        .map(|c| c.to_string())
+                        .collect::<Vec<_>>()
+                        .join(": ");
+                    warn!(post_id = item.post_id, err = err_chain, "regen: item failed");
+                } else {
+                    debug!(post_id = item.post_id, "regen: item complete");
+                }
+                publish_regen_progress(&redis_client, item.post_id, &result).await;
+            }
+        })
+        .await;
+
+    info!(
+        count = n,
+        elapsed_ms = drain_start.elapsed().as_millis(),
+        "regen: batch complete"
+    );
+}
+
+/// LPOP all items currently in the regen queue.
+async fn pop_regen_items(redis_client: &redis::Client) -> Result<Vec<RegenItem>> {
+    let mut conn = redis_client.get_multiplexed_async_connection().await?;
+    let mut items = Vec::new();
+    loop {
+        let val: Option<String> = conn.lpop(REGEN_QUEUE_KEY, None).await?;
+        match val {
+            Some(json) => match serde_json::from_str::<RegenItem>(&json) {
+                Ok(item) => items.push(item),
+                Err(e) => warn!(
+                    err = %e, raw = %json,
+                    "regen: invalid queue item, skipping"
+                ),
+            },
+            None => break,
+        }
+    }
+    Ok(items)
+}
+
+/// Process a single regen item: regenerate the image, update the DB, remove old files.
+pub(crate) async fn process_regen_item(
+    pool: &PgPool,
+    dirs: &Directories,
+    item: &RegenItem,
+) -> Result<()> {
+    let src_path = dirs.image.join(&item.filename);
+    if tokio::fs::metadata(&src_path).await.is_err() {
+        anyhow::bail!("regen: source file not found: {}", src_path.display());
+    }
+
+    let res = crate::processing::regenerate_image(&src_path, dirs)
+        .await
+        .context("regenerate_image failed")?;
+
+    db::update_post_files(
+        pool,
+        item.post_id,
+        &res.new_filename,
+        &res.new_thumbnail_filename,
+        res.width,
+        res.height,
+    )
+    .await
+    .context("update_post_files failed")?;
+
+    // Remove old files only after the DB is committed to avoid gaps.
+    let _ = tokio::fs::remove_file(dirs.image.join(&item.filename)).await;
+    let _ = tokio::fs::remove_file(dirs.thumbnail.join(&item.thumbnail_filename)).await;
+
+    Ok(())
+}
+
+/// Publish a per-item progress event to [`REGEN_PROGRESS_CHANNEL`].
+async fn publish_regen_progress(
+    redis_client: &redis::Client,
+    post_id: i32,
+    result: &Result<()>,
+) {
+    let msg = match result {
+        Ok(()) => serde_json::json!({"post_id": post_id, "ok": true}).to_string(),
+        Err(e) => serde_json::json!({
+            "post_id": post_id,
+            "ok": false,
+            "err": e.to_string(),
+        })
+        .to_string(),
+    };
+    if let Ok(mut conn) = redis_client.get_multiplexed_async_connection().await {
+        let _: Result<i64, _> = conn.publish(REGEN_PROGRESS_CHANNEL, &msg).await;
+    }
+}
+
 // ── File classification ───────────────────────────────────────────────────────
 
 #[derive(Debug, PartialEq)]
@@ -1053,5 +1275,203 @@ mod tests {
         assert_eq!(json["total"], 10, "total counter mismatch");
         assert_eq!(json["running"], true, "running flag mismatch");
         assert!(json["active_posts"].is_array(), "active_posts must be a JSON array");
+    }
+
+    // ── RegenItem serialization ───────────────────────────────────────────────
+
+    #[test]
+    fn test_regen_item_round_trips_json() {
+        let item = RegenItem {
+            post_id: 42,
+            filename: "abc.avif".to_string(),
+            thumbnail_filename: "abc_thumb.avif".to_string(),
+        };
+        let json = serde_json::to_string(&item).expect("serialize RegenItem");
+        let decoded: RegenItem = serde_json::from_str(&json).expect("deserialize RegenItem");
+        assert_eq!(decoded.post_id, 42);
+        assert_eq!(decoded.filename, "abc.avif");
+        assert_eq!(decoded.thumbnail_filename, "abc_thumb.avif");
+    }
+
+    #[test]
+    fn test_regen_item_deserializes_snake_case_keys() {
+        // Verify the expected key names match what the Go backend will emit.
+        let json = r#"{"post_id":7,"filename":"x.avif","thumbnail_filename":"x_t.avif"}"#;
+        let item: RegenItem = serde_json::from_str(json).expect("deserialize");
+        assert_eq!(item.post_id, 7);
+        assert_eq!(item.filename, "x.avif");
+        assert_eq!(item.thumbnail_filename, "x_t.avif");
+    }
+
+    // ── pop_regen_items ───────────────────────────────────────────────────────
+
+    /// Pushing two items and popping them must return exactly those two items
+    /// and leave the list empty.
+    #[tokio::test]
+    #[ignore]
+    async fn test_pop_regen_items_returns_pushed_items() {
+        let redis_client = queue_test_redis();
+        let mut conn = redis_client
+            .get_multiplexed_async_connection()
+            .await
+            .expect("redis connection");
+
+        // Clean up any leftover state from a previous run.
+        let _: () = redis::cmd("DEL")
+            .arg(REGEN_QUEUE_KEY)
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+
+        let items_to_push = vec![
+            RegenItem { post_id: 1, filename: "a.avif".to_string(), thumbnail_filename: "a_t.avif".to_string() },
+            RegenItem { post_id: 2, filename: "b.avif".to_string(), thumbnail_filename: "b_t.avif".to_string() },
+        ];
+        for item in &items_to_push {
+            let json = serde_json::to_string(item).unwrap();
+            let _: () = redis::cmd("RPUSH")
+                .arg(REGEN_QUEUE_KEY)
+                .arg(json)
+                .query_async(&mut conn)
+                .await
+                .unwrap();
+        }
+
+        let popped = pop_regen_items(&redis_client)
+            .await
+            .expect("pop_regen_items must succeed");
+
+        assert_eq!(popped.len(), 2, "must pop exactly 2 items");
+        assert_eq!(popped[0].post_id, 1);
+        assert_eq!(popped[1].post_id, 2);
+
+        // List must be empty after pop.
+        let popped_again = pop_regen_items(&redis_client)
+            .await
+            .expect("second pop must succeed");
+        assert!(popped_again.is_empty(), "queue must be empty after drain");
+    }
+
+    /// Invalid JSON in the queue must be skipped without returning an error.
+    #[tokio::test]
+    #[ignore]
+    async fn test_pop_regen_items_skips_invalid_json() {
+        let redis_client = queue_test_redis();
+        let mut conn = redis_client
+            .get_multiplexed_async_connection()
+            .await
+            .unwrap();
+
+        let _: () = redis::cmd("DEL")
+            .arg(REGEN_QUEUE_KEY)
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+
+        // Push one invalid item followed by one valid item.
+        let _: () = redis::cmd("RPUSH")
+            .arg(REGEN_QUEUE_KEY)
+            .arg("not-json")
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+        let valid = RegenItem { post_id: 99, filename: "v.avif".to_string(), thumbnail_filename: "v_t.avif".to_string() };
+        let _: () = redis::cmd("RPUSH")
+            .arg(REGEN_QUEUE_KEY)
+            .arg(serde_json::to_string(&valid).unwrap())
+            .query_async(&mut conn)
+            .await
+            .unwrap();
+
+        let popped = pop_regen_items(&redis_client).await.unwrap();
+        assert_eq!(popped.len(), 1, "invalid item must be skipped");
+        assert_eq!(popped[0].post_id, 99);
+    }
+
+    // ── process_regen_item ────────────────────────────────────────────────────
+
+    /// Full regen pipeline e2e: write a JPEG, regen it, verify new files + DB update.
+    #[tokio::test]
+    #[ignore]
+    async fn test_process_regen_item_e2e() {
+        let pool = queue_test_pool().await;
+        let (dirs, _tmp) = make_queue_dirs();
+
+        // Finalize a post to simulate an already-processed image.
+        let id = insert_queue_test_post(&pool, &format!("https://regen-e2e/{}", uuid::Uuid::new_v4()), "").await;
+        let original_filename = format!("{}.jpg", uuid::Uuid::new_v4());
+        let original_thumb    = format!("{}_thumb.jpg", uuid::Uuid::new_v4());
+
+        // Write a synthetic JPEG as the "stored" source image.
+        let src_path = dirs.image.join(&original_filename);
+        let img = image::DynamicImage::ImageRgb8(
+            image::ImageBuffer::from_pixel(300u32, 200u32, image::Rgb([180u8, 90, 40]))
+        );
+        img.save(&src_path).unwrap();
+
+        crate::db::finalize_post(
+            &pool,
+            &crate::db::FinalizeParams {
+                id,
+                filename: original_filename.clone(),
+                thumbnail_filename: original_thumb.clone(),
+                uploaded_filename: "upload.jpg".to_string(),
+                content_type: "image".to_string(),
+                p_hash_0: 0, p_hash_1: 0, p_hash_2: 0, p_hash_3: 0,
+                width: 300, height: 200,
+            },
+        )
+        .await
+        .expect("finalize test post");
+
+        let item = RegenItem {
+            post_id: id,
+            filename: original_filename.clone(),
+            thumbnail_filename: original_thumb.clone(),
+        };
+
+        process_regen_item(&pool, &dirs, &item)
+            .await
+            .expect("process_regen_item must succeed");
+
+        // Old source file must be gone.
+        assert!(
+            !src_path.exists(),
+            "old source file must be removed after regen"
+        );
+
+        // DB must reflect the new filenames.
+        let row: (String, i32, i32) =
+            sqlx::query_as("SELECT filename, width, height FROM posts WHERE id = $1")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .expect("fetch updated post");
+
+        assert_ne!(row.0, original_filename, "filename must have changed after regen");
+        assert!(row.1 > 0, "width must be > 0 after regen");
+        assert!(row.2 > 0, "height must be > 0 after regen");
+
+        // New files must exist on disk.
+        assert!(dirs.image.join(&row.0).exists(), "new AVIF must exist on disk");
+
+        cleanup_queue_test_post(&pool, id).await;
+    }
+
+    /// process_regen_item must return an error when the source file is missing.
+    #[tokio::test]
+    #[ignore]
+    async fn test_process_regen_item_missing_source() {
+        let pool = queue_test_pool().await;
+        let (dirs, _tmp) = make_queue_dirs();
+
+        let item = RegenItem {
+            post_id: i32::MAX,
+            filename: "nonexistent_file_that_does_not_exist.avif".to_string(),
+            thumbnail_filename: "nonexistent_thumb.avif".to_string(),
+        };
+
+        let result = process_regen_item(&pool, &dirs, &item).await;
+        assert!(result.is_err(), "must return error when source file is missing");
     }
 }

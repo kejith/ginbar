@@ -107,6 +107,18 @@ pub struct ImageResult {
     pub height: i32,
 }
 
+/// Result of re-encoding an existing stored image via [`regenerate_image`].
+pub struct RegenerateResult {
+    /// New AVIF filename written to `dirs.image`.
+    pub new_filename: String,
+    /// New thumbnail filename written to `dirs.thumbnail`.
+    pub new_thumbnail_filename: String,
+    /// Perceptual hash computed during re-encoding.
+    pub p_hash: [i64; 4],
+    pub width: i32,
+    pub height: i32,
+}
+
 /// Returns `true` for formats the `image` crate can decode natively without
 /// an ffmpeg subprocess (JPEG, PNG, WebP, GIF, BMP, TIFF).
 pub(crate) fn can_decode_natively(path: &Path) -> bool {
@@ -638,6 +650,86 @@ async fn process_image_fallback(input: &Path, dirs: &Directories) -> Result<Imag
         filename:           avif_name,
         thumbnail_filename: thumb_name,
         uploaded_filename:  file_name,
+        p_hash,
+        width:  out_w,
+        height: out_h,
+    })
+}
+
+/// Re-encode an existing stored image through the fast SVT-AV1 pipeline.
+///
+/// Unlike [`process_image`], output filenames are UUID-generated so they never
+/// collide with the source file (which is itself already an `.avif`).  The
+/// source is decoded via `load_image` (ffmpeg normalization for AVIF/exotic
+/// formats, libjpeg-turbo for JPEG, native `image` crate for PNG/WebP), then
+/// thumbnail and full-res SVT-AV1 encodes run in parallel — identical to the
+/// fallback path in `process_image` but with decoupled output names.
+///
+/// No dedup check and no `finalize_post` — the caller is responsible for
+/// updating the DB and removing the old files.
+pub async fn regenerate_image(input: &Path, dirs: &Directories) -> Result<RegenerateResult> {
+    let fn_start = std::time::Instant::now();
+    let base = generate_name();
+    let new_filename = format!("{}.avif", base);
+    let new_thumbnail_filename = format!("{}_thumb.avif", base);
+    let output_path = dirs.image.join(&new_filename);
+    let thumb_path  = dirs.thumbnail.join(&new_thumbnail_filename);
+
+    let (img, tmp_path) = load_image(input, dirs).await?;
+    let img = std::sync::Arc::new(img);
+
+    // Pre-downscale to ≤512 px for phash and thumbnail.
+    let img_c = img.clone();
+    let small = tokio::task::spawn_blocking(move || {
+        img_c.resize(512, 512, FilterType::Triangle)
+    })
+    .await?;
+
+    let img_full    = img.clone();
+    let avif_output = output_path.clone();
+
+    // Three-way parallel: (phash ∥ crop→thumb-encode) vs full-res encode.
+    let (phash_thumb_result, fullres_result) = tokio::join!(
+        tokio::task::spawn_blocking(move || -> Result<([i64; 4], ())> {
+            let img = &small;
+            let mut p_hash = [0i64; 4];
+            let mut thumb_img: Option<image::DynamicImage> = None;
+            std::thread::scope(|s| {
+                let ph = s.spawn(|| compute_phash(img));
+                let th = s.spawn(|| prepare_thumbnail_pixels(img));
+                p_hash    = ph.join().expect("phash panic");
+                thumb_img = Some(th.join().expect("crop panic"));
+            });
+            avif::encode_avif(
+                &thumb_img.unwrap(), &thumb_path, 40, 10, 150,
+                thumbnail_encode_threads(),
+            )
+            .context("thumbnail AVIF encode failed")?;
+            Ok((p_hash, ()))
+        }),
+        tokio::task::spawn_blocking(move || {
+            avif::encode_avif(&*img_full, &avif_output, 18, 8, 920,
+                              fullres_encode_threads())
+        }),
+    );
+
+    let (p_hash, _) = phash_thumb_result?.context("phash/thumb task failed")?;
+    let (out_w, out_h) = fullres_result?.context("full-res AVIF encode failed")?;
+
+    if let Some(p) = tmp_path {
+        let _ = fs::remove_file(&p).await;
+    }
+
+    debug!(
+        path = %input.display(),
+        new_filename = %new_filename,
+        total_elapsed_ms = fn_start.elapsed().as_millis(),
+        "processing: regenerate_image complete"
+    );
+
+    Ok(RegenerateResult {
+        new_filename,
+        new_thumbnail_filename,
         p_hash,
         width:  out_w,
         height: out_h,
@@ -2478,5 +2570,110 @@ mod tests {
             failures.len(),
             failures.join("\n  ")
         );
+    }
+
+    // ── regenerate_image ──────────────────────────────────────────────────────
+
+    /// Build a minimal JPEG in a tempdir and verify regenerate_image writes
+    /// both the full-res AVIF and the thumbnail, and returns valid dimensions.
+    #[tokio::test]
+    async fn test_regenerate_image_basic() {
+        let tmp = TempDir::new().unwrap();
+        let dirs = Directories {
+            image:     tmp.path().join("images"),
+            thumbnail: tmp.path().join("thumbnails"),
+            video:     tmp.path().join("videos"),
+            tmp:       tmp.path().join("tmp"),
+            upload:    tmp.path().join("upload"),
+        };
+        for d in [&dirs.image, &dirs.thumbnail, &dirs.video, &dirs.tmp,
+                  &dirs.upload, &dirs.tmp.join("thumbnails")]
+        {
+            std::fs::create_dir_all(d).unwrap();
+        }
+
+        // Write a solid-colour JPEG as the "already stored" source.
+        let src = tmp.path().join("src.jpg");
+        solid_rgb(200, 100, 50, 640, 480).save(&src).unwrap();
+
+        let res = regenerate_image(&src, &dirs)
+            .await
+            .expect("regenerate_image must succeed");
+
+        assert!(!res.new_filename.is_empty(), "new_filename must not be empty");
+        assert!(!res.new_thumbnail_filename.is_empty(), "thumbnail filename must not be empty");
+        assert!(res.width  > 0, "width must be > 0");
+        assert!(res.height > 0, "height must be > 0");
+
+        assert!(
+            dirs.image.join(&res.new_filename).exists(),
+            "full-res AVIF must exist at dirs.image/{}",
+            res.new_filename
+        );
+        assert!(
+            dirs.thumbnail.join(&res.new_thumbnail_filename).exists(),
+            "thumbnail AVIF must exist at dirs.thumbnail/{}",
+            res.new_thumbnail_filename
+        );
+    }
+
+    /// Output filenames must be distinct UUIDs — never the same as the source
+    /// basename nor colliding with each other across two calls.
+    #[tokio::test]
+    async fn test_regenerate_image_unique_names() {
+        let tmp = TempDir::new().unwrap();
+        let dirs = Directories {
+            image:     tmp.path().join("images"),
+            thumbnail: tmp.path().join("thumbnails"),
+            video:     tmp.path().join("videos"),
+            tmp:       tmp.path().join("tmp"),
+            upload:    tmp.path().join("upload"),
+        };
+        for d in [&dirs.image, &dirs.thumbnail, &dirs.video, &dirs.tmp,
+                  &dirs.upload, &dirs.tmp.join("thumbnails")]
+        {
+            std::fs::create_dir_all(d).unwrap();
+        }
+
+        let src = tmp.path().join("input.jpg");
+        solid_rgb(80, 160, 240, 320, 240).save(&src).unwrap();
+
+        let r1 = regenerate_image(&src, &dirs).await.expect("first regen");
+        let r2 = regenerate_image(&src, &dirs).await.expect("second regen");
+
+        assert_ne!(r1.new_filename, r2.new_filename,
+            "consecutive regenerations must produce different filenames");
+        assert_ne!(r1.new_thumbnail_filename, r2.new_thumbnail_filename,
+            "consecutive thumbnail filenames must differ");
+
+        // Neither output should share the source stem.
+        assert!(!r1.new_filename.contains("input"),
+            "output filename must not contain source stem");
+    }
+
+    /// regenerate_image on a PNG (non-JPEG) must also succeed via the
+    /// ffmpeg-normalization fallback path inside load_image.
+    #[tokio::test]
+    async fn test_regenerate_image_png_input() {
+        let tmp = TempDir::new().unwrap();
+        let dirs = Directories {
+            image:     tmp.path().join("images"),
+            thumbnail: tmp.path().join("thumbnails"),
+            video:     tmp.path().join("videos"),
+            tmp:       tmp.path().join("tmp"),
+            upload:    tmp.path().join("upload"),
+        };
+        for d in [&dirs.image, &dirs.thumbnail, &dirs.video, &dirs.tmp,
+                  &dirs.upload, &dirs.tmp.join("thumbnails")]
+        {
+            std::fs::create_dir_all(d).unwrap();
+        }
+
+        let src = tmp.path().join("src.png");
+        solid_rgb(10, 20, 30, 200, 150).save(&src).unwrap();
+
+        let res = regenerate_image(&src, &dirs).await.expect("PNG regen must succeed");
+        assert!(dirs.image.join(&res.new_filename).exists());
+        assert!(dirs.thumbnail.join(&res.new_thumbnail_filename).exists());
     }
 }

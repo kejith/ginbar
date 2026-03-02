@@ -32,5 +32,23 @@ async fn main() -> Result<()> {
     // ── Run the processing loop ───────────────────────────────────────────────
     let dirs = processing::Directories::from_cwd();
 
+    // Spawn the regen queue alongside the main processing queue.
+    let regen_pool = pool.clone();
+    let regen_redis = redis.clone();
+    let regen_dirs = dirs.clone();
+    let regen_concurrency = cfg.concurrency;
+    tokio::spawn(async move {
+        if let Err(e) = queue::run_regen_queue(
+            regen_pool,
+            regen_redis,
+            regen_dirs,
+            regen_concurrency,
+        )
+        .await
+        {
+            tracing::warn!("regen queue exited: {}", e);
+        }
+    });
+
     queue::run(pool, redis, dirs, http_client, &cfg).await
 }

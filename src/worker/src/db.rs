@@ -146,6 +146,39 @@ pub async fn count_dirty_before(pool: &PgPool, post_id: i32) -> Result<i64> {
     Ok(count)
 }
 
+/// Update filename, thumbnail_filename, width, and height for a re-encoded post.
+///
+/// Used by the regen queue after [`crate::processing::regenerate_image`] produces
+/// new output files. Does **not** touch the `dirty` flag or the perceptual hash.
+pub async fn update_post_files(
+    pool: &PgPool,
+    id: i32,
+    filename: &str,
+    thumbnail_filename: &str,
+    width: i32,
+    height: i32,
+) -> Result<()> {
+    sqlx::query(
+        r#"
+        UPDATE posts
+        SET filename           = $1,
+            thumbnail_filename = $2,
+            width              = $3,
+            height             = $4
+        WHERE id = $5
+        "#,
+    )
+    .bind(filename)
+    .bind(thumbnail_filename)
+    .bind(width)
+    .bind(height)
+    .bind(id)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
 // ── Integration tests (requires Postgres — run with `cargo test -- --ignored`) ─
 //
 // In the devcontainer Postgres is always available at localhost:5432;
@@ -439,5 +472,73 @@ mod tests {
             .await
             .expect("count_dirty_before");
         assert!(count >= 0);
+    }
+
+    // ── update_post_files ─────────────────────────────────────────────────────
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_update_post_files_sets_fields() {
+        let pool = test_pool().await;
+        let id = insert_test_post(&pool, "update_post_files").await;
+
+        // Finalize so dirty=false (update_post_files targets non-dirty rows).
+        finalize_post(
+            &pool,
+            &FinalizeParams {
+                id,
+                filename: "original.avif".to_string(),
+                thumbnail_filename: "original_thumb.avif".to_string(),
+                uploaded_filename: "upload.jpg".to_string(),
+                content_type: "image".to_string(),
+                p_hash_0: 0, p_hash_1: 0, p_hash_2: 0, p_hash_3: 0,
+                width: 640,
+                height: 480,
+            },
+        )
+        .await
+        .expect("finalize_post");
+
+        update_post_files(&pool, id, "regen.avif", "regen_thumb.avif", 920, 640)
+            .await
+            .expect("update_post_files");
+
+        let row: (String, String, i32, i32) = sqlx::query_as(
+            "SELECT filename, thumbnail_filename, width, height FROM posts WHERE id = $1",
+        )
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .expect("fetch updated post");
+
+        assert_eq!(row.0, "regen.avif");
+        assert_eq!(row.1, "regen_thumb.avif");
+        assert_eq!(row.2, 920);
+        assert_eq!(row.3, 640);
+
+        delete_test_post(&pool, id).await;
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn test_update_post_files_does_not_clear_dirty() {
+        // update_post_files must not affect the dirty flag.
+        let pool = test_pool().await;
+        let id = insert_test_post(&pool, "update_post_files_dirty").await;
+
+        // Post is dirty=true here. update_post_files should still succeed.
+        update_post_files(&pool, id, "newname.avif", "newname_thumb.avif", 100, 100)
+            .await
+            .expect("update_post_files on dirty row");
+
+        let (dirty,): (bool,) =
+            sqlx::query_as("SELECT dirty FROM posts WHERE id = $1")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .expect("fetch dirty flag");
+        assert!(dirty, "dirty flag must remain true — update_post_files must not alter it");
+
+        delete_test_post(&pool, id).await;
     }
 }
