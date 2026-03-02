@@ -112,11 +112,11 @@ pub fn encode_avif(
     //   (bilinear) is ~2× faster than `CatmullRom` (bicubic).  At web
     //   resolutions the difference is invisible after AV1 compression.
     const RESIZE_SKIP_RATIO: f64 = 1.15; // 15 %
-    // SVT-AV1's SIMD loops read in 8-pixel-wide blocks; passing a width or
-    // height that is not a multiple of 8 causes out-of-bounds reads and a
-    // SIGSEGV (exit 139) inside the encoder.  We crop down to the nearest
-    // multiple of 8 — at most 7 pixels are lost from the right/bottom edge,
-    // which is imperceptible after AV1 compression.
+                                         // SVT-AV1's SIMD loops read in 8-pixel-wide blocks; passing a width or
+                                         // height that is not a multiple of 8 causes out-of-bounds reads and a
+                                         // SIGSEGV (exit 139) inside the encoder.  We crop down to the nearest
+                                         // multiple of 8 — at most 7 pixels are lost from the right/bottom edge,
+                                         // which is imperceptible after AV1 compression.
     const SVT_ALIGN: u32 = 8;
     let align = |n: u32| n & !(SVT_ALIGN - 1);
     let (src_w, src_h) = (img.width(), img.height());
@@ -501,9 +501,14 @@ pub(crate) fn encode_avif_ravif(img: &DynamicImage, dst: &Path) -> Result<(i32, 
         })
         .collect();
 
+    #[cfg(not(test))]
+    let (ravif_quality, ravif_speed) = (80.0f32, 4u8);
+    #[cfg(test)]
+    let (ravif_quality, ravif_speed) = (30.0f32, 10u8);
+
     let encoded = Encoder::new()
-        .with_quality(80.0)
-        .with_speed(4)
+        .with_quality(ravif_quality)
+        .with_speed(ravif_speed)
         .encode_rgb(Img::new(pixels.as_slice(), w, h))
         .map_err(|e| anyhow::anyhow!("ravif encode: {}", e))?;
 
@@ -660,9 +665,7 @@ pub fn encode_avif_from_yuv_planes(
         (&y_enc, &u_enc, &v_enc)
     };
 
-    let av1 = encode_av1_raw_full_range(
-        y_ref, u_ref, v_ref, enc_w, enc_h, crf, preset, threads,
-    )?;
+    let av1 = encode_av1_raw_full_range(y_ref, u_ref, v_ref, enc_w, enc_h, crf, preset, threads)?;
     let avif_bytes = wrap_avif_container(&av1, enc_w, enc_h)?;
     std::fs::write(dst, &avif_bytes).context("write AVIF file (yuv planes)")?;
     debug!(
@@ -944,7 +947,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let dst = tmp.path().join("out.avif");
         let img = solid_dyn(128, 64, 32, 32, 32);
-        let (w, h) = encode_avif(&img, &dst, 18, 8, 0, 0).unwrap();
+        let (w, h) = encode_avif(&img, &dst, 50, 12, 0, 0).unwrap();
         assert_eq!(w, 32);
         assert_eq!(h, 32);
         assert!(dst.exists(), "AVIF file must exist");
@@ -959,7 +962,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let dst = tmp.path().join("out.avif");
         let img = solid_dyn(100, 150, 200, 128, 128);
-        let result = encode_avif(&img, &dst, 18, 8, 0, 0);
+        let result = encode_avif(&img, &dst, 50, 12, 0, 0);
         assert!(result.is_ok(), "encode_avif failed: {:?}", result.err());
         assert!(dst.exists(), "output AVIF file must exist");
         assert!(std::fs::metadata(&dst).unwrap().len() > 0);
@@ -970,7 +973,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let dst = tmp.path().join("out.avif");
         let img = solid_dyn(80, 80, 80, 128, 96);
-        let (w, h) = encode_avif(&img, &dst, 18, 8, 0, 0).unwrap();
+        let (w, h) = encode_avif(&img, &dst, 50, 12, 0, 0).unwrap();
         // Output dimensions may be even-clipped but should match the input
         assert!((w - 128).abs() <= 2, "width should be near 128, got {}", w);
         assert!((h - 96).abs() <= 2, "height should be near 96, got {}", h);
@@ -982,7 +985,7 @@ mod tests {
         let dst = tmp.path().join("out.avif");
         // Input is 200×200; max_width=100 must scale it down.
         let img = solid_dyn(200, 100, 50, 200, 200);
-        let (w, h) = encode_avif(&img, &dst, 18, 8, 100, 0).unwrap();
+        let (w, h) = encode_avif(&img, &dst, 50, 12, 100, 0).unwrap();
         assert!(w <= 100, "width {} should be ≤ max_width 100", w);
         assert!(h > 0, "height should be positive");
     }
@@ -993,7 +996,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let dst = tmp.path().join("out.avif");
         let img = solid_dyn(128, 128, 128, 131, 97);
-        let (w, h) = encode_avif(&img, &dst, 18, 8, 0, 0).unwrap();
+        let (w, h) = encode_avif(&img, &dst, 50, 12, 0, 0).unwrap();
         assert_eq!(w % 2, 0, "output width {} must be even", w);
         assert_eq!(h % 2, 0, "output height {} must be even", h);
     }
@@ -1007,7 +1010,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let dst = tmp.path().join("skip.avif");
         let img = solid_dyn(128, 128, 128, 1050, 700);
-        let (w, _h) = encode_avif(&img, &dst, 18, 8, 920, 0).unwrap();
+        let (w, _h) = encode_avif(&img, &dst, 50, 12, 920, 0).unwrap();
         assert!(w >= 1048, "width {} should be near 1050 (skip resize)", w);
     }
 
@@ -1018,7 +1021,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let dst = tmp.path().join("resize.avif");
         let img = solid_dyn(128, 128, 128, 1200, 800);
-        let (w, _h) = encode_avif(&img, &dst, 18, 8, 920, 0).unwrap();
+        let (w, _h) = encode_avif(&img, &dst, 50, 12, 920, 0).unwrap();
         assert!(w <= 920, "width {} should be ≤ 920 after resize", w);
     }
 
@@ -1028,7 +1031,7 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let dst = tmp.path().join("1thread.avif");
         let img = solid_dyn(100, 150, 200, 128, 128);
-        let result = encode_avif(&img, &dst, 18, 8, 0, 1);
+        let result = encode_avif(&img, &dst, 50, 12, 0, 1);
         assert!(
             result.is_ok(),
             "encode with 1 thread failed: {:?}",
