@@ -67,3 +67,12 @@ func redactMap(m map[string]any) {
 		}
 	}
 }
+
+// truncate returns s if len(s) <= max, otherwise returns the first max bytes
+// with a "[…]" suffix.  Used to keep debug log lines readable.
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "[…]"
+}

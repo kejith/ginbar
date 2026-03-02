@@ -100,8 +100,12 @@ services:
       WORKER_POLL_INTERVAL: ${WORKER_POLL_INTERVAL:-5}
       LOG_FORMAT: json
       LOG_LEVEL: ${LOG_LEVEL:-info}
+      LOG_FILE: /app/logs/worker.log
     volumes:
       - ${MEDIA_DIR:-/opt/wallium/media}:/app/public
+      # Bind-mount log directory so the host can run logrotate on it.
+      # LOG_DIR defaults to /opt/wallium/logs; matches the backend's mount.
+      - ${LOG_DIR:-/opt/wallium/logs}:/app/logs
     depends_on:
       postgres:
         condition: service_healthy

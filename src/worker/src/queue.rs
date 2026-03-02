@@ -761,10 +761,13 @@ pub async fn run_regen_queue(
                 break;
             }
             _ = wake_rx.recv() => {
-                while wake_rx.try_recv().is_ok() {}
+                let mut extra = 0usize;
+                while wake_rx.try_recv().is_ok() { extra += 1; }
+                debug!(extra_drained = extra, "regen queue: triggered by pubsub wake");
                 drain_regen(&pool, &redis_client, &dirs, concurrency).await;
             }
             _ = ticker.tick() => {
+                debug!("regen queue: triggered by poll ticker");
                 drain_regen(&pool, &redis_client, &dirs, concurrency).await;
             }
         }
@@ -785,6 +788,10 @@ async fn subscribe_regen_loop(
 
     let mut stream = pubsub.on_message();
     while let Some(_msg) = stream.next().await {
+        debug!(
+            "regen queue: pubsub wake-up received on {}",
+            REGEN_WAKE_CHANNEL
+        );
         let _ = tx.try_send(());
     }
     Ok(())
@@ -797,6 +804,8 @@ async fn drain_regen(
     dirs: &Directories,
     concurrency: usize,
 ) {
+    let pop_start = std::time::Instant::now();
+    debug!("regen drain: popping items from Redis list");
     let items = match pop_regen_items(redis_client).await {
         Ok(v) => v,
         Err(e) => {
@@ -804,13 +813,18 @@ async fn drain_regen(
             return;
         }
     };
+    let pop_elapsed_ms = pop_start.elapsed().as_millis();
 
     if items.is_empty() {
+        debug!(pop_elapsed_ms, "regen drain: queue empty, nothing to do");
         return;
     }
 
     let n = items.len();
-    info!(count = n, "regen: processing batch");
+    info!(
+        count = n,
+        pop_elapsed_ms, concurrency, "regen: processing batch"
+    );
     let drain_start = std::time::Instant::now();
 
     /// Maximum wall-clock time a single regen item may take before it is
@@ -825,6 +839,16 @@ async fn drain_regen(
             let redis_client = redis_client.clone();
             let dirs = dirs.clone();
             async move {
+                let item_start = std::time::Instant::now();
+                debug!(
+                    post_id = item.post_id,
+                    filename = %item.filename,
+                    thumbnail = %item.thumbnail_filename,
+                    job_key = %item.job_key,
+                    item_timeout_secs = ITEM_TIMEOUT.as_secs(),
+                    "regen item: starting"
+                );
+
                 let result = match tokio::time::timeout(
                     ITEM_TIMEOUT,
                     process_regen_item(&pool, &dirs, &item),
@@ -835,8 +859,10 @@ async fn drain_regen(
                     Err(_elapsed) => {
                         warn!(
                             post_id = item.post_id,
+                            filename = %item.filename,
+                            elapsed_ms = item_start.elapsed().as_millis(),
                             timeout_secs = ITEM_TIMEOUT.as_secs(),
-                            "regen: item timed out, skipping"
+                            "regen: item TIMED OUT — process_regen_item exceeded deadline"
                         );
                         Err(anyhow::anyhow!(
                             "timed out after {} s",
@@ -844,6 +870,7 @@ async fn drain_regen(
                         ))
                     }
                 };
+                let item_elapsed_ms = item_start.elapsed().as_millis();
                 let ok = result.is_ok();
                 if !ok {
                     let err_chain = result
@@ -855,22 +882,43 @@ async fn drain_regen(
                         .join(": ");
                     warn!(
                         post_id = item.post_id,
+                        elapsed_ms = item_elapsed_ms,
                         err = err_chain,
-                        "regen: item failed"
+                        "regen: item FAILED"
                     );
                 } else {
-                    debug!(post_id = item.post_id, "regen: item complete");
+                    debug!(
+                        post_id = item.post_id,
+                        elapsed_ms = item_elapsed_ms,
+                        "regen: item complete"
+                    );
                 }
-                // Publish with a hard outer deadline so a stalled Redis can
-                // never hold concurrency slots hostage even if the inner
-                // per-operation timeouts somehow fail to fire.
-                // (This is the defence-in-depth companion to the timeouts
-                // inside `publish_regen_progress` itself.)
-                let _ = tokio::time::timeout(
+
+                // Hard outer deadline on the publish so a stalled Redis can
+                // never hold a concurrency slot beyond REDIS_OP_TIMEOUT * 4.
+                debug!(
+                    post_id = item.post_id,
+                    ok, "regen: entering publish_regen_progress"
+                );
+                let pub_start = std::time::Instant::now();
+                let pub_result = tokio::time::timeout(
                     REDIS_OP_TIMEOUT * 4,
                     publish_regen_progress(&redis_client, &item, &result),
                 )
                 .await;
+                if pub_result.is_err() {
+                    warn!(
+                        post_id = item.post_id,
+                        pub_elapsed_ms = pub_start.elapsed().as_millis(),
+                        "regen: outer publish timeout fired — redis appears hung"
+                    );
+                } else {
+                    debug!(
+                        post_id = item.post_id,
+                        pub_elapsed_ms = pub_start.elapsed().as_millis(),
+                        "regen: publish_regen_progress returned"
+                    );
+                }
             }
         })
         .await;
@@ -907,6 +955,10 @@ async fn pop_regen_items(redis_client: &redis::Client) -> Result<Vec<RegenItem>>
         if batch.is_empty() {
             break;
         }
+        debug!(
+            batch_size = batch.len(),
+            "regen pop: got batch from Redis LPOP"
+        );
         for json in batch {
             match serde_json::from_str::<RegenItem>(&json) {
                 Ok(item) => items.push(item),
@@ -927,14 +979,53 @@ pub(crate) async fn process_regen_item(
     item: &RegenItem,
 ) -> Result<()> {
     let src_path = dirs.image.join(&item.filename);
+
+    // ── 1. Source file existence check ───────────────────────────────────────
+    debug!(
+        post_id = item.post_id,
+        path = %src_path.display(),
+        "process_regen_item: checking source file"
+    );
     if tokio::fs::metadata(&src_path).await.is_err() {
+        warn!(
+            post_id = item.post_id,
+            path = %src_path.display(),
+            "process_regen_item: source file not found — skipping"
+        );
         anyhow::bail!("regen: source file not found: {}", src_path.display());
     }
+    debug!(
+        post_id = item.post_id,
+        path = %src_path.display(),
+        "process_regen_item: source file confirmed on disk"
+    );
 
+    // ── 2. Regenerate (decode + encode) ───────────────────────────────────────
+    let regen_start = std::time::Instant::now();
+    debug!(
+        post_id = item.post_id,
+        "process_regen_item: calling regenerate_image"
+    );
     let res = crate::processing::regenerate_image(&src_path, dirs)
         .await
         .context("regenerate_image failed")?;
+    debug!(
+        post_id = item.post_id,
+        elapsed_ms = regen_start.elapsed().as_millis(),
+        new_filename = %res.new_filename,
+        new_thumbnail = %res.new_thumbnail_filename,
+        width = res.width,
+        height = res.height,
+        "process_regen_item: regenerate_image complete"
+    );
 
+    // ── 3. DB update ──────────────────────────────────────────────────────────
+    let db_start = std::time::Instant::now();
+    debug!(
+        post_id = item.post_id,
+        new_filename = %res.new_filename,
+        "process_regen_item: updating database"
+    );
     db::update_post_files(
         pool,
         item.post_id,
@@ -945,10 +1036,30 @@ pub(crate) async fn process_regen_item(
     )
     .await
     .context("update_post_files failed")?;
+    debug!(
+        post_id = item.post_id,
+        elapsed_ms = db_start.elapsed().as_millis(),
+        "process_regen_item: database update complete"
+    );
 
-    // Remove old files only after the DB is committed to avoid gaps.
-    let _ = tokio::fs::remove_file(dirs.image.join(&item.filename)).await;
-    let _ = tokio::fs::remove_file(dirs.thumbnail.join(&item.thumbnail_filename)).await;
+    // ── 4. Remove old files ───────────────────────────────────────────────────
+    // Only after DB commit to avoid a window where neither file exists.
+    debug!(
+        post_id = item.post_id,
+        old_image = %item.filename,
+        old_thumbnail = %item.thumbnail_filename,
+        "process_regen_item: removing old files"
+    );
+    let rm_image = tokio::fs::remove_file(dirs.image.join(&item.filename)).await;
+    let rm_thumb = tokio::fs::remove_file(dirs.thumbnail.join(&item.thumbnail_filename)).await;
+    debug!(
+        post_id = item.post_id,
+        image_removed = rm_image.is_ok(),
+        thumbnail_removed = rm_thumb.is_ok(),
+        image_err = ?rm_image.err(),
+        thumbnail_err = ?rm_thumb.err(),
+        "process_regen_item: old file removal done"
+    );
 
     Ok(())
 }
@@ -991,56 +1102,111 @@ async fn publish_regen_progress(
         .to_string(),
     };
 
-    // Obtain a Redis connection with a hard deadline.  Previously this
-    // `await` had no timeout: if Redis was slow every concurrent worker
-    // would block here and the entire batch would stall indefinitely.
+    // ── Redis connect ──────────────────────────────────────────────────────
+    let connect_start = std::time::Instant::now();
+    debug!(
+        post_id = item.post_id,
+        ok = result.is_ok(),
+        timeout_secs = REDIS_OP_TIMEOUT.as_secs(),
+        "publish_regen_progress: acquiring redis connection"
+    );
     let conn_result = tokio::time::timeout(
         REDIS_OP_TIMEOUT,
         redis_client.get_multiplexed_async_connection(),
     )
     .await;
+    debug!(
+        post_id = item.post_id,
+        connect_elapsed_ms = connect_start.elapsed().as_millis(),
+        succeeded = matches!(conn_result, Ok(Ok(_))),
+        "publish_regen_progress: redis connect finished"
+    );
 
     let mut conn = match conn_result {
         Ok(Ok(c)) => c,
         Ok(Err(e)) => {
-            warn!(post_id = item.post_id, err = %e, "publish_regen_progress: redis connect failed");
+            warn!(
+                post_id = item.post_id,
+                err = %e,
+                "publish_regen_progress: redis connect FAILED"
+            );
             return;
         }
         Err(_elapsed) => {
             warn!(
                 post_id = item.post_id,
                 timeout_secs = REDIS_OP_TIMEOUT.as_secs(),
-                "publish_regen_progress: redis connect timed out"
+                "publish_regen_progress: redis connect TIMED OUT — item counted by poll fallback"
             );
             return;
         }
     };
 
-    // INCR the per-job counter first (atomic, persistent, never lost).
+    // ── INCR per-job counter (authoritative, written first) ────────────────
     if !item.job_key.is_empty() {
         let counter_key = format!("{}{}", REGEN_COUNTER_KEY_PREFIX, item.job_key);
+        let incr_start = std::time::Instant::now();
+        debug!(
+            post_id = item.post_id,
+            counter_key = %counter_key,
+            "publish_regen_progress: sending INCR"
+        );
         let incr_res =
             tokio::time::timeout(REDIS_OP_TIMEOUT, conn.incr::<_, _, i64>(&counter_key, 1i64))
                 .await;
-        if incr_res.is_err() {
-            warn!(
+        match &incr_res {
+            Ok(Ok(new_val)) => debug!(
                 post_id = item.post_id,
-                "publish_regen_progress: INCR timed out — counter may be under-counted"
-            );
+                counter_key = %counter_key,
+                new_counter_val = new_val,
+                elapsed_ms = incr_start.elapsed().as_millis(),
+                "publish_regen_progress: INCR OK"
+            ),
+            Ok(Err(e)) => warn!(
+                post_id = item.post_id,
+                err = %e,
+                "publish_regen_progress: INCR redis error"
+            ),
+            Err(_) => warn!(
+                post_id = item.post_id,
+                "publish_regen_progress: INCR TIMED OUT — counter may be under-counted"
+            ),
         }
+    } else {
+        debug!(
+            post_id = item.post_id,
+            "publish_regen_progress: job_key empty, skipping INCR (legacy item)"
+        );
     }
 
-    // Then publish to Pub/Sub for live SSE updates.
+    // ── PUBLISH to Pub/Sub ────────────────────────────────────────────────
+    let pub_start = std::time::Instant::now();
+    debug!(
+        post_id = item.post_id,
+        channel = REGEN_PROGRESS_CHANNEL,
+        "publish_regen_progress: sending PUBLISH"
+    );
     let pub_res = tokio::time::timeout(
         REDIS_OP_TIMEOUT,
         conn.publish::<_, _, i64>(REGEN_PROGRESS_CHANNEL, &msg),
     )
     .await;
-    if pub_res.is_err() {
-        warn!(
+    match &pub_res {
+        Ok(Ok(receivers)) => debug!(
             post_id = item.post_id,
-            "publish_regen_progress: PUBLISH timed out — SSE update may be missing"
-        );
+            receivers = receivers,
+            elapsed_ms = pub_start.elapsed().as_millis(),
+            "publish_regen_progress: PUBLISH OK (receivers=0 = no live SSE sub)"
+        ),
+        Ok(Err(e)) => warn!(
+            post_id = item.post_id,
+            err = %e,
+            "publish_regen_progress: PUBLISH redis error"
+        ),
+        Err(_) => warn!(
+            post_id = item.post_id,
+            "publish_regen_progress: PUBLISH TIMED OUT — live SSE update missing"
+        ),
     }
 }
 
