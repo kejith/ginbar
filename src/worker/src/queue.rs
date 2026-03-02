@@ -781,11 +781,10 @@ async fn drain_regen(
     let drain_start = std::time::Instant::now();
 
     /// Maximum wall-clock time a single regen item may take before it is
-    /// considered stuck and skipped.  5 minutes is generous — a typical
-    /// 1 MP AVIF re-encode takes < 10 s; this covers very large images and
-    /// slow ffmpeg AVIF decodes without letting a single stuck item block
-    /// the entire batch forever.
-    const ITEM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+    /// considered stuck and skipped.  30 s is generous — a typical
+    /// 1 MP AVIF re-encode takes < 10 s; this covers large images without
+    /// letting a single stuck item block the entire batch.
+    const ITEM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
     futures_util::stream::iter(items)
         .for_each_concurrent(Some(concurrency), |item| {

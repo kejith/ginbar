@@ -193,9 +193,9 @@ pub async fn convert_to_avif(
 /// supported by the `image` crate (i.e. NOT jpeg/png/webp/gif/bmp/tiff).
 pub async fn normalize_to_jpeg(input: &Path, output: &Path) -> Result<()> {
     /// Maximum time to wait for ffmpeg to normalize a single image.
-    /// 60 s is generous for any single-frame decode; if ffmpeg hasn't
+    /// 30 s is generous for any single-frame decode; if ffmpeg hasn't
     /// finished by then it is stuck (corrupt input, decoder bug, etc.).
-    const FFMPEG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+    const FFMPEG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 
     let input_str = input.to_string_lossy();
     let output_str = output.to_string_lossy();
