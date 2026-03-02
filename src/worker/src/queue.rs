@@ -935,8 +935,7 @@ async fn drain_regen(
 /// costs the same as one without count — so this trades N round-trips for
 /// ceil(N/BATCH_SIZE) round-trips at the cost of a slightly larger allocation.
 const REGEN_POP_BATCH: std::num::NonZeroUsize =
-    // SAFETY: 500 > 0
-    unsafe { std::num::NonZeroUsize::new_unchecked(500) };
+    std::num::NonZeroUsize::new(500).unwrap();
 
 /// LPOP all items currently in the regen queue in batches of [`REGEN_POP_BATCH`].
 ///
