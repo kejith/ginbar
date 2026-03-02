@@ -407,6 +407,9 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 	rdb := s.rdb
 	log := s.log
 
+	log.DebugContext(c.Context(), "regenerate: handler entered",
+		"total_posts", total)
+
 	c.Context().SetBodyStreamWriter(func(w *bufio.Writer) {
 		ctx := context.Background()
 		job.Start()
@@ -415,6 +418,12 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 		// lets us ignore Pub/Sub messages from concurrent/previous jobs.
 		jobKey := uuid.NewString()
 		regenDoneKey := "wallium:regen:done:" + jobKey
+
+		log.DebugContext(ctx, "regenerate: SSE writer started",
+			"job_id", job.ID,
+			"job_key", jobKey,
+			"total", total,
+			"regen_done_key", regenDoneKey)
 
 		// Subscribe before pushing items so we never miss fast-path messages.
 		// Buffer size = 2×total + 200 so concurrent encodes never fill it.
@@ -426,10 +435,17 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 		defer func() { _ = sub.Close() }()
 		ch := sub.Channel(redis.WithChannelSize(bufSize))
 
+		log.DebugContext(ctx, "regenerate: subscribed to pubsub",
+			"channel", "wallium:regen:progress",
+			"channel_buf_size", bufSize)
+
 		// Initialise the per-job counter with a 24-hour TTL.
 		rdb.Set(ctx, regenDoneKey, 0, 24*time.Hour)
+		log.DebugContext(ctx, "regenerate: counter initialised",
+			"key", regenDoneKey)
 
 		// Push all regen items atomically via a pipeline.
+		pushStart := time.Now()
 		pipe := rdb.Pipeline()
 		for _, p := range posts {
 			b, _ := json.Marshal(regenQueueItem{
@@ -445,9 +461,14 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 			job.Fail("failed to enqueue items: " + err.Error())
 			return
 		}
+		log.DebugContext(ctx, "regenerate: items pushed to Redis queue",
+			"count", total,
+			"push_elapsed_ms", time.Since(pushStart).Milliseconds())
 
 		// Wake the worker.
 		rdb.Publish(ctx, "wallium:regen:wake", "1")
+		log.DebugContext(ctx, "regenerate: published wake signal to worker",
+			"channel", "wallium:regen:wake")
 
 		writeSSE(w, regenStartEvent{Phase: "start", Total: total})
 
@@ -466,30 +487,61 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 		// loop so the client isn't left hanging indefinitely.
 		const stallTimeout = 10 * time.Minute
 		lastProgressAt := time.Now()
+		loopIter := 0
 
 		done := total == 0
+		exitReason := "unknown"
+		if done {
+			exitReason = "total=0"
+		}
 	loop:
 		for !done {
+			loopIter++
 			select {
 			case msg, ok := <-ch:
 				if !ok {
+					log.DebugContext(ctx, "regenerate: pubsub channel closed",
+						"loop_iter", loopIter,
+						"updated", updated, "failed", failed)
+					exitReason = "pubsub_channel_closed"
 					break loop
 				}
+				log.DebugContext(ctx, "regenerate: pubsub message received",
+					"loop_iter", loopIter,
+					"payload_len", len(msg.Payload),
+					"payload_preview", truncate(msg.Payload, 200))
+
 				var progress regenProgressMsg
 				if jsonErr := json.Unmarshal([]byte(msg.Payload), &progress); jsonErr != nil {
+					log.DebugContext(ctx, "regenerate: pubsub message JSON parse error — skipping",
+						"err", jsonErr,
+						"payload", truncate(msg.Payload, 200))
 					continue
 				}
 				// Ignore messages from a different job (startup drain, concurrent run).
 				if progress.JobKey != jobKey {
+					log.DebugContext(ctx, "regenerate: pubsub message belongs to different job — skipping",
+						"msg_job_key", progress.JobKey,
+						"our_job_key", jobKey,
+						"msg_post_id", progress.PostID)
 					continue
 				}
 				if progress.OK {
 					updated++
 				} else {
 					failed++
+					log.DebugContext(ctx, "regenerate: worker reported item FAILED",
+						"post_id", progress.PostID,
+						"err", progress.Err,
+						"total_failed", failed)
 				}
 				cur := updated + failed
 				lastProgressAt = time.Now()
+				log.DebugContext(ctx, "regenerate: progress via pubsub",
+					"post_id", progress.PostID,
+					"ok", progress.OK,
+					"current", cur, "total", total,
+					"updated", updated, "failed", failed)
 				job.SetProgress(cur, total,
 					fmt.Sprintf("updated %d · failed %d", updated, failed))
 				writeSSE(w, regenProgressEvent{
@@ -501,20 +553,36 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 					Skipped: 0,
 				})
 				if cur >= total {
+					exitReason = "pubsub_complete"
 					done = true
 				}
 			case <-pollTick.C:
 				// The Redis INCR counter is the source of truth: it is
 				// incremented atomically and never lost, even when Pub/Sub
 				// messages are dropped due to buffer overflow.
+				sinceProgress := time.Since(lastProgressAt)
 				n, pollErr := rdb.Get(ctx, regenDoneKey).Int()
+				log.DebugContext(ctx, "regenerate: poll tick fired",
+					"loop_iter", loopIter,
+					"counter_val", n,
+					"counter_err", pollErr,
+					"last_polled_count", lastPolledCount,
+					"updated", updated, "failed", failed,
+					"since_last_progress_s", int(sinceProgress.Seconds()))
+
 				if pollErr != nil || n <= lastPolledCount {
 					// No progress — check for stall.
-					if time.Since(lastProgressAt) > stallTimeout {
+					if sinceProgress > stallTimeout {
 						log.WarnContext(ctx, "regenerate: aborting — no progress for 10 min",
-							"total", total, "current", updated+failed)
+							"total", total, "current", updated+failed,
+							"stall_seconds", int(sinceProgress.Seconds()))
+						exitReason = "stall_timeout"
 						break loop
 					}
+					log.DebugContext(ctx, "regenerate: poll: no new progress",
+						"counter_val", n, "last_polled", lastPolledCount,
+						"stall_s", int(sinceProgress.Seconds()),
+						"stall_limit_s", int(stallTimeout.Seconds()))
 					continue
 				}
 				lastPolledCount = n
@@ -526,9 +594,16 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 					delta := n - cur
 					// We cannot tell ok vs fail for dropped messages, so charge
 					// them to failed conservatively.
+					log.DebugContext(ctx, "regenerate: poll detected dropped pubsub messages",
+						"counter_val", n,
+						"local_cur", cur,
+						"dropped_delta", delta)
 					failed += delta
 					cur = n
 				}
+				log.DebugContext(ctx, "regenerate: progress via poll counter",
+					"counter_val", n, "current", cur, "total", total,
+					"updated", updated, "failed", failed)
 				job.SetProgress(cur, total,
 					fmt.Sprintf("processed %d · updated %d · failed %d", cur, updated, failed))
 				writeSSE(w, regenProgressEvent{
@@ -540,17 +615,28 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 					Skipped: 0,
 				})
 				if cur >= total {
+					exitReason = "poll_complete"
 					done = true
 				}
 			case <-heartbeat.C:
+				log.DebugContext(ctx, "regenerate: sending SSE heartbeat",
+					"updated", updated, "failed", failed, "total", total)
 				_, _ = fmt.Fprintf(w, ": heartbeat\n\n")
 				_ = w.Flush()
 			case <-job.Ctx().Done():
+				log.DebugContext(ctx, "regenerate: job context cancelled",
+					"updated", updated, "failed", failed)
+				exitReason = "job_cancelled"
 				break loop
 			}
 		}
 
 		u, f := updated, failed
+		log.InfoContext(ctx, "regenerate: SSE loop exited",
+			"exit_reason", exitReason,
+			"loop_iters", loopIter,
+			"total", total, "updated", u, "failed", f)
+
 		writeSSE(w, regenDoneEvent{
 			Phase: "done", Total: total,
 			Updated: u, Failed: f, Skipped: 0,
@@ -570,6 +656,8 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 }
 
 // dimensionsForPost derives (width, height) from a post's media file on disk.
+// It uses ffprobe for all file types since the stored images are AVIF and
+// Go's standard image.Decode does not support AVIF natively.
 // It uses ffprobe for all file types since the stored images are AVIF and
 // Go's standard image.Decode does not support AVIF natively.
 func dimensionsForPost(p dbgen.Post, dirs utils.Directories) (int, int, error) {

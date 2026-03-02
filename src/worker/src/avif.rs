@@ -112,12 +112,19 @@ pub fn encode_avif(
     //   (bilinear) is ~2× faster than `CatmullRom` (bicubic).  At web
     //   resolutions the difference is invisible after AV1 compression.
     const RESIZE_SKIP_RATIO: f64 = 1.15; // 15 %
+    // SVT-AV1's SIMD loops read in 8-pixel-wide blocks; passing a width or
+    // height that is not a multiple of 8 causes out-of-bounds reads and a
+    // SIGSEGV (exit 139) inside the encoder.  We crop down to the nearest
+    // multiple of 8 — at most 7 pixels are lost from the right/bottom edge,
+    // which is imperceptible after AV1 compression.
+    const SVT_ALIGN: u32 = 8;
+    let align = |n: u32| n & !(SVT_ALIGN - 1);
     let (src_w, src_h) = (img.width(), img.height());
     let resize_start = std::time::Instant::now();
     let img = if max_width > 0 && src_w > max_width {
         let ratio = src_w as f64 / max_width as f64;
         if ratio <= RESIZE_SKIP_RATIO {
-            // Source is close enough to target — just ensure even dims.
+            // Source is close enough to target — just ensure 8-aligned dims.
             debug!(
                 src_w,
                 max_width,
@@ -125,8 +132,8 @@ pub fn encode_avif(
                 "encode_avif: skipping resize (within {:.0}% threshold)",
                 (RESIZE_SKIP_RATIO - 1.0) * 100.0,
             );
-            let ew = src_w & !1;
-            let eh = src_h & !1;
+            let ew = align(src_w);
+            let eh = align(src_h);
             if ew != src_w || eh != src_h {
                 std::borrow::Cow::Owned(img.crop_imm(0, 0, ew, eh))
             } else {
@@ -136,9 +143,9 @@ pub fn encode_avif(
             let scale = max_width as f64 / src_w as f64;
             let new_w = max_width;
             let new_h = ((src_h as f64 * scale).round() as u32).max(1);
-            // Ensure even dimensions for YUV420
-            let new_w = new_w & !1;
-            let new_h = new_h & !1;
+            // Ensure 8-aligned dimensions for SVT-AV1 SIMD
+            let new_w = align(new_w);
+            let new_h = align(new_h);
             std::borrow::Cow::Owned(img.resize_exact(
                 new_w,
                 new_h,
@@ -146,9 +153,9 @@ pub fn encode_avif(
             ))
         }
     } else {
-        // Ensure even dimensions
-        let ew = src_w & !1;
-        let eh = src_h & !1;
+        // Ensure 8-aligned dimensions
+        let ew = align(src_w);
+        let eh = align(src_h);
         if ew != src_w || eh != src_h {
             std::borrow::Cow::Owned(img.crop_imm(0, 0, ew, eh))
         } else {
@@ -589,11 +596,29 @@ fn encode_av1_raw_full_range(
     Ok(packet.to_vec())
 }
 
+/// Re-pack a single tight-packed plane from `src_stride` to `dst_width` columns.
+///
+/// Called when the caller's buffer has `src_stride` bytes per row but we need
+/// to feed SVT-AV1 a plane with only `dst_width` columns (dst_width < src_stride).
+/// Returns a new tight-packed Vec with each row containing exactly `dst_width` bytes.
+fn repack_plane(plane: &[u8], src_stride: usize, dst_width: usize, rows: usize) -> Vec<u8> {
+    let mut out = Vec::with_capacity(dst_width * rows);
+    for row in 0..rows {
+        let start = row * src_stride;
+        out.extend_from_slice(&plane[start..start + dst_width]);
+    }
+    out
+}
+
 /// Encode pre-decoded full-range YUV420 planes directly into an AVIF file.
 ///
 /// Used by `process_image_v_d` to skip the `rgb_to_yuv420` conversion step
 /// by feeding turbojpeg's native YUV output directly to SVT-AV1.
 /// The resulting AVIF is tagged full-range in the AV1 bitstream.
+///
+/// SVT-AV1's SIMD loops require width and height to be multiples of 8.
+/// If the caller supplies non-aligned dimensions the planes are re-packed to
+/// the next lower multiple of 8 (cropping at most 7 pixels from each edge).
 #[allow(clippy::too_many_arguments)]
 pub fn encode_avif_from_yuv_planes(
     y_plane: &[u8],
@@ -606,18 +631,47 @@ pub fn encode_avif_from_yuv_planes(
     preset: u32,
     threads: u32,
 ) -> Result<(i32, i32)> {
+    const SVT_ALIGN: u32 = 8;
+    let align = |n: u32| n & !(SVT_ALIGN - 1);
+
+    let enc_w = align(width);
+    let enc_h = align(height);
+
+    // If dimensions are already aligned, use the slice directly.
+    // Otherwise re-pack each plane so rows are tight at `enc_w` width.
+    let (y_enc, u_enc, v_enc);
+    let (y_ref, u_ref, v_ref): (&[u8], &[u8], &[u8]) = if enc_w == width && enc_h == height {
+        (y_plane, u_plane, v_plane)
+    } else {
+        debug!(
+            width,
+            height,
+            enc_w,
+            enc_h,
+            "encode_avif_from_yuv_planes: re-packing planes for 8-pixel alignment"
+        );
+        let src_y_stride = width as usize;
+        let src_uv_stride = (width as usize).div_ceil(2); // ceil(width/2) for turbojpeg
+        let dst_uv_w = (enc_w as usize) / 2;
+        let dst_uv_h = (enc_h as usize) / 2;
+        y_enc = repack_plane(y_plane, src_y_stride, enc_w as usize, enc_h as usize);
+        u_enc = repack_plane(u_plane, src_uv_stride, dst_uv_w, dst_uv_h);
+        v_enc = repack_plane(v_plane, src_uv_stride, dst_uv_w, dst_uv_h);
+        (&y_enc, &u_enc, &v_enc)
+    };
+
     let av1 = encode_av1_raw_full_range(
-        y_plane, u_plane, v_plane, width, height, crf, preset, threads,
+        y_ref, u_ref, v_ref, enc_w, enc_h, crf, preset, threads,
     )?;
-    let avif_bytes = wrap_avif_container(&av1, width, height)?;
+    let avif_bytes = wrap_avif_container(&av1, enc_w, enc_h)?;
     std::fs::write(dst, &avif_bytes).context("write AVIF file (yuv planes)")?;
     debug!(
         dst = %dst.display(),
-        width,
-        height,
+        width = enc_w,
+        height = enc_h,
         "AVIF encoded from YUV planes (full-range)"
     );
-    Ok((width as i32, height as i32))
+    Ok((enc_w as i32, enc_h as i32))
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────

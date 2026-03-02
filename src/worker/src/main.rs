@@ -9,6 +9,9 @@ async fn main() -> Result<()> {
     config::init_tracing(&cfg);
 
     info!("wallium-worker starting");
+    if let Some(f) = &cfg.log_file {
+        info!(log_file = %f, "log file tee enabled");
+    }
 
     // ── HTTP client (shared across all download tasks) ────────────────────────
     let http_client = download::build_client(cfg.download_concurrency)?;
