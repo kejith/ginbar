@@ -861,7 +861,16 @@ async fn drain_regen(
                 } else {
                     debug!(post_id = item.post_id, "regen: item complete");
                 }
-                publish_regen_progress(&redis_client, &item, &result).await;
+                // Publish with a hard outer deadline so a stalled Redis can
+                // never hold concurrency slots hostage even if the inner
+                // per-operation timeouts somehow fail to fire.
+                // (This is the defence-in-depth companion to the timeouts
+                // inside `publish_regen_progress` itself.)
+                let _ = tokio::time::timeout(
+                    REDIS_OP_TIMEOUT * 4,
+                    publish_regen_progress(&redis_client, &item, &result),
+                )
+                .await;
             }
         })
         .await;
@@ -873,21 +882,39 @@ async fn drain_regen(
     );
 }
 
-/// LPOP all items currently in the regen queue.
+/// Batch LPOP size: pop this many items per round-trip to minimise Redis latency
+/// overhead when the queue has thousands of entries.  A single LPOP with count
+/// costs the same as one without count — so this trades N round-trips for
+/// ceil(N/BATCH_SIZE) round-trips at the cost of a slightly larger allocation.
+const REGEN_POP_BATCH: std::num::NonZeroUsize =
+    // SAFETY: 500 > 0
+    unsafe { std::num::NonZeroUsize::new_unchecked(500) };
+
+/// LPOP all items currently in the regen queue in batches of [`REGEN_POP_BATCH`].
+///
+/// Replaces the old single-item LPOP loop that issued one Redis round-trip per
+/// item — 5 000 items × 1-5 ms = 5-25 s of pure Redis overhead before work
+/// even starts.
 async fn pop_regen_items(redis_client: &redis::Client) -> Result<Vec<RegenItem>> {
     let mut conn = redis_client.get_multiplexed_async_connection().await?;
     let mut items = Vec::new();
     loop {
-        let val: Option<String> = conn.lpop(REGEN_QUEUE_KEY, None).await?;
-        match val {
-            Some(json) => match serde_json::from_str::<RegenItem>(&json) {
+        // LPOP key count returns a Vec<String> (empty when the list is empty).
+        let batch: Vec<String> = conn
+            .lpop(REGEN_QUEUE_KEY, Some(REGEN_POP_BATCH))
+            .await
+            .unwrap_or_default();
+        if batch.is_empty() {
+            break;
+        }
+        for json in batch {
+            match serde_json::from_str::<RegenItem>(&json) {
                 Ok(item) => items.push(item),
                 Err(e) => warn!(
                     err = %e, raw = %json,
                     "regen: invalid queue item, skipping"
                 ),
-            },
-            None => break,
+            }
         }
     }
     Ok(items)
@@ -926,12 +953,23 @@ pub(crate) async fn process_regen_item(
     Ok(())
 }
 
+/// Maximum time allowed for any single Redis operation inside
+/// [`publish_regen_progress`].  If Redis is degraded, we must not let
+/// workers pile up here indefinitely — this is the root cause of the
+/// "timeout didn't fix the hang" bug: the 30 s item timeout only covers
+/// `process_regen_item`; the publish call runs *outside* that timeout
+/// and had no bound of its own.
+const REDIS_OP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Publish a per-item progress event to [`REGEN_PROGRESS_CHANNEL`] and
 /// atomically increment the per-job completion counter.
 ///
 /// The counter (`REGEN_COUNTER_KEY_PREFIX + job_key`) is the authoritative
 /// progress source — it is never lost even if Pub/Sub subscribers miss
 /// messages due to buffer overflow or network issues.
+///
+/// Every Redis operation is wrapped in [`REDIS_OP_TIMEOUT`] so a degraded
+/// Redis can never cause worker slots to block indefinitely.
 async fn publish_regen_progress(
     redis_client: &redis::Client,
     item: &RegenItem,
@@ -952,14 +990,57 @@ async fn publish_regen_progress(
         })
         .to_string(),
     };
-    if let Ok(mut conn) = redis_client.get_multiplexed_async_connection().await {
-        // INCR the per-job counter first (atomic, persistent, never lost).
-        if !item.job_key.is_empty() {
-            let counter_key = format!("{}{}", REGEN_COUNTER_KEY_PREFIX, item.job_key);
-            let _: Result<i64, _> = conn.incr(&counter_key, 1i64).await;
+
+    // Obtain a Redis connection with a hard deadline.  Previously this
+    // `await` had no timeout: if Redis was slow every concurrent worker
+    // would block here and the entire batch would stall indefinitely.
+    let conn_result = tokio::time::timeout(
+        REDIS_OP_TIMEOUT,
+        redis_client.get_multiplexed_async_connection(),
+    )
+    .await;
+
+    let mut conn = match conn_result {
+        Ok(Ok(c)) => c,
+        Ok(Err(e)) => {
+            warn!(post_id = item.post_id, err = %e, "publish_regen_progress: redis connect failed");
+            return;
         }
-        // Then publish to Pub/Sub for live SSE updates.
-        let _: Result<i64, _> = conn.publish(REGEN_PROGRESS_CHANNEL, &msg).await;
+        Err(_elapsed) => {
+            warn!(
+                post_id = item.post_id,
+                timeout_secs = REDIS_OP_TIMEOUT.as_secs(),
+                "publish_regen_progress: redis connect timed out"
+            );
+            return;
+        }
+    };
+
+    // INCR the per-job counter first (atomic, persistent, never lost).
+    if !item.job_key.is_empty() {
+        let counter_key = format!("{}{}", REGEN_COUNTER_KEY_PREFIX, item.job_key);
+        let incr_res =
+            tokio::time::timeout(REDIS_OP_TIMEOUT, conn.incr::<_, _, i64>(&counter_key, 1i64))
+                .await;
+        if incr_res.is_err() {
+            warn!(
+                post_id = item.post_id,
+                "publish_regen_progress: INCR timed out — counter may be under-counted"
+            );
+        }
+    }
+
+    // Then publish to Pub/Sub for live SSE updates.
+    let pub_res = tokio::time::timeout(
+        REDIS_OP_TIMEOUT,
+        conn.publish::<_, _, i64>(REGEN_PROGRESS_CHANNEL, &msg),
+    )
+    .await;
+    if pub_res.is_err() {
+        warn!(
+            post_id = item.post_id,
+            "publish_regen_progress: PUBLISH timed out — SSE update may be missing"
+        );
     }
 }
 
