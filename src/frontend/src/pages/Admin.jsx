@@ -57,6 +57,70 @@ function RoleBadge({ level }) {
 // Connects to the admin SSE stream and shows a live view of the processing queue.
 // Always active — no button required.
 
+// Human-readable label and colour for each processing phase emitted by the worker.
+const PHASE_META = {
+  downloading: { label: "Downloading", color: "text-sky-400" },
+  decoding: { label: "Decoding", color: "text-amber-400" },
+  encoding: { label: "Encoding", color: "text-(--color-accent)" },
+  dedup_check: { label: "Dedup check", color: "text-purple-400" },
+  finalizing: { label: "Finalizing", color: "text-emerald-400" },
+  processing_video: { label: "Processing video", color: "text-orange-400" },
+};
+
+function phaseMeta(phase) {
+  return PHASE_META[phase] ?? { label: phase, color: "text-(--color-muted)" };
+}
+
+/** Collapsible table listing each active post and its current pipeline phase. */
+function ActivePostsTable({ posts }) {
+  const [open, setOpen] = useState(true);
+  if (!posts || posts.length === 0) return null;
+
+  return (
+    <div className="mt-3 rounded-sm border border-(--color-border)">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center justify-between px-3 py-1.5 text-xs font-medium text-(--color-muted) hover:text-(--color-text) transition-colors"
+      >
+        <span>Active posts ({posts.length})</span>
+        <span className="text-(--color-muted)">{open ? "▲" : "▼"}</span>
+      </button>
+
+      {open && (
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-t border-(--color-border) text-left text-(--color-muted)">
+              <th className="px-3 py-1 font-medium">ID</th>
+              <th className="px-3 py-1 font-medium">Phase</th>
+              <th className="px-3 py-1 font-medium text-right">Elapsed</th>
+            </tr>
+          </thead>
+          <tbody>
+            {posts.map((p) => {
+              const { label, color } = phaseMeta(p.phase);
+              return (
+                <tr
+                  key={p.post_id}
+                  className="border-t border-(--color-border)/50 hover:bg-(--color-border)/20"
+                >
+                  <td className="px-3 py-1 text-(--color-muted)">
+                    {p.post_id}
+                  </td>
+                  <td className={`px-3 py-1 font-medium ${color}`}>{label}</td>
+                  <td className="px-3 py-1 text-right text-(--color-muted)">
+                    {p.elapsed_sec > 0 ? `${p.elapsed_sec}s` : "<1s"}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
 function ProcessQueueCard() {
   const [snap, setSnap] = useState(null);
   const esRef = useRef(null);
@@ -73,7 +137,7 @@ function ProcessQueueCard() {
       es.addEventListener("message", (e) => {
         try {
           setSnap(JSON.parse(e.data));
-        } catch (_) { }
+        } catch (_) {}
       });
 
       es.addEventListener("error", () => {
@@ -103,10 +167,11 @@ function ProcessQueueCard() {
           Process Queue
         </p>
         <span
-          className={`rounded-full px-2 py-0.5 text-xs font-medium ${snap?.running
+          className={`rounded-full px-2 py-0.5 text-xs font-medium ${
+            snap?.running
               ? "bg-(--color-accent)/20 text-(--color-accent)"
               : "bg-(--color-border) text-(--color-muted)"
-            }`}
+          }`}
         >
           {snap == null ? "connecting…" : snap.running ? "● active" : "○ idle"}
         </span>
@@ -144,6 +209,8 @@ function ProcessQueueCard() {
               </span>
             )}
           </div>
+
+          <ActivePostsTable posts={snap.active_posts} />
         </div>
       ) : snap != null ? (
         <p className="text-xs text-(--color-muted)">Queue is empty.</p>
@@ -886,18 +953,25 @@ function JobsSection() {
     }
   }
 
-  const running = jobs.filter((j) => j.status === "running" || j.status === "pending");
-  const finished = jobs.filter((j) => j.status !== "running" && j.status !== "pending");
+  const running = jobs.filter(
+    (j) => j.status === "running" || j.status === "pending",
+  );
+  const finished = jobs.filter(
+    (j) => j.status !== "running" && j.status !== "pending",
+  );
 
   return (
     <div className="space-y-4">
       <p className="text-sm text-(--color-muted)">
-        All tracked background jobs. Admin view shows every job regardless of visibility.
+        All tracked background jobs. Admin view shows every job regardless of
+        visibility.
       </p>
 
       {jobs.length === 0 && (
         <div className="rounded-lg border border-(--color-border) bg-(--color-surface) p-8 text-center">
-          <p className="text-sm text-(--color-muted)">No jobs running or recently completed.</p>
+          <p className="text-sm text-(--color-muted)">
+            No jobs running or recently completed.
+          </p>
         </div>
       )}
 
@@ -907,7 +981,12 @@ function JobsSection() {
             Active ({running.length})
           </h3>
           {running.map((j) => (
-            <AdminJobCard key={j.id} job={j} onCancel={handleCancel} cancelling={cancelling} />
+            <AdminJobCard
+              key={j.id}
+              job={j}
+              onCancel={handleCancel}
+              cancelling={cancelling}
+            />
           ))}
         </div>
       )}
@@ -918,7 +997,12 @@ function JobsSection() {
             Recently completed ({finished.length})
           </h3>
           {finished.map((j) => (
-            <AdminJobCard key={j.id} job={j} onCancel={handleCancel} cancelling={cancelling} />
+            <AdminJobCard
+              key={j.id}
+              job={j}
+              onCancel={handleCancel}
+              cancelling={cancelling}
+            />
           ))}
         </div>
       )}
@@ -939,7 +1023,9 @@ function AdminJobCard({ job, onCancel, cancelling }) {
             <span className="text-sm" title={job.visibility}>
               {VISIBILITY_ICON[job.visibility] ?? ""}
             </span>
-            <h4 className="font-semibold text-(--color-text) truncate">{job.name}</h4>
+            <h4 className="font-semibold text-(--color-text) truncate">
+              {job.name}
+            </h4>
             <span
               className={`shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ${STATUS_COLORS[job.status] ?? ""}`}
             >
@@ -947,7 +1033,9 @@ function AdminJobCard({ job, onCancel, cancelling }) {
             </span>
           </div>
           {job.description && (
-            <p className="mt-0.5 text-xs text-(--color-muted) line-clamp-1">{job.description}</p>
+            <p className="mt-0.5 text-xs text-(--color-muted) line-clamp-1">
+              {job.description}
+            </p>
           )}
         </div>
 
@@ -969,8 +1057,7 @@ function AdminJobCard({ job, onCancel, cancelling }) {
           <div className="flex justify-between text-xs text-(--color-muted)">
             <span>{job.message || `${job.progress} / ${job.total}`}</span>
             <span>
-              {pct}%
-              {job.eta_sec > 0 && ` · ~${fmtDuration(job.eta_sec)} left`}
+              {pct}%{job.eta_sec > 0 && ` · ~${fmtDuration(job.eta_sec)} left`}
               {job.rate_per_sec > 0 && ` · ${job.rate_per_sec.toFixed(1)}/s`}
             </span>
           </div>

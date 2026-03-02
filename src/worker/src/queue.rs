@@ -8,12 +8,15 @@
 //! which limits in-flight work naturally — no unbounded task spawning.
 
 use anyhow::Result;
+use dashmap::DashMap;
 use futures_util::StreamExt;
 use redis::AsyncCommands;
+use serde::Serialize;
 use sqlx::PgPool;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tokio_stream::wrappers::ReceiverStream;
 use tracing::{debug, info, warn};
 
@@ -25,6 +28,40 @@ const PR0GRAMM_IMG_BASE: &str = "https://img.pr0gramm.com/";
 const REDIS_CHANNEL: &str = "wallium:queue:wake";
 const REDIS_STATUS_KEY: &str = "wallium:queue:status";
 
+/// The processing phase a post is currently in.
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum PostPhase {
+    Downloading,
+    Decoding,
+    Encoding,
+    DedupCheck,
+    Finalizing,
+    ProcessingVideo,
+}
+
+/// Snapshot of a single in-flight post, included in the Redis status JSON.
+#[derive(Debug, Clone, Serialize)]
+pub(crate) struct ActivePostInfo {
+    pub post_id: i32,
+    pub phase: PostPhase,
+    /// Unix epoch seconds when this post entered the pipeline.
+    pub started_at: u64,
+}
+
+impl ActivePostInfo {
+    pub(crate) fn new(post_id: i32, phase: PostPhase) -> Self {
+        let started_at = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        Self { post_id, phase, started_at }
+    }
+}
+
+/// Convenience alias for the shared per-post tracking map.
+type ActivePosts = Arc<DashMap<i32, ActivePostInfo>>;
+
 /// Shared counters for the current batch (all atomics, no mutex needed).
 pub(crate) struct QueueState {
     pending: AtomicI32,
@@ -34,6 +71,9 @@ pub(crate) struct QueueState {
     imported: AtomicI32,
     failed: AtomicI32,
     running: AtomicBool,
+    /// Per-post phase tracking — populated during download, updated through
+    /// each processing substep, removed on completion.
+    pub(crate) active_posts: ActivePosts,
 }
 
 impl QueueState {
@@ -46,6 +86,7 @@ impl QueueState {
             imported: AtomicI32::new(0),
             failed: AtomicI32::new(0),
             running: AtomicBool::new(false),
+            active_posts: Arc::new(DashMap::new()),
         }
     }
 }
@@ -187,8 +228,9 @@ async fn drain(
     let dl_dirs = dirs.clone();
     let dl_http = http_client.clone();
     let dl_pool = pool.clone();
+    let dl_active = state.active_posts.clone();
     let dl_handle = tokio::spawn(async move {
-        download_stage(dirty, &dl_dirs, &dl_http, &dl_pool, download_concurrency, dl_tx).await;
+        download_stage(dirty, &dl_dirs, &dl_http, &dl_pool, download_concurrency, dl_active, dl_tx).await;
     });
 
     // Stage 2: process posts as they arrive from the download channel.
@@ -205,8 +247,15 @@ async fn drain(
                 state.active.fetch_add(1, Ordering::Relaxed);
 
                 let post_id = item.post.id;
-                let result = process_downloaded_post(&pool, &redis_client, &dirs, item).await;
+                let result = process_downloaded_post(
+                    &pool,
+                    &redis_client,
+                    &dirs,
+                    &state.active_posts,
+                    item,
+                ).await;
 
+                state.active_posts.remove(&post_id);
                 state.active.fetch_sub(1, Ordering::Relaxed);
                 state.processed.fetch_add(1, Ordering::Relaxed);
 
@@ -265,6 +314,7 @@ async fn download_stage(
     http_client: &reqwest::Client,
     pool: &PgPool,
     download_concurrency: usize,
+    active_posts: ActivePosts,
     tx: tokio::sync::mpsc::Sender<DownloadedPost>,
 ) {
     futures_util::stream::iter(posts)
@@ -273,16 +323,21 @@ async fn download_stage(
             let http_client = http_client.clone();
             let pool = pool.clone();
             let tx = tx.clone();
+            let active_posts = active_posts.clone();
 
             async move {
+                active_posts.insert(post.id, ActivePostInfo::new(post.id, PostPhase::Downloading));
+
                 let result = resolve_source(&pool, &dirs, &http_client, &post).await;
                 match result {
                     Ok(item) => {
                         if tx.send(item).await.is_err() {
+                            active_posts.remove(&post.id);
                             warn!(post_id = post.id, "download stage: receiver dropped");
                         }
                     }
                     Err(e) => {
+                        active_posts.remove(&post.id);
                         let err_chain = e
                             .chain()
                             .map(|c| c.to_string())
@@ -349,19 +404,25 @@ async fn process_downloaded_post(
     pool: &PgPool,
     redis_client: &redis::Client,
     dirs: &Directories,
+    active_posts: &ActivePosts,
     item: DownloadedPost,
 ) -> Result<()> {
     let post_start = std::time::Instant::now();
+
+    // Transition: download complete → decoding.
+    if let Some(mut entry) = active_posts.get_mut(&item.post.id) {
+        entry.phase = PostPhase::Decoding;
+    }
 
     let file_type = classify_file(&item.path);
 
     let proc_start = std::time::Instant::now();
     let result = match file_type {
         FileType::Image => {
-            process_image_post(pool, redis_client, dirs, &item.post, &item.path).await
+            process_image_post(pool, redis_client, dirs, active_posts, &item.post, &item.path).await
         }
         FileType::Video(mime) => {
-            process_video_post(pool, dirs, &item.post, &item.path, &mime).await
+            process_video_post(pool, dirs, active_posts, &item.post, &item.path, &mime).await
         }
         FileType::Unknown(mime) => {
             let _ = db::delete_dirty_post(pool, item.post.id).await;
@@ -394,9 +455,15 @@ pub(crate) async fn process_image_post(
     pool: &PgPool,
     redis_client: &redis::Client,
     dirs: &Directories,
+    active_posts: &ActivePosts,
     post: &DirtyPost,
     input: &Path,
 ) -> Result<()> {
+    // Transition: decoding → encoding (decode + encode run together inside process_image).
+    if let Some(mut entry) = active_posts.get_mut(&post.id) {
+        entry.phase = PostPhase::Encoding;
+    }
+
     let proc_start = std::time::Instant::now();
     let res = crate::processing::process_image(input, dirs).await?;
     debug!(
@@ -407,6 +474,11 @@ pub(crate) async fn process_image_post(
         elapsed_ms = proc_start.elapsed().as_millis(),
         "worker: image encode complete"
     );
+
+    // Transition: encoding done → dedup check.
+    if let Some(mut entry) = active_posts.get_mut(&post.id) {
+        entry.phase = PostPhase::DedupCheck;
+    }
 
     let dedup_start = std::time::Instant::now();
     let [h0, h1, h2, h3] = res.p_hash;
@@ -449,6 +521,11 @@ pub(crate) async fn process_image_post(
         anyhow::bail!("duplicate: found {} similar post(s)", real_dups.len());
     }
 
+    // Transition: dedup passed → writing to DB.
+    if let Some(mut entry) = active_posts.get_mut(&post.id) {
+        entry.phase = PostPhase::Finalizing;
+    }
+
     let finalize_start = std::time::Instant::now();
     db::finalize_post(
         pool,
@@ -480,10 +557,16 @@ pub(crate) async fn process_image_post(
 pub(crate) async fn process_video_post(
     pool: &PgPool,
     dirs: &Directories,
+    active_posts: &ActivePosts,
     post: &DirtyPost,
     input: &Path,
     mime: &str,
 ) -> Result<()> {
+    // Transition: decoding → video processing (ffmpeg extract + thumbnail).
+    if let Some(mut entry) = active_posts.get_mut(&post.id) {
+        entry.phase = PostPhase::ProcessingVideo;
+    }
+
     let proc_start = std::time::Instant::now();
     let res = crate::processing::process_video(input, dirs).await?;
     debug!(
@@ -494,6 +577,11 @@ pub(crate) async fn process_video_post(
         elapsed_ms = proc_start.elapsed().as_millis(),
         "worker: video processing complete"
     );
+
+    // Transition: video processed → writing to DB.
+    if let Some(mut entry) = active_posts.get_mut(&post.id) {
+        entry.phase = PostPhase::Finalizing;
+    }
 
     let finalize_start = std::time::Instant::now();
 
@@ -528,6 +616,25 @@ pub(crate) async fn process_video_post(
 
 /// Publish current queue status to Redis.
 pub(crate) async fn publish_status(redis_client: &redis::Client, state: &Arc<QueueState>) -> Result<()> {
+    // Collect a snapshot of per-post phase info (cheap — reads from DashMap shards).
+    let now_secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let active_posts_vec: Vec<serde_json::Value> = state
+        .active_posts
+        .iter()
+        .map(|entry| {
+            let info = entry.value();
+            let elapsed = now_secs.saturating_sub(info.started_at);
+            serde_json::json!({
+                "post_id": info.post_id,
+                "phase": info.phase,
+                "elapsed_sec": elapsed,
+            })
+        })
+        .collect();
+
     let status = serde_json::json!({
         "pending": state.pending.load(Ordering::Relaxed),
         "active": state.active.load(Ordering::Relaxed),
@@ -536,6 +643,7 @@ pub(crate) async fn publish_status(redis_client: &redis::Client, state: &Arc<Que
         "imported": state.imported.load(Ordering::Relaxed),
         "failed": state.failed.load(Ordering::Relaxed),
         "running": state.running.load(Ordering::Relaxed),
+        "active_posts": active_posts_vec,
     });
 
     if let Ok(mut conn) = redis_client.get_multiplexed_async_connection().await {
@@ -579,6 +687,92 @@ pub(crate) fn classify_file(path: &Path) -> FileType {
 mod tests {
     use super::*;
     use std::path::Path;
+
+    // ── PostPhase serialization ────────────────────────────────────────────────
+
+    #[test]
+    fn test_post_phase_serializes_snake_case() {
+        // All phase variants must serialize to lowercase snake_case strings
+        // so the frontend can match them literally.
+        let cases = [
+            (PostPhase::Downloading,     "\"downloading\""),
+            (PostPhase::Decoding,        "\"decoding\""),
+            (PostPhase::Encoding,        "\"encoding\""),
+            (PostPhase::DedupCheck,      "\"dedup_check\""),
+            (PostPhase::Finalizing,      "\"finalizing\""),
+            (PostPhase::ProcessingVideo, "\"processing_video\""),
+        ];
+        for (phase, expected) in &cases {
+            let got = serde_json::to_string(phase).expect("serialize PostPhase");
+            assert_eq!(&got, expected, "unexpected serialization for {:?}", phase);
+        }
+    }
+
+    // ── ActivePostInfo ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_active_post_info_new_fields() {
+        let info = ActivePostInfo::new(42, PostPhase::Downloading);
+        assert_eq!(info.post_id, 42);
+        assert_eq!(info.phase, PostPhase::Downloading);
+        // started_at must be a reasonable epoch second (after 2020-01-01).
+        assert!(info.started_at > 1_577_836_800, "started_at should be a real timestamp");
+    }
+
+    #[test]
+    fn test_active_post_info_serializes_to_json() {
+        let info = ActivePostInfo::new(7, PostPhase::Encoding);
+        let json = serde_json::to_value(&info).expect("serialize ActivePostInfo");
+        assert_eq!(json["post_id"], 7);
+        assert_eq!(json["phase"], "encoding");
+        assert!(json["started_at"].is_number());
+    }
+
+    // ── active_posts DashMap tracking ─────────────────────────────────────────
+
+    #[test]
+    fn test_active_posts_insert_update_remove() {
+        let active: ActivePosts = Arc::new(DashMap::new());
+
+        // Insert a post in the Downloading phase.
+        active.insert(100, ActivePostInfo::new(100, PostPhase::Downloading));
+        assert!(active.contains_key(&100));
+        assert_eq!(active.get(&100).unwrap().phase, PostPhase::Downloading);
+
+        // Transition to Encoding.
+        if let Some(mut entry) = active.get_mut(&100) {
+            entry.phase = PostPhase::Encoding;
+        }
+        assert_eq!(active.get(&100).unwrap().phase, PostPhase::Encoding);
+
+        // Remove on completion.
+        active.remove(&100);
+        assert!(!active.contains_key(&100));
+    }
+
+    #[test]
+    fn test_active_posts_concurrent_inserts() {
+        // Verify DashMap handles multiple concurrent keys without collision.
+        let active: ActivePosts = Arc::new(DashMap::new());
+        for id in 0..20i32 {
+            active.insert(id, ActivePostInfo::new(id, PostPhase::Downloading));
+        }
+        assert_eq!(active.len(), 20);
+        for id in 0..20i32 {
+            active.remove(&id);
+        }
+        assert!(active.is_empty());
+    }
+
+    #[test]
+    fn test_queue_state_includes_active_posts() {
+        // QueueState must expose active_posts and start empty.
+        let s = QueueState::new();
+        assert!(s.active_posts.is_empty(), "active_posts must start empty");
+
+        s.active_posts.insert(5, ActivePostInfo::new(5, PostPhase::Finalizing));
+        assert_eq!(s.active_posts.len(), 1);
+    }
 
     // ── QueueState ────────────────────────────────────────────────────────────
 
@@ -803,7 +997,7 @@ mod tests {
             released: false,
         };
 
-        process_image_post(&pool, &redis_client, &dirs, &post, &img_path)
+        process_image_post(&pool, &redis_client, &dirs, &Arc::new(DashMap::new()), &post, &img_path)
             .await
             .expect("process_image_post must succeed");
 
@@ -858,5 +1052,6 @@ mod tests {
         assert_eq!(json["pending"], 5, "pending counter mismatch");
         assert_eq!(json["total"], 10, "total counter mismatch");
         assert_eq!(json["running"], true, "running flag mismatch");
+        assert!(json["active_posts"].is_array(), "active_posts must be a JSON array");
     }
 }

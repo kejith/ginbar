@@ -34,18 +34,27 @@ type DuplicateEntry struct {
 	HammingDistance   int32  `json:"hamming_distance"`
 }
 
+// ActivePostEntry describes a single in-flight post and its current pipeline phase.
+// Populated from the Rust worker's per-post tracking and included in QueueSnapshot.
+type ActivePostEntry struct {
+	PostID     int32  `json:"post_id"`
+	Phase      string `json:"phase"`
+	ElapsedSec int64  `json:"elapsed_sec"`
+}
+
 // QueueSnapshot is the JSON-serialisable state of the processing queue.
 // Sent via SSE to the admin panel and returned by the per-post status endpoint.
 type QueueSnapshot struct {
-	Pending    int     `json:"pending"`
-	Active     int     `json:"active"`
-	Total      int     `json:"total"`
-	Processed  int     `json:"processed"`
-	Imported   int     `json:"imported"`
-	Failed     int     `json:"failed"`
-	RatePerSec float64 `json:"rate_per_sec"`
-	ETASec     int     `json:"eta_sec"`
-	Running    bool    `json:"running"`
+	Pending     int               `json:"pending"`
+	Active      int               `json:"active"`
+	Total       int               `json:"total"`
+	Processed   int               `json:"processed"`
+	Imported    int               `json:"imported"`
+	Failed      int               `json:"failed"`
+	RatePerSec  float64           `json:"rate_per_sec"`
+	ETASec      int               `json:"eta_sec"`
+	Running     bool              `json:"running"`
+	ActivePosts []ActivePostEntry `json:"active_posts,omitempty"`
 }
 
 // ProcessQueue is a lightweight proxy that communicates with the external Rust
