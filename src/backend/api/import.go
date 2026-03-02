@@ -71,10 +71,6 @@ PostID   int32  `json:"post_id"`
 Image    string `json:"image"`
 }
 
-// importConcurrency caps simultaneous download+process goroutines.
-// Must match the constant referenced in import_test.go.
-const importConcurrency = 16
-
 // pr0grammPageDelay is the minimum pause between successive API page requests
 // to avoid triggering rate limiting.
 const pr0grammPageDelay = 500 * time.Millisecond
@@ -112,14 +108,6 @@ SkippedDedup  int      `json:"skipped_dedup"`  // URL already in DB
 InsertErrors  int      `json:"insert_errors"`  // CreateDirtyPost failures
 }
 
-type sseProcessingEvent struct {
-Phase     ssePhase `json:"phase"`
-Total     int      `json:"total"`
-Processed int      `json:"processed"`
-Imported  int      `json:"imported"`
-Failed    int      `json:"failed"`
-}
-
 type sseDoneEvent struct {
 Phase    ssePhase `json:"phase"`
 Total    int      `json:"total"`
@@ -127,18 +115,13 @@ Imported int      `json:"imported"`
 Failed   int      `json:"failed"`
 }
 
-type sseErrorEvent struct {
-Phase   ssePhase `json:"phase"`
-Message string   `json:"message"`
-}
-
 // ── SSE wire helper ───────────────────────────────────────────────────────────
 
 // writeSSE marshals v as a JSON SSE data frame and flushes immediately.
 func writeSSE(w *bufio.Writer, v any) {
 b, _ := json.Marshal(v)
-fmt.Fprintf(w, "data: %s\n\n", b)
-w.Flush()
+_, _ = fmt.Fprintf(w, "data: %s\n\n", b)
+_ = w.Flush()
 }
 
 // ── Handler ───────────────────────────────────────────────────────────────────
@@ -450,6 +433,8 @@ slog.String("total_elapsed", time.Since(importStart).String()),
 // processAndFinalizeDirtyPost downloads the image at imageURL, runs the image
 // pipeline, and calls FinalizePost to make the dirty row visible.
 // On any failure the placeholder row is deleted to free the URL for future imports.
+//
+//nolint:unused
 func (s *Server) processAndFinalizeDirtyPost(ctx context.Context, postID int32, imageURL string) error {
 fnStart := time.Now()
 
@@ -461,7 +446,7 @@ _ = s.store.DeleteDirtyPost(ctx, postID)
 }
 return fmt.Errorf("download failed: %w", err)
 }
-defer os.Remove(tmpPath)
+defer func() { _ = os.Remove(tmpPath) }()
 s.log.DebugContext(ctx, "import: download complete",
 slog.Int("post_id", int(postID)),
 slog.String("url", imageURL),
@@ -557,7 +542,7 @@ tmpPath, err := downloadPr0grammFile(imageURL, s.dirs.Tmp)
 if err != nil {
 return nil, "download failed: " + err.Error()
 }
-defer os.Remove(tmpPath)
+defer func() { _ = os.Remove(tmpPath) }()
 
 post, err := s.processAndInsertPostCtx(ctx, imageURL, tmpPath, userName, "nsfp")
 if err != nil {
@@ -669,7 +654,7 @@ resp, err := pr0grammClient.Do(req)
 if err != nil {
 return "", fmt.Errorf("GET %s: %w", imageURL, err)
 }
-defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 if resp.StatusCode != http.StatusOK {
 return "", fmt.Errorf("unexpected status %d for %s", resp.StatusCode, imageURL)
@@ -685,7 +670,7 @@ f, err := os.Create(dst)
 if err != nil {
 return "", fmt.Errorf("create %s: %w", dst, err)
 }
-defer f.Close()
+defer func() { _ = f.Close() }()
 
 if _, err = io.Copy(f, resp.Body); err != nil {
 _ = os.Remove(dst)

@@ -180,8 +180,8 @@ func (s *Server) AdminQueueStream(c fiber.Ctx) error {
 			case <-poll.C:
 				writeSSE(w, s.queue.Snapshot())
 			case <-heartbeat.C:
-				fmt.Fprintf(w, ": heartbeat\n\n")
-				w.Flush()
+				_, _ = fmt.Fprintf(w, ": heartbeat\n\n")
+				_ = w.Flush()
 			}
 		}
 	})

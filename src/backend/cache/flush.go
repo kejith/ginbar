@@ -238,7 +238,7 @@ func writeEntityTx(
 	br := tx.SendBatch(ctx, batch)
 	for i := 0; i < batch.Len(); i++ {
 		if _, execErr := br.Exec(); execErr != nil {
-			br.Close()
+			_ = br.Close()
 			return fmt.Errorf("batch exec[%d]: %w", i, execErr)
 		}
 	}

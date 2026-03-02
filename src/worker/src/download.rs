@@ -35,7 +35,7 @@ pub async fn download_file(client: &reqwest::Client, url: &str, dir: &Path) -> R
     let parsed: reqwest::Url = url.parse().context("invalid download URL")?;
     let basename = parsed
         .path_segments()
-        .and_then(|s| s.last())
+        .and_then(|mut s| s.next_back())
         .unwrap_or("download");
     let dst = dir.join(basename);
 
@@ -49,7 +49,9 @@ pub async fn download_file(client: &reqwest::Client, url: &str, dir: &Path) -> R
         anyhow::bail!("download: unexpected status {} for {}", resp.status(), url);
     }
 
-    stream_to_file(resp, &dst).await.context("download: stream to file")?;
+    stream_to_file(resp, &dst)
+        .await
+        .context("download: stream to file")?;
 
     debug!(url, path = %dst.display(), "downloaded file");
     Ok(dst)
@@ -64,7 +66,7 @@ pub async fn download_pr0gramm_file(
     let parsed: reqwest::Url = url.parse().context("invalid pr0gramm URL")?;
     let basename = parsed
         .path_segments()
-        .and_then(|s| s.last())
+        .and_then(|mut s| s.next_back())
         .unwrap_or("download");
     let dst = dir.join(basename);
 
@@ -84,7 +86,9 @@ pub async fn download_pr0gramm_file(
         );
     }
 
-    stream_to_file(resp, &dst).await.context("pr0gramm download: stream to file")?;
+    stream_to_file(resp, &dst)
+        .await
+        .context("pr0gramm download: stream to file")?;
 
     debug!(url, path = %dst.display(), "downloaded pr0gramm file");
     Ok(dst)
@@ -116,7 +120,11 @@ mod tests {
     fn test_build_client_succeeds() {
         // TLS backend initialisation and socket config must not fail.
         let result = build_client(8);
-        assert!(result.is_ok(), "build_client must succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "build_client must succeed: {:?}",
+            result.err()
+        );
     }
 
     #[test]

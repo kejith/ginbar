@@ -90,13 +90,17 @@ fn bench_convert_to_avif_fullres(c: &mut Criterion) {
 
         // In-process SVT-AV1 bindings
         let img = image::open(path).expect("load image for bench");
-        group.bench_with_input(BenchmarkId::new("inprocess_crf18_preset8", name), &img, |b, img| {
-            b.iter(|| {
-                let (dirs, _tmp) = bench_dirs();
-                let dst = dirs.image.join("out.avif");
-                avif::encode_avif(img, &dst, 18, 8, 920, 0).unwrap();
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("inprocess_crf18_preset8", name),
+            &img,
+            |b, img| {
+                b.iter(|| {
+                    let (dirs, _tmp) = bench_dirs();
+                    let dst = dirs.image.join("out.avif");
+                    avif::encode_avif(img, &dst, 18, 8, 920, 0).unwrap();
+                });
+            },
+        );
     }
 
     group.finish();
@@ -144,11 +148,15 @@ fn bench_compute_phash(c: &mut Criterion) {
         // Load the image once, benchmark only the hashing.
         let img = image::open(path).expect("load image");
 
-        group.bench_with_input(BenchmarkId::new("double_gradient_16x16", name), &img, |b, img| {
-            b.iter(|| {
-                std::hint::black_box(processing::compute_phash(img));
-            });
-        });
+        group.bench_with_input(
+            BenchmarkId::new("double_gradient_16x16", name),
+            &img,
+            |b, img| {
+                b.iter(|| {
+                    std::hint::black_box(processing::compute_phash(img));
+                });
+            },
+        );
     }
 
     group.finish();
@@ -175,7 +183,9 @@ fn bench_create_thumbnail(c: &mut Criterion) {
                 let (dirs, _tmp) = bench_dirs();
                 let dst = dirs.thumbnail.join("thumb.avif");
                 rt.block_on(async {
-                    processing::create_thumbnail(&img, &dst, &dirs).await.unwrap();
+                    processing::create_thumbnail(&img, &dst, &dirs)
+                        .await
+                        .unwrap();
                 });
             });
         });
@@ -202,7 +212,9 @@ fn bench_process_image(c: &mut Criterion) {
                 || {
                     // Setup: create dirs and copy input so each iteration has a fresh file.
                     let (dirs, tmp) = bench_dirs();
-                    let src = dirs.upload.join(format!("input_{}.jpg", processing::generate_name()));
+                    let src = dirs
+                        .upload
+                        .join(format!("input_{}.jpg", processing::generate_name()));
                     std::fs::copy(p, &src).unwrap();
                     (dirs, tmp, src)
                 },
@@ -498,41 +510,25 @@ fn bench_decode_jpeg(c: &mut Criterion) {
         }
 
         // turbojpeg (libjpeg-turbo) — no DCT downscale
-        group.bench_with_input(
-            BenchmarkId::new("turbojpeg_full", name),
-            &path,
-            |b, &p| {
-                b.iter(|| {
-                    std::hint::black_box(
-                        processing::decode_jpeg_turbo(Path::new(p), 0).unwrap()
-                    );
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("turbojpeg_full", name), &path, |b, &p| {
+            b.iter(|| {
+                std::hint::black_box(processing::decode_jpeg_turbo(Path::new(p), 0).unwrap());
+            });
+        });
 
         // turbojpeg with DCT 1/2 downscale (for images > 2× target width)
-        group.bench_with_input(
-            BenchmarkId::new("turbojpeg_half", name),
-            &path,
-            |b, &p| {
-                b.iter(|| {
-                    std::hint::black_box(
-                        processing::decode_jpeg_turbo(Path::new(p), 920).unwrap()
-                    );
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("turbojpeg_half", name), &path, |b, &p| {
+            b.iter(|| {
+                std::hint::black_box(processing::decode_jpeg_turbo(Path::new(p), 920).unwrap());
+            });
+        });
 
         // image crate (zune-jpeg under the hood)
-        group.bench_with_input(
-            BenchmarkId::new("image_crate", name),
-            &path,
-            |b, &p| {
-                b.iter(|| {
-                    std::hint::black_box(image::open(p).unwrap());
-                });
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("image_crate", name), &path, |b, &p| {
+            b.iter(|| {
+                std::hint::black_box(image::open(p).unwrap());
+            });
+        });
     }
 
     group.finish();

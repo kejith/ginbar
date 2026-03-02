@@ -39,8 +39,7 @@ fn suppress_stdio_for<T, F: FnOnce() -> T>(f: F) -> T {
     }
 
     unsafe {
-        let devnull =
-            libc::open(b"/dev/null\0".as_ptr() as *const libc::c_char, libc::O_WRONLY);
+        let devnull = libc::open(c"/dev/null".as_ptr(), libc::O_WRONLY);
         let saved_out = libc::dup(1);
         let saved_err = libc::dup(2);
         libc::dup2(devnull, 1);
@@ -97,7 +96,11 @@ pub fn encode_avif(
     threads: u32,
 ) -> Result<(i32, i32)> {
     let fn_start = std::time::Instant::now();
-    let threads = if threads == 0 { encoder_thread_count() } else { threads };
+    let threads = if threads == 0 {
+        encoder_thread_count()
+    } else {
+        threads
+    };
 
     // ── Step 1: Resize if needed ─────────────────────────────────────────────
     //
@@ -136,7 +139,11 @@ pub fn encode_avif(
             // Ensure even dimensions for YUV420
             let new_w = new_w & !1;
             let new_h = new_h & !1;
-            std::borrow::Cow::Owned(img.resize_exact(new_w, new_h, image::imageops::FilterType::Triangle))
+            std::borrow::Cow::Owned(img.resize_exact(
+                new_w,
+                new_h,
+                image::imageops::FilterType::Triangle,
+            ))
         }
     } else {
         // Ensure even dimensions
@@ -162,7 +169,10 @@ pub fn encode_avif(
 
     // ── Fallback: dimensions below SVT-AV1 64×64 minimum ────────────────────
     if width < 64 || height < 64 {
-        debug!(width, height, "image below 64×64 minimum, using ravif directly");
+        debug!(
+            width,
+            height, "image below 64×64 minimum, using ravif directly"
+        );
         return encode_avif_ravif(&img, dst);
     }
 
@@ -185,14 +195,7 @@ pub fn encode_avif(
     // ── Step 3: Encode with SVT-AV1 ─────────────────────────────────────────
     let svt_start = std::time::Instant::now();
     match encode_av1_raw_full_range(
-        &y_plane,
-        &u_plane,
-        &v_plane,
-        width,
-        height,
-        crf,
-        preset,
-        threads,
+        &y_plane, &u_plane, &v_plane, width, height, crf, preset, threads,
     ) {
         Ok(av1_data) => {
             debug!(
@@ -259,7 +262,11 @@ pub fn encode_avif(
 /// the AVIF spec defaults to full-range when no colour-info box is present.
 /// Feed the output to [`encode_av1_raw_full_range`] so the AV1 bitstream
 /// colour-range signal matches the data values.
-pub fn rgb_to_yuv420_full_range(rgb: &image::RgbImage, width: u32, height: u32) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+pub fn rgb_to_yuv420_full_range(
+    rgb: &image::RgbImage,
+    width: u32,
+    height: u32,
+) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     let w = width as usize;
     let h = height as usize;
     let cw = w / 2;
@@ -329,7 +336,11 @@ pub fn rgb_to_yuv420_full_range(rgb: &image::RgbImage, width: u32, height: u32) 
 ///   Y  =  16 + (65.481 * R + 128.553 * G +  24.966 * B) / 255  → [16, 235]
 ///   Cb = 128 + (-37.797 * R -  74.203 * G + 112.0   * B) / 255 → [16, 240]
 ///   Cr = 128 + (112.0   * R -  93.786 * G -  18.214 * B) / 255 → [16, 240]
-pub fn rgb_to_yuv420(rgb: &image::RgbImage, width: u32, height: u32) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+pub fn rgb_to_yuv420(
+    rgb: &image::RgbImage,
+    width: u32,
+    height: u32,
+) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     let w = width as usize;
     let h = height as usize;
     let cw = w / 2;
@@ -391,6 +402,8 @@ pub fn rgb_to_yuv420(rgb: &image::RgbImage, width: u32, height: u32) -> (Vec<u8>
 }
 
 /// Encode raw YUV420 data to AV1 bitstream using SVT-AV1.
+#[allow(dead_code)]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn encode_av1_raw(
     y_plane: &[u8],
     u_plane: &[u8],
@@ -435,10 +448,10 @@ pub(crate) fn encode_av1_raw(
         y_plane,
         u_plane,
         v_plane,
-        width,          // y_stride
-        width / 2,      // cb_stride
-        width / 2,      // cr_stride
-        (width * height * 3 / 2) as u32, // total frame size
+        width,                  // y_stride
+        width / 2,              // cb_stride
+        width / 2,              // cr_stride
+        width * height * 3 / 2, // total frame size
     );
 
     encoder
@@ -474,7 +487,11 @@ pub(crate) fn encode_avif_ravif(img: &DynamicImage, dst: &Path) -> Result<(i32, 
     let pixels: Vec<RGB8> = rgb
         .as_raw()
         .chunks_exact(3)
-        .map(|c| RGB8 { r: c[0], g: c[1], b: c[2] })
+        .map(|c| RGB8 {
+            r: c[0],
+            g: c[1],
+            b: c[2],
+        })
         .collect();
 
     let encoded = Encoder::new()
@@ -524,6 +541,7 @@ pub fn wrap_avif_container(av1_data: &[u8], width: u32, height: u32) -> Result<V
 /// Identical to [`encode_av1_raw`] except that it sets
 /// `color_range = CrFullRange` so the AV1 bitstream signals full-range
 /// values (0-255 for Y, Cb, Cr), as produced by `turbojpeg::decompress_to_yuv`.
+#[allow(clippy::too_many_arguments)]
 fn encode_av1_raw_full_range(
     y_plane: &[u8],
     u_plane: &[u8],
@@ -553,7 +571,7 @@ fn encode_av1_raw_full_range(
         width,
         width / 2,
         width / 2,
-        (width * height * 3 / 2) as u32,
+        width * height * 3 / 2,
     );
 
     encoder
@@ -576,6 +594,7 @@ fn encode_av1_raw_full_range(
 /// Used by `process_image_v_d` to skip the `rgb_to_yuv420` conversion step
 /// by feeding turbojpeg's native YUV output directly to SVT-AV1.
 /// The resulting AVIF is tagged full-range in the AV1 bitstream.
+#[allow(clippy::too_many_arguments)]
 pub fn encode_avif_from_yuv_planes(
     y_plane: &[u8],
     u_plane: &[u8],
@@ -638,7 +657,10 @@ mod tests {
         // Full-range: black = Y=0, Cb=128, Cr=128
         let rgb = solid_rgb(0, 0, 0, 2, 2);
         let (y, u, v) = rgb_to_yuv420_full_range(&rgb, 2, 2);
-        assert!(y.iter().all(|&p| p == 0), "Y must be 0 for black (full range)");
+        assert!(
+            y.iter().all(|&p| p == 0),
+            "Y must be 0 for black (full range)"
+        );
         assert!(u.iter().all(|&p| p == 128), "Cb must be 128 for black");
         assert!(v.iter().all(|&p| p == 128), "Cr must be 128 for black");
     }
@@ -648,7 +670,10 @@ mod tests {
         // Full-range: white = Y=255, Cb=128, Cr=128
         let rgb = solid_rgb(255, 255, 255, 2, 2);
         let (y, u, v) = rgb_to_yuv420_full_range(&rgb, 2, 2);
-        assert!(y.iter().all(|&p| p == 255), "Y must be 255 for white (full range)");
+        assert!(
+            y.iter().all(|&p| p == 255),
+            "Y must be 255 for white (full range)"
+        );
         assert!(u.iter().all(|&p| p == 128), "Cb must be 128 for white");
         assert!(v.iter().all(|&p| p == 128), "Cr must be 128 for white");
     }
@@ -659,24 +684,46 @@ mod tests {
         let rgb = solid_rgb(128, 128, 128, 2, 2);
         let (y, u, v) = rgb_to_yuv420_full_range(&rgb, 2, 2);
         // Y should be approximately 128 (±2 rounding)
-        assert!(y.iter().all(|&p| (p as i32 - 128).abs() <= 2),
-            "Y must be ~128 for mid-gray; got {:?}", &y[..4]);
-        assert!(u.iter().all(|&p| p == 128), "Cb must be 128 for neutral gray");
-        assert!(v.iter().all(|&p| p == 128), "Cr must be 128 for neutral gray");
+        assert!(
+            y.iter().all(|&p| (p as i32 - 128).abs() <= 2),
+            "Y must be ~128 for mid-gray; got {:?}",
+            &y[..4]
+        );
+        assert!(
+            u.iter().all(|&p| p == 128),
+            "Cb must be 128 for neutral gray"
+        );
+        assert!(
+            v.iter().all(|&p| p == 128),
+            "Cr must be 128 for neutral gray"
+        );
     }
 
     #[test]
     fn test_yuv420_full_range_y_is_always_in_0_255() {
         // For any solid colour, Y must stay in 0..=255 (no clamping overflow).
         for &(r, g, b) in &[
-            (255u8, 0, 0), (0, 255, 0), (0, 0, 255),
-            (255, 255, 0), (0, 255, 255), (255, 0, 255),
+            (255u8, 0, 0),
+            (0, 255, 0),
+            (0, 0, 255),
+            (255, 255, 0),
+            (0, 255, 255),
+            (255, 0, 255),
         ] {
             let rgb = solid_rgb(r, g, b, 2, 2);
             let (y, u, v) = rgb_to_yuv420_full_range(&rgb, 2, 2);
-            assert!(y.iter().all(|&p| p <= 255), "Y out of range for ({r},{g},{b})");
-            assert!(u.iter().all(|&p| p <= 255), "U out of range for ({r},{g},{b})");
-            assert!(v.iter().all(|&p| p <= 255), "V out of range for ({r},{g},{b})");
+            assert!(
+                y.iter().all(|&p| p <= 255),
+                "Y out of range for ({r},{g},{b})"
+            );
+            assert!(
+                u.iter().all(|&p| p <= 255),
+                "U out of range for ({r},{g},{b})"
+            );
+            assert!(
+                v.iter().all(|&p| p <= 255),
+                "V out of range for ({r},{g},{b})"
+            );
         }
     }
 
@@ -687,17 +734,19 @@ mod tests {
         // They must differ: full range spans a wider value band.
         let black = solid_rgb(0, 0, 0, 2, 2);
         let (y_full, _, _) = rgb_to_yuv420_full_range(&black, 2, 2);
-        let (y_ltd, _, _)  = rgb_to_yuv420(&black, 2, 2);
-        assert_ne!(y_full[0], y_ltd[0],
-            "full-range and limited-range should differ for black");
-        assert_eq!(y_full[0], 0,   "full-range black Y must be 0");
-        assert_eq!(y_ltd[0],  16,  "limited-range black Y must be 16");
+        let (y_ltd, _, _) = rgb_to_yuv420(&black, 2, 2);
+        assert_ne!(
+            y_full[0], y_ltd[0],
+            "full-range and limited-range should differ for black"
+        );
+        assert_eq!(y_full[0], 0, "full-range black Y must be 0");
+        assert_eq!(y_ltd[0], 16, "limited-range black Y must be 16");
 
         let white = solid_rgb(255, 255, 255, 2, 2);
         let (y_full, _, _) = rgb_to_yuv420_full_range(&white, 2, 2);
-        let (y_ltd, _, _)  = rgb_to_yuv420(&white, 2, 2);
+        let (y_ltd, _, _) = rgb_to_yuv420(&white, 2, 2);
         assert_eq!(y_full[0], 255, "full-range white Y must be 255");
-        assert_eq!(y_ltd[0],  235, "limited-range white Y must be 235");
+        assert_eq!(y_ltd[0], 235, "limited-range white Y must be 235");
     }
 
     // ── rgb_to_yuv420 (limited-range, kept for reference tests) ──────────────
@@ -717,7 +766,10 @@ mod tests {
         // BT.601: Y for black = 16 (limited-range floor)
         let rgb = solid_rgb(0, 0, 0, 2, 2);
         let (y, _u, _v) = rgb_to_yuv420(&rgb, 2, 2);
-        assert!(y.iter().all(|&v| v == 16), "all Y values should be 16 for black");
+        assert!(
+            y.iter().all(|&v| v == 16),
+            "all Y values should be 16 for black"
+        );
     }
 
     #[test]
@@ -725,10 +777,19 @@ mod tests {
         // BT.601: Y for white = 235 (limited-range ceiling)
         let rgb = solid_rgb(255, 255, 255, 2, 2);
         let (y, u, v) = rgb_to_yuv420(&rgb, 2, 2);
-        assert!(y.iter().all(|&val| val == 235), "all Y values should be 235 for white");
+        assert!(
+            y.iter().all(|&val| val == 235),
+            "all Y values should be 235 for white"
+        );
         // U and V for neutral grey/white should be near 128
-        assert!(u.iter().all(|&val| (val as i32 - 128).abs() <= 2), "U near 128 for white");
-        assert!(v.iter().all(|&val| (val as i32 - 128).abs() <= 2), "V near 128 for white");
+        assert!(
+            u.iter().all(|&val| (val as i32 - 128).abs() <= 2),
+            "U near 128 for white"
+        );
+        assert!(
+            v.iter().all(|&val| (val as i32 - 128).abs() <= 2),
+            "V near 128 for white"
+        );
     }
 
     #[test]
@@ -737,7 +798,11 @@ mod tests {
         let rgb = solid_rgb(255, 0, 0, 2, 2);
         let (y, _u, v) = rgb_to_yuv420(&rgb, 2, 2);
         assert!(y[0] > 16, "Y should be above floor for red");
-        assert!(v[0] > 180, "Cr (V) should be high for pure red, got {}", v[0]);
+        assert!(
+            v[0] > 180,
+            "Cr (V) should be high for pure red, got {}",
+            v[0]
+        );
     }
 
     #[test]
@@ -745,7 +810,11 @@ mod tests {
         // Pure blue: Cb (U) should be significantly above 128
         let rgb = solid_rgb(0, 0, 255, 2, 2);
         let (_y, u, _v) = rgb_to_yuv420(&rgb, 2, 2);
-        assert!(u[0] > 180, "Cb (U) should be high for pure blue, got {}", u[0]);
+        assert!(
+            u[0] > 180,
+            "Cb (U) should be high for pure blue, got {}",
+            u[0]
+        );
     }
 
     #[test]
@@ -825,7 +894,10 @@ mod tests {
         assert_eq!(w, 32);
         assert_eq!(h, 32);
         assert!(dst.exists(), "AVIF file must exist");
-        assert!(std::fs::metadata(&dst).unwrap().len() > 0, "AVIF file must not be empty");
+        assert!(
+            std::fs::metadata(&dst).unwrap().len() > 0,
+            "AVIF file must not be empty"
+        );
     }
 
     #[test]
@@ -903,7 +975,11 @@ mod tests {
         let dst = tmp.path().join("1thread.avif");
         let img = solid_dyn(100, 150, 200, 128, 128);
         let result = encode_avif(&img, &dst, 18, 8, 0, 1);
-        assert!(result.is_ok(), "encode with 1 thread failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "encode with 1 thread failed: {:?}",
+            result.err()
+        );
     }
 
     // ── encode_avif_ravif (direct) ────────────────────────────────────────────
@@ -927,7 +1003,11 @@ mod tests {
         let dst = tmp.path().join("tiny.avif");
         let img = solid_dyn(255, 0, 0, 4, 4);
         let result = encode_avif_ravif(&img, &dst);
-        assert!(result.is_ok(), "ravif should handle 4×4 images: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "ravif should handle 4×4 images: {:?}",
+            result.err()
+        );
     }
 
     // ── suppress_stdio_for ────────────────────────────────────────────────────
@@ -945,12 +1025,19 @@ mod tests {
         let h = rgb.height();
         let (y, u, v) = rgb_to_yuv420(&rgb, w, h);
         let result = encode_avif_from_yuv_planes(&y, &u, &v, w, h, &dst, 50, 10, 1);
-        assert!(result.is_ok(), "encode_avif_from_yuv_planes failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "encode_avif_from_yuv_planes failed: {:?}",
+            result.err()
+        );
         let (rw, rh) = result.unwrap();
         assert_eq!(rw as u32, w);
         assert_eq!(rh as u32, h);
         assert!(dst.exists(), "output AVIF file must exist");
-        assert!(std::fs::metadata(&dst).unwrap().len() > 0, "output must be non-empty");
+        assert!(
+            std::fs::metadata(&dst).unwrap().len() > 0,
+            "output must be non-empty"
+        );
     }
 
     #[test]
@@ -1005,9 +1092,19 @@ mod tests {
             }
             // Descend into known container boxes.
             let four_cc = &data[pos + 4..pos + 8];
-            let is_container = matches!(four_cc,
-                b"moov" | b"trak" | b"mdia" | b"minf" | b"stbl" | b"meta"
-                | b"ipco" | b"iprp" | b"ilst" | b"udta" | b"iinf"
+            let is_container = matches!(
+                four_cc,
+                b"moov"
+                    | b"trak"
+                    | b"mdia"
+                    | b"minf"
+                    | b"stbl"
+                    | b"meta"
+                    | b"ipco"
+                    | b"iprp"
+                    | b"ilst"
+                    | b"udta"
+                    | b"iinf"
             );
             if is_container {
                 let header = if four_cc == b"meta" { 12 } else { 8 };
@@ -1086,8 +1183,14 @@ mod tests {
         suppress_stdio_for(|| ());
         let out_flags = unsafe { libc::fcntl(1, libc::F_GETFD) };
         let err_flags = unsafe { libc::fcntl(2, libc::F_GETFD) };
-        assert!(out_flags >= 0, "stdout fd must still be valid after suppress");
-        assert!(err_flags >= 0, "stderr fd must still be valid after suppress");
+        assert!(
+            out_flags >= 0,
+            "stdout fd must still be valid after suppress"
+        );
+        assert!(
+            err_flags >= 0,
+            "stderr fd must still be valid after suppress"
+        );
     }
 
     #[test]
@@ -1096,6 +1199,9 @@ mod tests {
         suppress_stdio_for(|| ());
         suppress_stdio_for(|| ());
         let out_flags = unsafe { libc::fcntl(1, libc::F_GETFD) };
-        assert!(out_flags >= 0, "stdout fd must be valid after two suppress calls");
+        assert!(
+            out_flags >= 0,
+            "stdout fd must be valid after two suppress calls"
+        );
     }
 }

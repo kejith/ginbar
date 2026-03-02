@@ -66,7 +66,11 @@ impl ActivePostInfo {
             .duration_since(UNIX_EPOCH)
             .unwrap_or_default()
             .as_secs();
-        Self { post_id, phase, started_at }
+        Self {
+            post_id,
+            phase,
+            started_at,
+        }
     }
 }
 
@@ -140,7 +144,16 @@ pub async fn run(
     let mut ticker = tokio::time::interval(poll_interval);
 
     // Drain on startup so posts from a previous run are picked up immediately.
-    drain(&pool, &redis_client, &dirs, &http_client, &state, concurrency, download_concurrency).await;
+    drain(
+        &pool,
+        &redis_client,
+        &dirs,
+        &http_client,
+        &state,
+        concurrency,
+        download_concurrency,
+    )
+    .await;
 
     loop {
         tokio::select! {
@@ -165,10 +178,7 @@ pub async fn run(
 }
 
 /// Subscribe to Redis Pub/Sub for queue wake-up notifications.
-async fn subscribe_loop(
-    client: redis::Client,
-    tx: tokio::sync::mpsc::Sender<()>,
-) -> Result<()> {
+async fn subscribe_loop(client: redis::Client, tx: tokio::sync::mpsc::Sender<()>) -> Result<()> {
     let mut pubsub = client.get_async_pubsub().await?;
     pubsub.subscribe(REDIS_CHANNEL).await?;
     info!("subscribed to redis channel {}", REDIS_CHANNEL);
@@ -241,7 +251,16 @@ async fn drain(
     let dl_pool = pool.clone();
     let dl_active = state.active_posts.clone();
     let dl_handle = tokio::spawn(async move {
-        download_stage(dirty, &dl_dirs, &dl_http, &dl_pool, download_concurrency, dl_active, dl_tx).await;
+        download_stage(
+            dirty,
+            &dl_dirs,
+            &dl_http,
+            &dl_pool,
+            download_concurrency,
+            dl_active,
+            dl_tx,
+        )
+        .await;
     });
 
     // Stage 2: process posts as they arrive from the download channel.
@@ -258,13 +277,9 @@ async fn drain(
                 state.active.fetch_add(1, Ordering::Relaxed);
 
                 let post_id = item.post.id;
-                let result = process_downloaded_post(
-                    &pool,
-                    &redis_client,
-                    &dirs,
-                    &state.active_posts,
-                    item,
-                ).await;
+                let result =
+                    process_downloaded_post(&pool, &redis_client, &dirs, &state.active_posts, item)
+                        .await;
 
                 state.active_posts.remove(&post_id);
                 state.active.fetch_sub(1, Ordering::Relaxed);
@@ -337,7 +352,10 @@ async fn download_stage(
             let active_posts = active_posts.clone();
 
             async move {
-                active_posts.insert(post.id, ActivePostInfo::new(post.id, PostPhase::Downloading));
+                active_posts.insert(
+                    post.id,
+                    ActivePostInfo::new(post.id, PostPhase::Downloading),
+                );
 
                 let result = resolve_source(&pool, &dirs, &http_client, &post).await;
                 match result {
@@ -354,7 +372,11 @@ async fn download_stage(
                             .map(|c| c.to_string())
                             .collect::<Vec<_>>()
                             .join(": ");
-                        warn!(post_id = post.id, err = err_chain, "download failed, skipping post");
+                        warn!(
+                            post_id = post.id,
+                            err = err_chain,
+                            "download failed, skipping post"
+                        );
                         let _ = db::delete_dirty_post(&pool, post.id).await;
                     }
                 }
@@ -430,7 +452,15 @@ async fn process_downloaded_post(
     let proc_start = std::time::Instant::now();
     let result = match file_type {
         FileType::Image => {
-            process_image_post(pool, redis_client, dirs, active_posts, &item.post, &item.path).await
+            process_image_post(
+                pool,
+                redis_client,
+                dirs,
+                active_posts,
+                &item.post,
+                &item.path,
+            )
+            .await
         }
         FileType::Video(mime) => {
             process_video_post(pool, dirs, active_posts, &item.post, &item.path, &mime).await
@@ -626,7 +656,10 @@ pub(crate) async fn process_video_post(
 }
 
 /// Publish current queue status to Redis.
-pub(crate) async fn publish_status(redis_client: &redis::Client, state: &Arc<QueueState>) -> Result<()> {
+pub(crate) async fn publish_status(
+    redis_client: &redis::Client,
+    state: &Arc<QueueState>,
+) -> Result<()> {
     // Collect a snapshot of per-post phase info (cheap — reads from DashMap shards).
     let now_secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -820,7 +853,11 @@ async fn drain_regen(
                         .map(|c| c.to_string())
                         .collect::<Vec<_>>()
                         .join(": ");
-                    warn!(post_id = item.post_id, err = err_chain, "regen: item failed");
+                    warn!(
+                        post_id = item.post_id,
+                        err = err_chain,
+                        "regen: item failed"
+                    );
                 } else {
                     debug!(post_id = item.post_id, "regen: item complete");
                 }
@@ -968,11 +1005,11 @@ mod tests {
         // All phase variants must serialize to lowercase snake_case strings
         // so the frontend can match them literally.
         let cases = [
-            (PostPhase::Downloading,     "\"downloading\""),
-            (PostPhase::Decoding,        "\"decoding\""),
-            (PostPhase::Encoding,        "\"encoding\""),
-            (PostPhase::DedupCheck,      "\"dedup_check\""),
-            (PostPhase::Finalizing,      "\"finalizing\""),
+            (PostPhase::Downloading, "\"downloading\""),
+            (PostPhase::Decoding, "\"decoding\""),
+            (PostPhase::Encoding, "\"encoding\""),
+            (PostPhase::DedupCheck, "\"dedup_check\""),
+            (PostPhase::Finalizing, "\"finalizing\""),
             (PostPhase::ProcessingVideo, "\"processing_video\""),
         ];
         for (phase, expected) in &cases {
@@ -989,7 +1026,10 @@ mod tests {
         assert_eq!(info.post_id, 42);
         assert_eq!(info.phase, PostPhase::Downloading);
         // started_at must be a reasonable epoch second (after 2020-01-01).
-        assert!(info.started_at > 1_577_836_800, "started_at should be a real timestamp");
+        assert!(
+            info.started_at > 1_577_836_800,
+            "started_at should be a real timestamp"
+        );
     }
 
     #[test]
@@ -1043,7 +1083,8 @@ mod tests {
         let s = QueueState::new();
         assert!(s.active_posts.is_empty(), "active_posts must start empty");
 
-        s.active_posts.insert(5, ActivePostInfo::new(5, PostPhase::Finalizing));
+        s.active_posts
+            .insert(5, ActivePostInfo::new(5, PostPhase::Finalizing));
         assert_eq!(s.active_posts.len(), 1);
     }
 
@@ -1091,7 +1132,9 @@ mod tests {
 
     #[test]
     fn test_classify_image_extensions() {
-        for ext in &["jpg", "jpeg", "png", "gif", "webp", "avif", "jxl", "bmp", "tiff", "tif"] {
+        for ext in &[
+            "jpg", "jpeg", "png", "gif", "webp", "avif", "jxl", "bmp", "tiff", "tif",
+        ] {
             let p = std::path::PathBuf::from("file").with_extension(ext);
             assert_eq!(
                 classify_file(&p),
@@ -1150,7 +1193,10 @@ mod tests {
     fn test_classify_uppercase_extension() {
         // Extensions must be matched case-insensitively.
         assert_eq!(classify_file(Path::new("photo.JPG")), FileType::Image);
-        assert_eq!(classify_file(Path::new("clip.MP4")), FileType::Video("video/mp4".to_string()));
+        assert_eq!(
+            classify_file(Path::new("clip.MP4")),
+            FileType::Video("video/mp4".to_string())
+        );
     }
 
     #[test]
@@ -1193,8 +1239,12 @@ mod tests {
             upload: r.join("upload"),
         };
         for d in [
-            &dirs.image, &dirs.thumbnail, &dirs.video,
-            &dirs.tmp, &dirs.upload, &dirs.tmp.join("thumbnails"),
+            &dirs.image,
+            &dirs.thumbnail,
+            &dirs.video,
+            &dirs.tmp,
+            &dirs.upload,
+            &dirs.tmp.join("thumbnails"),
         ] {
             std::fs::create_dir_all(d).unwrap();
         }
@@ -1251,15 +1301,15 @@ mod tests {
 
         // Write a synthetic JPEG to the upload directory.
         let img_path = dirs.upload.join("upload_e2e.jpg");
-        let img = image::DynamicImage::ImageRgb8(
-            image::ImageBuffer::from_pixel(256u32, 256u32, image::Rgb([100u8, 150, 200]))
-        );
+        let img = image::DynamicImage::ImageRgb8(image::ImageBuffer::from_pixel(
+            256u32,
+            256u32,
+            image::Rgb([100u8, 150, 200]),
+        ));
         img.save(&img_path).unwrap();
 
         let unique_url = format!("https://test-queue/{}", uuid::Uuid::new_v4());
-        let id = insert_queue_test_post(
-            &pool, &unique_url, img_path.to_str().unwrap(),
-        ).await;
+        let id = insert_queue_test_post(&pool, &unique_url, img_path.to_str().unwrap()).await;
 
         let post = crate::db::DirtyPost {
             id,
@@ -1270,21 +1320,30 @@ mod tests {
             released: false,
         };
 
-        process_image_post(&pool, &redis_client, &dirs, &Arc::new(DashMap::new()), &post, &img_path)
-            .await
-            .expect("process_image_post must succeed");
+        process_image_post(
+            &pool,
+            &redis_client,
+            &dirs,
+            &Arc::new(DashMap::new()),
+            &post,
+            &img_path,
+        )
+        .await
+        .expect("process_image_post must succeed");
 
         // Verify finalization.
-        let row: (String, bool, i32, i32) = sqlx::query_as(
-            "SELECT filename, dirty, width, height FROM posts WHERE id = $1",
-        )
-        .bind(id)
-        .fetch_one(&pool)
-        .await
-        .expect("fetch finalized post");
+        let row: (String, bool, i32, i32) =
+            sqlx::query_as("SELECT filename, dirty, width, height FROM posts WHERE id = $1")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .expect("fetch finalized post");
 
         assert!(!row.0.is_empty(), "filename must be set after finalize");
-        assert!(!row.1, "dirty flag must be false after successful processing");
+        assert!(
+            !row.1,
+            "dirty flag must be false after successful processing"
+        );
         assert!(row.2 > 0, "width must be > 0");
         assert!(row.3 > 0, "height must be > 0");
         assert!(
@@ -1325,7 +1384,10 @@ mod tests {
         assert_eq!(json["pending"], 5, "pending counter mismatch");
         assert_eq!(json["total"], 10, "total counter mismatch");
         assert_eq!(json["running"], true, "running flag mismatch");
-        assert!(json["active_posts"].is_array(), "active_posts must be a JSON array");
+        assert!(
+            json["active_posts"].is_array(),
+            "active_posts must be a JSON array"
+        );
     }
 
     // ── RegenItem serialization ───────────────────────────────────────────────
@@ -1363,7 +1425,10 @@ mod tests {
         let json = r#"{"post_id":99,"filename":"f.avif","thumbnail_filename":"t.avif"}"#;
         let item: RegenItem = serde_json::from_str(json).expect("deserialize legacy item");
         assert_eq!(item.post_id, 99);
-        assert!(item.job_key.is_empty(), "job_key must default to empty string");
+        assert!(
+            item.job_key.is_empty(),
+            "job_key must default to empty string"
+        );
     }
 
     // ── pop_regen_items ───────────────────────────────────────────────────────
@@ -1387,8 +1452,18 @@ mod tests {
             .unwrap();
 
         let items_to_push = vec![
-            RegenItem { post_id: 1, filename: "a.avif".to_string(), thumbnail_filename: "a_t.avif".to_string(), job_key: "pop-test".to_string() },
-            RegenItem { post_id: 2, filename: "b.avif".to_string(), thumbnail_filename: "b_t.avif".to_string(), job_key: "pop-test".to_string() },
+            RegenItem {
+                post_id: 1,
+                filename: "a.avif".to_string(),
+                thumbnail_filename: "a_t.avif".to_string(),
+                job_key: "pop-test".to_string(),
+            },
+            RegenItem {
+                post_id: 2,
+                filename: "b.avif".to_string(),
+                thumbnail_filename: "b_t.avif".to_string(),
+                job_key: "pop-test".to_string(),
+            },
         ];
         for item in &items_to_push {
             let json = serde_json::to_string(item).unwrap();
@@ -1438,7 +1513,12 @@ mod tests {
             .query_async(&mut conn)
             .await
             .unwrap();
-        let valid = RegenItem { post_id: 99, filename: "v.avif".to_string(), thumbnail_filename: "v_t.avif".to_string(), job_key: "skip-test".to_string() };
+        let valid = RegenItem {
+            post_id: 99,
+            filename: "v.avif".to_string(),
+            thumbnail_filename: "v_t.avif".to_string(),
+            job_key: "skip-test".to_string(),
+        };
         let _: () = redis::cmd("RPUSH")
             .arg(REGEN_QUEUE_KEY)
             .arg(serde_json::to_string(&valid).unwrap())
@@ -1461,15 +1541,22 @@ mod tests {
         let (dirs, _tmp) = make_queue_dirs();
 
         // Finalize a post to simulate an already-processed image.
-        let id = insert_queue_test_post(&pool, &format!("https://regen-e2e/{}", uuid::Uuid::new_v4()), "").await;
+        let id = insert_queue_test_post(
+            &pool,
+            &format!("https://regen-e2e/{}", uuid::Uuid::new_v4()),
+            "",
+        )
+        .await;
         let original_filename = format!("{}.jpg", uuid::Uuid::new_v4());
-        let original_thumb    = format!("{}_thumb.jpg", uuid::Uuid::new_v4());
+        let original_thumb = format!("{}_thumb.jpg", uuid::Uuid::new_v4());
 
         // Write a synthetic JPEG as the "stored" source image.
         let src_path = dirs.image.join(&original_filename);
-        let img = image::DynamicImage::ImageRgb8(
-            image::ImageBuffer::from_pixel(300u32, 200u32, image::Rgb([180u8, 90, 40]))
-        );
+        let img = image::DynamicImage::ImageRgb8(image::ImageBuffer::from_pixel(
+            300u32,
+            200u32,
+            image::Rgb([180u8, 90, 40]),
+        ));
         img.save(&src_path).unwrap();
 
         crate::db::finalize_post(
@@ -1480,8 +1567,12 @@ mod tests {
                 thumbnail_filename: original_thumb.clone(),
                 uploaded_filename: "upload.jpg".to_string(),
                 content_type: "image".to_string(),
-                p_hash_0: 0, p_hash_1: 0, p_hash_2: 0, p_hash_3: 0,
-                width: 300, height: 200,
+                p_hash_0: 0,
+                p_hash_1: 0,
+                p_hash_2: 0,
+                p_hash_3: 0,
+                width: 300,
+                height: 200,
             },
         )
         .await
@@ -1512,12 +1603,18 @@ mod tests {
                 .await
                 .expect("fetch updated post");
 
-        assert_ne!(row.0, original_filename, "filename must have changed after regen");
+        assert_ne!(
+            row.0, original_filename,
+            "filename must have changed after regen"
+        );
         assert!(row.1 > 0, "width must be > 0 after regen");
         assert!(row.2 > 0, "height must be > 0 after regen");
 
         // New files must exist on disk.
-        assert!(dirs.image.join(&row.0).exists(), "new AVIF must exist on disk");
+        assert!(
+            dirs.image.join(&row.0).exists(),
+            "new AVIF must exist on disk"
+        );
 
         cleanup_queue_test_post(&pool, id).await;
     }
@@ -1537,6 +1634,9 @@ mod tests {
         };
 
         let result = process_regen_item(&pool, &dirs, &item).await;
-        assert!(result.is_err(), "must return error when source file is missing");
+        assert!(
+            result.is_err(),
+            "must return error when source file is missing"
+        );
     }
 }

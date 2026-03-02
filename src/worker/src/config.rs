@@ -25,20 +25,14 @@ impl Config {
                 "postgres://wallium:devpassword@localhost:5432/wallium?sslmode=disable",
             ),
             redis_url: env_or("REDIS_URL", "redis://localhost:6379"),
-            concurrency: env_or("WORKER_CONCURRENCY", "4")
-                .parse()
-                .unwrap_or(4),
+            concurrency: env_or("WORKER_CONCURRENCY", "4").parse().unwrap_or(4),
             download_concurrency: {
-                let conc: usize = env_or("WORKER_CONCURRENCY", "4")
-                    .parse()
-                    .unwrap_or(4);
+                let conc: usize = env_or("WORKER_CONCURRENCY", "4").parse().unwrap_or(4);
                 env_or("WORKER_DOWNLOAD_CONCURRENCY", &(conc * 2).to_string())
                     .parse()
                     .unwrap_or(conc * 2)
             },
-            poll_interval_secs: env_or("WORKER_POLL_INTERVAL", "5")
-                .parse()
-                .unwrap_or(5),
+            poll_interval_secs: env_or("WORKER_POLL_INTERVAL", "5").parse().unwrap_or(5),
             log_level: env_or("LOG_LEVEL", "info"),
             log_format: env_or("LOG_FORMAT", "text"),
         }
@@ -84,8 +78,7 @@ mod tests {
     fn test_config_defaults_are_sensible() {
         // When no env vars are set the defaults must be non-empty strings and
         // numeric fields must parse correctly.
-        let fallback_db =
-            "postgres://wallium:devpassword@localhost:5432/wallium?sslmode=disable";
+        let fallback_db = "postgres://wallium:devpassword@localhost:5432/wallium?sslmode=disable";
         let fallback_redis = "redis://localhost:6379";
         assert!(!fallback_db.is_empty());
         assert!(!fallback_redis.is_empty());
@@ -98,11 +91,23 @@ mod tests {
     fn test_config_from_env_always_builds() {
         // Config::from_env must not panic in any environment.
         let cfg = Config::from_env();
-        assert!(!cfg.database_url.is_empty(), "database_url must not be empty");
+        assert!(
+            !cfg.database_url.is_empty(),
+            "database_url must not be empty"
+        );
         assert!(!cfg.redis_url.is_empty(), "redis_url must not be empty");
-        assert!(cfg.concurrency >= 1, "concurrency must be at least 1 (parsed default 4)");
-        assert!(cfg.download_concurrency >= 1, "download_concurrency must be at least 1");
-        assert!(cfg.poll_interval_secs >= 1, "poll_interval must be at least 1");
+        assert!(
+            cfg.concurrency >= 1,
+            "concurrency must be at least 1 (parsed default 4)"
+        );
+        assert!(
+            cfg.download_concurrency >= 1,
+            "download_concurrency must be at least 1"
+        );
+        assert!(
+            cfg.poll_interval_secs >= 1,
+            "poll_interval must be at least 1"
+        );
     }
 
     #[test]

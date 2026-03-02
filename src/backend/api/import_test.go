@@ -683,14 +683,14 @@ func BenchmarkDownloadPr0grammFile(b *testing.B) {
 				req, _ := http.NewRequest(http.MethodGet, url, nil)
 				resp, err := pr0grammClient.Do(req)
 				if err != nil {
-					f.Close()
+					_ = f.Close()
 					b.Fatal(err)
 				}
 				start := time.Now()
 				_, _ = io.Copy(f, resp.Body)
 				_ = resp.Body.Close()
 				b.ReportMetric(float64(time.Since(start).Microseconds()), "write_µs")
-				f.Close()
+				_ = f.Close()
 				_ = os.Remove(dst)
 			}
 		})

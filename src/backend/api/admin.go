@@ -17,6 +17,7 @@ import (
 
 	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 )
 
 // ── Disk-usage helper ─────────────────────────────────────────────────────────
@@ -422,8 +423,8 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 			bufSize = 200
 		}
 		sub := rdb.Subscribe(ctx, "wallium:regen:progress")
-		defer sub.Close()
-		ch := sub.ChannelSize(bufSize)
+		defer func() { _ = sub.Close() }()
+		ch := sub.Channel(redis.WithChannelSize(bufSize))
 
 		// Initialise the per-job counter with a 24-hour TTL.
 		rdb.Set(ctx, regenDoneKey, 0, 24*time.Hour)
@@ -542,8 +543,8 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 					done = true
 				}
 			case <-heartbeat.C:
-				fmt.Fprintf(w, ": heartbeat\n\n")
-				w.Flush()
+				_, _ = fmt.Fprintf(w, ": heartbeat\n\n")
+				_ = w.Flush()
 			case <-job.Ctx().Done():
 				break loop
 			}

@@ -61,7 +61,7 @@ func ProcessImage(inputFilePath string, dirs Directories) (*ImageProcessResult, 
 		return nil, fmt.Errorf("normalize to jpeg: %w", jr.err)
 	}
 	jpegPath := jr.path
-	defer os.Remove(jpegPath)
+	defer func() { _ = os.Remove(jpegPath) }()
 
 	img, err := LoadImageFile(jpegPath)
 	if err != nil {
@@ -102,7 +102,7 @@ func LoadImageFile(inputFilePath string) (*image.Image, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open image: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	img, _, err := image.Decode(f)
 	if err != nil {
@@ -118,7 +118,7 @@ func SaveImageJPEG(img *image.Image, directory, name string) (string, error) {
 	if err != nil {
 		return filePath, fmt.Errorf("create jpeg: %w", err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	if err = jpeg.Encode(f, *img, &jpeg.Options{Quality: 100}); err != nil {
 		_ = os.Remove(filePath)
@@ -147,7 +147,7 @@ func CreateThumbnailFromImage(img *image.Image, dstFilePath string, dirs Directo
 	if err != nil {
 		return fmt.Errorf("save tmp jpeg: %w", err)
 	}
-	defer os.Remove(tmpPath)
+	defer func() { _ = os.Remove(tmpPath) }()
 
 	// CRF 30 / preset 6: great quality for 150 px, fast encode.
 	// maxWidth=0: smartcrop already cropped to 150×150, no further resize needed.

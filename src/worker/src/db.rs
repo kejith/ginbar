@@ -348,13 +348,12 @@ mod tests {
         .await
         .expect("finalize_post");
 
-        let row: (String, i32, i32, bool) = sqlx::query_as(
-            "SELECT filename, width, height, dirty FROM posts WHERE id = $1",
-        )
-        .bind(id)
-        .fetch_one(&pool)
-        .await
-        .expect("fetch post");
+        let row: (String, i32, i32, bool) =
+            sqlx::query_as("SELECT filename, width, height, dirty FROM posts WHERE id = $1")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .expect("fetch post");
 
         assert_eq!(row.0, "output.avif");
         assert_eq!(row.1, 1920);
@@ -372,7 +371,9 @@ mod tests {
         let pool = test_pool().await;
         let id = insert_test_post(&pool, "delete_dirty").await;
 
-        delete_dirty_post(&pool, id).await.expect("delete_dirty_post");
+        delete_dirty_post(&pool, id)
+            .await
+            .expect("delete_dirty_post");
 
         let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM posts WHERE id = $1")
             .bind(id)
@@ -398,15 +399,21 @@ mod tests {
                 thumbnail_filename: "t.avif".to_string(),
                 uploaded_filename: "u.jpg".to_string(),
                 content_type: "image".to_string(),
-                p_hash_0: 0, p_hash_1: 0, p_hash_2: 0, p_hash_3: 0,
-                width: 100, height: 100,
+                p_hash_0: 0,
+                p_hash_1: 0,
+                p_hash_2: 0,
+                p_hash_3: 0,
+                width: 100,
+                height: 100,
             },
         )
         .await
         .unwrap();
 
         // delete_dirty_post with WHERE dirty=TRUE must not delete the finalized row.
-        delete_dirty_post(&pool, id).await.expect("delete_dirty_post");
+        delete_dirty_post(&pool, id)
+            .await
+            .expect("delete_dirty_post");
 
         let count: (i64,) = sqlx::query_as("SELECT COUNT(*) FROM posts WHERE id = $1")
             .bind(id)
@@ -491,7 +498,10 @@ mod tests {
                 thumbnail_filename: "original_thumb.avif".to_string(),
                 uploaded_filename: "upload.jpg".to_string(),
                 content_type: "image".to_string(),
-                p_hash_0: 0, p_hash_1: 0, p_hash_2: 0, p_hash_3: 0,
+                p_hash_0: 0,
+                p_hash_1: 0,
+                p_hash_2: 0,
+                p_hash_3: 0,
                 width: 640,
                 height: 480,
             },
@@ -531,13 +541,15 @@ mod tests {
             .await
             .expect("update_post_files on dirty row");
 
-        let (dirty,): (bool,) =
-            sqlx::query_as("SELECT dirty FROM posts WHERE id = $1")
-                .bind(id)
-                .fetch_one(&pool)
-                .await
-                .expect("fetch dirty flag");
-        assert!(dirty, "dirty flag must remain true — update_post_files must not alter it");
+        let (dirty,): (bool,) = sqlx::query_as("SELECT dirty FROM posts WHERE id = $1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .expect("fetch dirty flag");
+        assert!(
+            dirty,
+            "dirty flag must remain true — update_post_files must not alter it"
+        );
 
         delete_test_post(&pool, id).await;
     }

@@ -38,13 +38,8 @@ async fn main() -> Result<()> {
     let regen_dirs = dirs.clone();
     let regen_concurrency = cfg.concurrency;
     tokio::spawn(async move {
-        if let Err(e) = queue::run_regen_queue(
-            regen_pool,
-            regen_redis,
-            regen_dirs,
-            regen_concurrency,
-        )
-        .await
+        if let Err(e) =
+            queue::run_regen_queue(regen_pool, regen_redis, regen_dirs, regen_concurrency).await
         {
             tracing::warn!("regen queue exited: {}", e);
         }

@@ -40,7 +40,7 @@ fn priority_cmd(program: &str, args: &[&str]) -> Command {
             libc::setpriority(libc::PRIO_PROCESS, 0, 19);
             // ionice -c3 (idle I/O class) via ioprio_set syscall
             // IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE=3, 0) = 3 << 13
-            libc::syscall(libc::SYS_ioprio_set, 1i64, 0i64, (3i64 << 13) | 0i64);
+            libc::syscall(libc::SYS_ioprio_set, 1i64, 0i64, 3i64 << 13);
             Ok(())
         });
     }
@@ -214,7 +214,7 @@ pub async fn normalize_to_jpeg(input: &Path, output: &Path) -> Result<()> {
         &output_str,
     ];
 
-    let mut child = priority_cmd("ffmpeg", &args)
+    let child = priority_cmd("ffmpeg", &args)
         .kill_on_drop(true)
         .spawn()
         .context("ffmpeg normalize: spawn")?;
@@ -453,9 +453,11 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("test.jpg");
         // Write a minimal synthetic JPEG via the image crate.
-        let img = image::DynamicImage::ImageRgb8(
-            image::ImageBuffer::from_pixel(320, 240, image::Rgb([128u8, 64, 200]))
-        );
+        let img = image::DynamicImage::ImageRgb8(image::ImageBuffer::from_pixel(
+            320,
+            240,
+            image::Rgb([128u8, 64, 200]),
+        ));
         img.save(&path).unwrap();
 
         let (w, h) = get_dimensions(&path).await;
@@ -483,35 +485,50 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let src = tmp.path().join("input.png");
         let dst = tmp.path().join("output.jpg");
-        let img = image::DynamicImage::ImageRgb8(
-            image::ImageBuffer::from_pixel(64, 64, image::Rgb([200u8, 100, 50]))
-        );
+        let img = image::DynamicImage::ImageRgb8(image::ImageBuffer::from_pixel(
+            64,
+            64,
+            image::Rgb([200u8, 100, 50]),
+        ));
         img.save(&src).unwrap();
 
         normalize_to_jpeg(&src, &dst).await.unwrap();
 
         assert!(dst.exists(), "output JPEG must exist");
-        assert!(std::fs::metadata(&dst).unwrap().len() > 0, "output must not be empty");
+        assert!(
+            std::fs::metadata(&dst).unwrap().len() > 0,
+            "output must not be empty"
+        );
     }
 
     // ── convert_to_avif (requires ffmpeg on PATH) ─────────────────────────────
 
     #[tokio::test]
     async fn test_convert_to_avif_with_jpeg_input() {
-        if std::process::Command::new("ffmpeg").arg("-version").output().is_err() {
+        if std::process::Command::new("ffmpeg")
+            .arg("-version")
+            .output()
+            .is_err()
+        {
             return;
         }
         let tmp = TempDir::new().unwrap();
         let src = tmp.path().join("input.jpg");
         let dst = tmp.path().join("output.avif");
 
-        let img = image::DynamicImage::ImageRgb8(
-            image::ImageBuffer::from_pixel(64, 64, image::Rgb([128u8, 200, 50])),
-        );
+        let img = image::DynamicImage::ImageRgb8(image::ImageBuffer::from_pixel(
+            64,
+            64,
+            image::Rgb([128u8, 200, 50]),
+        ));
         img.save(&src).unwrap();
 
         let result = convert_to_avif(&src, &dst, 32, 12, 0).await;
-        assert!(result.is_ok(), "convert_to_avif must succeed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "convert_to_avif must succeed: {:?}",
+            result.err()
+        );
         assert!(dst.exists(), "output AVIF must exist");
         assert!(
             std::fs::metadata(&dst).unwrap().len() > 0,
@@ -521,7 +538,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_convert_to_avif_with_max_width_downscales() {
-        if std::process::Command::new("ffmpeg").arg("-version").output().is_err() {
+        if std::process::Command::new("ffmpeg")
+            .arg("-version")
+            .output()
+            .is_err()
+        {
             return;
         }
         let tmp = TempDir::new().unwrap();
@@ -529,9 +550,11 @@ mod tests {
         let dst = tmp.path().join("scaled.avif");
 
         // 200×200 with max_width=100 → 100×100 (svtav1 requires height ≥ 64).
-        let img = image::DynamicImage::ImageRgb8(
-            image::ImageBuffer::from_pixel(200, 200, image::Rgb([100u8, 100, 100])),
-        );
+        let img = image::DynamicImage::ImageRgb8(image::ImageBuffer::from_pixel(
+            200,
+            200,
+            image::Rgb([100u8, 100, 100]),
+        ));
         img.save(&src).unwrap();
 
         let (w, _h) = convert_to_avif(&src, &dst, 32, 12, 100).await.unwrap();
@@ -565,22 +588,35 @@ mod tests {
         let o = tokio::process::Command::new("ffmpeg")
             .args([
                 "-y",
-                "-f", "lavfi",
-                "-i", "testsrc2=size=64x64:duration=2",
-                "-c:v", "libx264",
-                "-pix_fmt", "yuv420p",
-                "-t", "2",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=64x64:duration=2",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-t",
+                "2",
                 out.to_str().unwrap(),
             ])
             .output()
             .await
             .ok()?;
-        if o.status.success() { Some(out) } else { None }
+        if o.status.success() {
+            Some(out)
+        } else {
+            None
+        }
     }
 
     #[tokio::test]
     async fn test_extract_video_frame_produces_jpeg() {
-        if std::process::Command::new("ffmpeg").arg("-version").output().is_err() {
+        if std::process::Command::new("ffmpeg")
+            .arg("-version")
+            .output()
+            .is_err()
+        {
             return;
         }
         let tmp = TempDir::new().unwrap();
@@ -601,7 +637,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_extract_video_frame_decodable_by_image_crate() {
-        if std::process::Command::new("ffmpeg").arg("-version").output().is_err() {
+        if std::process::Command::new("ffmpeg")
+            .arg("-version")
+            .output()
+            .is_err()
+        {
             return;
         }
         let tmp = TempDir::new().unwrap();
@@ -613,7 +653,10 @@ mod tests {
         extract_video_frame(&video, &frame).await.unwrap();
 
         let img = image::open(&frame).expect("frame must be a decodable image");
-        assert!(img.width() > 0 && img.height() > 0, "decoded frame must have non-zero dimensions");
+        assert!(
+            img.width() > 0 && img.height() > 0,
+            "decoded frame must have non-zero dimensions"
+        );
     }
 
     #[tokio::test]

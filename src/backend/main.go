@@ -50,7 +50,7 @@ func main() {
 		log.Error("cannot connect to redis", "err", err)
 		os.Exit(1)
 	}
-	defer rdb.Close()
+	defer func() { _ = rdb.Close() }()
 	log.Info("connected to redis", "url", redisURL)
 
 	// Seed score cache from current DB aggregates so the first requests see

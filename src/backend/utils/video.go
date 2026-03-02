@@ -92,7 +92,7 @@ func CreateVideoThumbnail(inputFilePath, name string, dirs Directories) (string,
 	if err := cmd.Run(); err != nil {
 		return "", fmt.Errorf("ffmpeg thumbnail: %w — %s", err, errb.String())
 	}
-	defer os.Remove(tmpPath)
+	defer func() { _ = os.Remove(tmpPath) }()
 
 	dstPath := filepath.Join(dirs.Thumbnail, avifFilename)
 	if err := CreateThumbnailFromFile(tmpPath, dstPath, dirs); err != nil {

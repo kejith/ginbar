@@ -146,21 +146,22 @@ pub(crate) fn can_decode_natively(path: &Path) -> bool {
 pub fn decode_jpeg_turbo(path: &Path, max_decode_width: u32) -> Result<image::DynamicImage> {
     let data = std::fs::read(path).context("read JPEG file")?;
 
-    let mut decompressor = turbojpeg::Decompressor::new()
-        .map_err(|e| anyhow::anyhow!("turbojpeg init: {}", e))?;
+    let mut decompressor =
+        turbojpeg::Decompressor::new().map_err(|e| anyhow::anyhow!("turbojpeg init: {}", e))?;
 
-    let header = decompressor.read_header(&data)
+    let header = decompressor
+        .read_header(&data)
         .map_err(|e| anyhow::anyhow!("turbojpeg header: {}", e))?;
 
     // DCT downscaling: if the JPEG is much larger than our output target,
     // decode at half resolution. libjpeg-turbo's IDCT scaling is very
     // efficient — roughly 4× fewer pixels to process.
-    let use_half = max_decode_width > 0
-        && header.width > max_decode_width as usize * 2;
+    let use_half = max_decode_width > 0 && header.width > max_decode_width as usize * 2;
 
     let (width, height) = if use_half {
         let scale = turbojpeg::ScalingFactor::new(1, 2);
-        decompressor.set_scaling_factor(scale)
+        decompressor
+            .set_scaling_factor(scale)
             .map_err(|e| anyhow::anyhow!("turbojpeg set scale: {}", e))?;
         let scaled = header.scaled(scale);
         debug!(
@@ -185,7 +186,8 @@ pub fn decode_jpeg_turbo(path: &Path, max_decode_width: u32) -> Result<image::Dy
         format: turbojpeg::PixelFormat::RGB,
     };
 
-    decompressor.decompress(&data, dest)
+    decompressor
+        .decompress(&data, dest)
         .map_err(|e| anyhow::anyhow!("turbojpeg decompress: {}", e))?;
 
     let rgb = image::RgbImage::from_raw(width as u32, height as u32, pixels)
@@ -246,7 +248,10 @@ async fn load_image(
 ) -> Result<(image::DynamicImage, Option<PathBuf>)> {
     if can_decode_natively(input) {
         let is_jpeg = matches!(
-            input.extension().map(|e| e.to_string_lossy().to_lowercase()).as_deref(),
+            input
+                .extension()
+                .map(|e| e.to_string_lossy().to_lowercase())
+                .as_deref(),
             Some("jpg" | "jpeg")
         );
         let input = input.to_path_buf();
@@ -320,8 +325,7 @@ async fn load_image(
 ///
 /// **Fast path** (JPEG ≤ 1058 px wide):
 ///   1. Read bytes; concurrently decode to:
-///      a. Full-res YUV420 planes (turbojpeg native — skips rgb_to_yuv420,
-///         saving ~80-110 ms).
+///      a. Full-res YUV420 planes (turbojpeg native — skips rgb_to_yuv420, saving ~80-110 ms).
 ///      b. ≤512 px RGB image (for phash and thumbnail).
 ///   2. Three threads/tasks run simultaneously:
 ///      - Thread A: compute perceptual hash on the 512 px image.
@@ -336,17 +340,20 @@ async fn load_image(
 /// Typical speedup vs. the old sequential pipeline: ~1.7× for 1052 px JPEGs.
 pub async fn process_image(input: &Path, dirs: &Directories) -> Result<ImageResult> {
     let fn_start = std::time::Instant::now();
-    let file_name   = input
+    let file_name = input
         .file_name()
         .context("no filename")?
         .to_string_lossy()
         .to_string();
-    let avif_name   = format!("{}.avif", file_name);
+    let avif_name = format!("{}.avif", file_name);
     let output_path = dirs.image.join(&avif_name);
 
     // Fast path only applies to JPEG input.
     let is_jpeg = matches!(
-        input.extension().map(|e| e.to_string_lossy().to_lowercase()).as_deref(),
+        input
+            .extension()
+            .map(|e| e.to_string_lossy().to_lowercase())
+            .as_deref(),
         Some("jpg" | "jpeg")
     );
     if !is_jpeg {
@@ -354,9 +361,7 @@ pub async fn process_image(input: &Path, dirs: &Directories) -> Result<ImageResu
     }
 
     // Read bytes once; share between the two concurrent decode tasks.
-    let data = std::sync::Arc::new(
-        tokio::fs::read(input).await.context("read JPEG bytes")?,
-    );
+    let data = std::sync::Arc::new(tokio::fs::read(input).await.context("read JPEG bytes")?);
 
     // Check JPEG width: only use YUV-native path when no resize is needed.
     // max_width=920, resize-skip ratio=1.15 → threshold ≈ 1058 px.
@@ -364,16 +369,14 @@ pub async fn process_image(input: &Path, dirs: &Directories) -> Result<ImageResu
     const RESIZE_SKIP_RATIO: f64 = 1.15;
     let threshold_w = (MAX_ENCODE_WIDTH as f64 * RESIZE_SKIP_RATIO) as u32;
 
-    let hdr = turbojpeg::read_header(&*data)
+    let hdr = turbojpeg::read_header(&data)
         .map_err(|e| anyhow::anyhow!("turbojpeg header peek: {}", e))?;
     // Fall back if the image needs resizing OR if the JPEG chroma subsampling
     // is not 4:2:0.  `turbojpeg::decompress_to_yuv` always outputs in the
     // *source* subsampling (the `subsamp` field in `YuvImage` is ignored by
     // libjpeg-turbo).  SVT-AV1 requires 4:2:0 input, so 4:4:4 or 4:2:2
     // source images must go through the standard RGB→YUV420 conversion path.
-    if hdr.width as u32 > threshold_w
-        || hdr.subsamp != turbojpeg::Subsamp::Sub2x2
-    {
+    if hdr.width as u32 > threshold_w || hdr.subsamp != turbojpeg::Subsamp::Sub2x2 {
         return process_image_fallback(input, dirs).await;
     }
 
@@ -397,21 +400,23 @@ pub async fn process_image(input: &Path, dirs: &Directories) -> Result<ImageResu
         }),
     );
 
-    let (yuv_buf, yuv_w, yuv_h, y_len, uv_len) =
-        yuv_r.context("YUV decode task panic")?.context("YUV decode failed")?;
-    let small =
-        small_r.context("RGB-512 decode task panic")?.context("RGB-512 decode failed")?;
+    let (yuv_buf, yuv_w, yuv_h, y_len, uv_len) = yuv_r
+        .context("YUV decode task panic")?
+        .context("YUV decode failed")?;
+    let small = small_r
+        .context("RGB-512 decode task panic")?
+        .context("RGB-512 decode failed")?;
 
     // Ensure even dimensions for SVT-AV1 / YUV420.
-    let enc_w      = yuv_w & !1;
-    let enc_h      = yuv_h & !1;
-    let y_stride   = enc_w as usize;
-    let uv_stride  = enc_w as usize / 2;
-    let y_enc_len  = y_stride * enc_h as usize;
+    let enc_w = yuv_w & !1;
+    let enc_h = yuv_h & !1;
+    let y_stride = enc_w as usize;
+    let uv_stride = enc_w as usize / 2;
+    let y_enc_len = y_stride * enc_h as usize;
     let uv_enc_len = uv_stride * enc_h as usize / 2;
 
-    let thumb_name  = format!("{}.avif", file_name);
-    let thumb_path  = dirs.thumbnail.join(&thumb_name);
+    let thumb_name = format!("{}.avif", file_name);
+    let thumb_path = dirs.thumbnail.join(&thumb_name);
     let avif_output = output_path.clone();
 
     // Three-way parallel: (phash ∥ crop→thumb-encode)  vs  full-res YUV encode.
@@ -423,11 +428,15 @@ pub async fn process_image(input: &Path, dirs: &Directories) -> Result<ImageResu
             std::thread::scope(|s| {
                 let ph = s.spawn(|| compute_phash(img));
                 let th = s.spawn(|| prepare_thumbnail_pixels(img));
-                p_hash    = ph.join().expect("phash panic");
+                p_hash = ph.join().expect("phash panic");
                 thumb_img = Some(th.join().expect("crop panic"));
             });
             avif::encode_avif(
-                &thumb_img.unwrap(), &thumb_path, 40, 10, 150,
+                &thumb_img.unwrap(),
+                &thumb_path,
+                40,
+                10,
+                150,
                 thumbnail_encode_threads(),
             )
             .context("thumbnail AVIF encode failed")?;
@@ -438,8 +447,15 @@ pub async fn process_image(input: &Path, dirs: &Directories) -> Result<ImageResu
             let u = &yuv_buf[y_len..y_len + uv_enc_len];
             let v = &yuv_buf[y_len + uv_len..y_len + uv_len + uv_enc_len];
             avif::encode_avif_from_yuv_planes(
-                y, u, v, enc_w, enc_h, &avif_output,
-                18, 8, fullres_encode_threads(),
+                y,
+                u,
+                v,
+                enc_w,
+                enc_h,
+                &avif_output,
+                18,
+                8,
+                fullres_encode_threads(),
             )
         }),
     );
@@ -453,11 +469,11 @@ pub async fn process_image(input: &Path, dirs: &Directories) -> Result<ImageResu
         "processing: process_image complete (yuv-native path)"
     );
     Ok(ImageResult {
-        filename:           avif_name,
+        filename: avif_name,
         thumbnail_filename: thumb_name,
-        uploaded_filename:  file_name,
+        uploaded_filename: file_name,
         p_hash,
-        width:  out_w,
+        width: out_w,
         height: out_h,
     })
 }
@@ -475,11 +491,9 @@ pub async fn process_image(input: &Path, dirs: &Directories) -> Result<ImageResu
 /// `subsamp` field in `YuvImage` and always outputs in the *source* format, so
 /// calling this for 4:4:4 or 4:2:2 images would overflow the buffer and cause
 /// undefined behaviour.  Returns an error if the source is not Sub2x2.
-pub fn decode_jpeg_to_yuv_planes(
-    data: &[u8],
-) -> Result<(Vec<u8>, u32, u32, usize, usize)> {
-    let mut d = turbojpeg::Decompressor::new()
-        .map_err(|e| anyhow::anyhow!("turbojpeg init: {}", e))?;
+pub fn decode_jpeg_to_yuv_planes(data: &[u8]) -> Result<(Vec<u8>, u32, u32, usize, usize)> {
+    let mut d =
+        turbojpeg::Decompressor::new().map_err(|e| anyhow::anyhow!("turbojpeg init: {}", e))?;
     let header = d
         .read_header(data)
         .map_err(|e| anyhow::anyhow!("turbojpeg header: {}", e))?;
@@ -504,8 +518,8 @@ pub fn decode_jpeg_to_yuv_planes(
 
     let yuv_out = turbojpeg::YuvImage {
         pixels: &mut buf[..],
-        width:  w,
-        align:  1,
+        width: w,
+        align: 1,
         height: h,
         subsamp: turbojpeg::Subsamp::Sub2x2, // field is ignored by turbojpeg
     };
@@ -515,12 +529,12 @@ pub fn decode_jpeg_to_yuv_planes(
     // Compute per-plane lengths using Sub2x2 metadata.
     let meta = turbojpeg::YuvImage {
         pixels: &[] as &[u8],
-        width:  w,
-        align:  1,
+        width: w,
+        align: 1,
         height: h,
         subsamp: turbojpeg::Subsamp::Sub2x2,
     };
-    let y_len  = meta.y_width()  * meta.y_height();
+    let y_len = meta.y_width() * meta.y_height();
     let uv_len = meta.uv_width() * meta.uv_height();
 
     Ok((buf, w as u32, h as u32, y_len, uv_len))
@@ -536,14 +550,13 @@ pub fn decode_jpeg_turbo_from_data(
     data: &[u8],
     max_decode_width: u32,
 ) -> Result<image::DynamicImage> {
-    let mut decompressor = turbojpeg::Decompressor::new()
-        .map_err(|e| anyhow::anyhow!("turbojpeg init: {}", e))?;
+    let mut decompressor =
+        turbojpeg::Decompressor::new().map_err(|e| anyhow::anyhow!("turbojpeg init: {}", e))?;
     let header = decompressor
         .read_header(data)
         .map_err(|e| anyhow::anyhow!("turbojpeg header: {}", e))?;
 
-    let use_half = max_decode_width > 0
-        && header.width > max_decode_width as usize * 2;
+    let use_half = max_decode_width > 0 && header.width > max_decode_width as usize * 2;
 
     let (width, height) = if use_half {
         let scale = turbojpeg::ScalingFactor::new(1, 2);
@@ -586,12 +599,12 @@ pub fn decode_jpeg_turbo_from_data(
 ///   3. Task  C: SVT-AV1 full-resolution encode (with RGB→YUV420 conversion).
 async fn process_image_fallback(input: &Path, dirs: &Directories) -> Result<ImageResult> {
     let fn_start = std::time::Instant::now();
-    let file_name   = input
+    let file_name = input
         .file_name()
         .context("no filename")?
         .to_string_lossy()
         .to_string();
-    let avif_name   = format!("{}.avif", file_name);
+    let avif_name = format!("{}.avif", file_name);
     let output_path = dirs.image.join(&avif_name);
 
     let (img, tmp_path) = load_image(input, dirs).await?;
@@ -604,10 +617,10 @@ async fn process_image_fallback(input: &Path, dirs: &Directories) -> Result<Imag
     })
     .await?;
 
-    let thumb_name  = format!("{}.avif", file_name);
-    let thumb_path  = dirs.thumbnail.join(&thumb_name);
+    let thumb_name = format!("{}.avif", file_name);
+    let thumb_path = dirs.thumbnail.join(&thumb_name);
     let avif_output = output_path.clone();
-    let img_full    = img.clone();
+    let img_full = img.clone();
 
     // Three-way parallel: (phash ∥ crop→thumb-encode)  vs  full-res encode.
     let (phash_thumb_result, fullres_result) = tokio::join!(
@@ -618,19 +631,29 @@ async fn process_image_fallback(input: &Path, dirs: &Directories) -> Result<Imag
             std::thread::scope(|s| {
                 let ph = s.spawn(|| compute_phash(img));
                 let th = s.spawn(|| prepare_thumbnail_pixels(img));
-                p_hash    = ph.join().expect("phash panic");
+                p_hash = ph.join().expect("phash panic");
                 thumb_img = Some(th.join().expect("crop panic"));
             });
             avif::encode_avif(
-                &thumb_img.unwrap(), &thumb_path, 40, 10, 150,
+                &thumb_img.unwrap(),
+                &thumb_path,
+                40,
+                10,
+                150,
                 thumbnail_encode_threads(),
             )
             .context("thumbnail AVIF encode failed")?;
             Ok((p_hash, ()))
         }),
         tokio::task::spawn_blocking(move || {
-            avif::encode_avif(&*img_full, &avif_output, 18, 8, 920,
-                              fullres_encode_threads())
+            avif::encode_avif(
+                &img_full,
+                &avif_output,
+                18,
+                8,
+                920,
+                fullres_encode_threads(),
+            )
         }),
     );
 
@@ -647,11 +670,11 @@ async fn process_image_fallback(input: &Path, dirs: &Directories) -> Result<Imag
         "processing: process_image complete (fallback path)"
     );
     Ok(ImageResult {
-        filename:           avif_name,
+        filename: avif_name,
         thumbnail_filename: thumb_name,
-        uploaded_filename:  file_name,
+        uploaded_filename: file_name,
         p_hash,
-        width:  out_w,
+        width: out_w,
         height: out_h,
     })
 }
@@ -673,19 +696,17 @@ pub async fn regenerate_image(input: &Path, dirs: &Directories) -> Result<Regene
     let new_filename = format!("{}.avif", base);
     let new_thumbnail_filename = format!("{}_thumb.avif", base);
     let output_path = dirs.image.join(&new_filename);
-    let thumb_path  = dirs.thumbnail.join(&new_thumbnail_filename);
+    let thumb_path = dirs.thumbnail.join(&new_thumbnail_filename);
 
     let (img, tmp_path) = load_image(input, dirs).await?;
     let img = std::sync::Arc::new(img);
 
     // Pre-downscale to ≤512 px for phash and thumbnail.
     let img_c = img.clone();
-    let small = tokio::task::spawn_blocking(move || {
-        img_c.resize(512, 512, FilterType::Triangle)
-    })
-    .await?;
+    let small =
+        tokio::task::spawn_blocking(move || img_c.resize(512, 512, FilterType::Triangle)).await?;
 
-    let img_full    = img.clone();
+    let img_full = img.clone();
     let avif_output = output_path.clone();
 
     // Three-way parallel: (phash ∥ crop→thumb-encode) vs full-res encode.
@@ -697,19 +718,29 @@ pub async fn regenerate_image(input: &Path, dirs: &Directories) -> Result<Regene
             std::thread::scope(|s| {
                 let ph = s.spawn(|| compute_phash(img));
                 let th = s.spawn(|| prepare_thumbnail_pixels(img));
-                p_hash    = ph.join().expect("phash panic");
+                p_hash = ph.join().expect("phash panic");
                 thumb_img = Some(th.join().expect("crop panic"));
             });
             avif::encode_avif(
-                &thumb_img.unwrap(), &thumb_path, 40, 10, 150,
+                &thumb_img.unwrap(),
+                &thumb_path,
+                40,
+                10,
+                150,
                 thumbnail_encode_threads(),
             )
             .context("thumbnail AVIF encode failed")?;
             Ok((p_hash, ()))
         }),
         tokio::task::spawn_blocking(move || {
-            avif::encode_avif(&*img_full, &avif_output, 18, 8, 920,
-                              fullres_encode_threads())
+            avif::encode_avif(
+                &img_full,
+                &avif_output,
+                18,
+                8,
+                920,
+                fullres_encode_threads(),
+            )
         }),
     );
 
@@ -731,7 +762,7 @@ pub async fn regenerate_image(input: &Path, dirs: &Directories) -> Result<Regene
         new_filename,
         new_thumbnail_filename,
         p_hash,
-        width:  out_w,
+        width: out_w,
         height: out_h,
     })
 }
@@ -748,7 +779,7 @@ pub async fn process_image_v_b(input: &Path, dirs: &Directories) -> Result<Image
         .context("no filename")?
         .to_string_lossy()
         .to_string();
-    let avif_name   = format!("{}.avif", file_name);
+    let avif_name = format!("{}.avif", file_name);
     let output_path = dirs.image.join(&avif_name);
 
     let (img, tmp_path) = load_image(input, dirs).await?;
@@ -772,25 +803,37 @@ pub async fn process_image_v_b(input: &Path, dirs: &Directories) -> Result<Image
             let ph = sc.spawn(|| compute_phash(s));
             let th = sc.spawn(|| prepare_thumbnail_pixels(s));
             p_hash = ph.join().expect("phash panic");
-            thumb  = Some(th.join().expect("crop panic"));
+            thumb = Some(th.join().expect("crop panic"));
         });
         (p_hash, thumb.unwrap())
     })
     .await?;
 
-    let thumb_name  = format!("{}.avif", file_name);
-    let thumb_path  = dirs.thumbnail.join(&thumb_name);
+    let thumb_name = format!("{}.avif", file_name);
+    let thumb_path = dirs.thumbnail.join(&thumb_name);
     let avif_output = output_path.clone();
-    let img_full    = img.clone();
+    let img_full = img.clone();
 
     let (thumb_result, fullres_result) = tokio::join!(
         tokio::task::spawn_blocking(move || {
-            avif::encode_avif(&thumb_img, &thumb_path, 40, 10, 150,
-                              thumbnail_encode_threads())
+            avif::encode_avif(
+                &thumb_img,
+                &thumb_path,
+                40,
+                10,
+                150,
+                thumbnail_encode_threads(),
+            )
         }),
         tokio::task::spawn_blocking(move || {
-            avif::encode_avif(&*img_full, &avif_output, 18, 8, 920,
-                              fullres_encode_threads())
+            avif::encode_avif(
+                &img_full,
+                &avif_output,
+                18,
+                8,
+                920,
+                fullres_encode_threads(),
+            )
         }),
     );
 
@@ -806,11 +849,11 @@ pub async fn process_image_v_b(input: &Path, dirs: &Directories) -> Result<Image
         "process_image_v_b complete"
     );
     Ok(ImageResult {
-        filename:           avif_name,
+        filename: avif_name,
         thumbnail_filename: thumb_name,
-        uploaded_filename:  file_name,
+        uploaded_filename: file_name,
         p_hash,
-        width:  out_w,
+        width: out_w,
         height: out_h,
     })
 }
@@ -827,12 +870,12 @@ pub async fn process_image_v_b(input: &Path, dirs: &Directories) -> Result<Image
 /// Both blocking tasks are driven concurrently via `tokio::join!`.
 pub async fn process_image_v_c(input: &Path, dirs: &Directories) -> Result<ImageResult> {
     let fn_start = std::time::Instant::now();
-    let file_name   = input
+    let file_name = input
         .file_name()
         .context("no filename")?
         .to_string_lossy()
         .to_string();
-    let avif_name   = format!("{}.avif", file_name);
+    let avif_name = format!("{}.avif", file_name);
     let output_path = dirs.image.join(&avif_name);
 
     let (img, tmp_path) = load_image(input, dirs).await?;
@@ -845,10 +888,10 @@ pub async fn process_image_v_c(input: &Path, dirs: &Directories) -> Result<Image
     })
     .await?;
 
-    let thumb_name  = format!("{}.avif", file_name);
-    let thumb_path  = dirs.thumbnail.join(&thumb_name);
+    let thumb_name = format!("{}.avif", file_name);
+    let thumb_path = dirs.thumbnail.join(&thumb_name);
     let avif_output = output_path.clone();
-    let img_full    = img.clone();
+    let img_full = img.clone();
 
     // Three-way parallel: (phash ∥ crop→thumb-encode)  vs  full-res encode.
     let (phash_thumb_result, fullres_result) = tokio::join!(
@@ -859,19 +902,29 @@ pub async fn process_image_v_c(input: &Path, dirs: &Directories) -> Result<Image
             std::thread::scope(|s| {
                 let ph = s.spawn(|| compute_phash(img));
                 let th = s.spawn(|| prepare_thumbnail_pixels(img));
-                p_hash    = ph.join().expect("phash panic");
+                p_hash = ph.join().expect("phash panic");
                 thumb_img = Some(th.join().expect("crop panic"));
             });
             avif::encode_avif(
-                &thumb_img.unwrap(), &thumb_path, 40, 10, 150,
+                &thumb_img.unwrap(),
+                &thumb_path,
+                40,
+                10,
+                150,
                 thumbnail_encode_threads(),
             )
             .context("thumbnail AVIF encode failed")?;
             Ok((p_hash, ()))
         }),
         tokio::task::spawn_blocking(move || {
-            avif::encode_avif(&*img_full, &avif_output, 18, 8, 920,
-                              fullres_encode_threads())
+            avif::encode_avif(
+                &img_full,
+                &avif_output,
+                18,
+                8,
+                920,
+                fullres_encode_threads(),
+            )
         }),
     );
 
@@ -887,11 +940,11 @@ pub async fn process_image_v_c(input: &Path, dirs: &Directories) -> Result<Image
         "process_image_v_c complete"
     );
     Ok(ImageResult {
-        filename:           avif_name,
+        filename: avif_name,
         thumbnail_filename: thumb_name,
-        uploaded_filename:  file_name,
+        uploaded_filename: file_name,
         p_hash,
-        width:  out_w,
+        width: out_w,
         height: out_h,
     })
 }
@@ -909,17 +962,20 @@ pub async fn process_image_v_c(input: &Path, dirs: &Directories) -> Result<Image
 /// limited-range RGB→YUV conversion.
 pub async fn process_image_v_d(input: &Path, dirs: &Directories) -> Result<ImageResult> {
     let fn_start = std::time::Instant::now();
-    let file_name   = input
+    let file_name = input
         .file_name()
         .context("no filename")?
         .to_string_lossy()
         .to_string();
-    let avif_name   = format!("{}.avif", file_name);
+    let avif_name = format!("{}.avif", file_name);
     let output_path = dirs.image.join(&avif_name);
 
     // Non-JPEG: turbojpeg YUV decode not applicable → fall back.
     let is_jpeg = matches!(
-        input.extension().map(|e| e.to_string_lossy().to_lowercase()).as_deref(),
+        input
+            .extension()
+            .map(|e| e.to_string_lossy().to_lowercase())
+            .as_deref(),
         Some("jpg" | "jpeg")
     );
     if !is_jpeg {
@@ -927,9 +983,7 @@ pub async fn process_image_v_d(input: &Path, dirs: &Directories) -> Result<Image
     }
 
     // Read bytes once; share between the two concurrent decode tasks.
-    let data = std::sync::Arc::new(
-        tokio::fs::read(input).await.context("read JPEG bytes")?,
-    );
+    let data = std::sync::Arc::new(tokio::fs::read(input).await.context("read JPEG bytes")?);
 
     // Peek at JPEG dimensions to decide whether variant D applies.
     // max_width=920, resize-skip ratio=1.15 → threshold ≈ 1058 px.
@@ -939,7 +993,7 @@ pub async fn process_image_v_d(input: &Path, dirs: &Directories) -> Result<Image
     const RESIZE_SKIP_RATIO: f64 = 1.15;
     let threshold_w = (MAX_ENCODE_WIDTH as f64 * RESIZE_SKIP_RATIO) as u32;
 
-    let hdr = turbojpeg::read_header(&*data)
+    let hdr = turbojpeg::read_header(&data)
         .map_err(|e| anyhow::anyhow!("turbojpeg header peek: {}", e))?;
     if hdr.width as u32 > threshold_w {
         return process_image_v_c(input, dirs).await;
@@ -966,23 +1020,25 @@ pub async fn process_image_v_d(input: &Path, dirs: &Directories) -> Result<Image
         }),
     );
 
-    let (yuv_buf, yuv_w, yuv_h, y_len, uv_len) =
-        yuv_r.context("YUV decode task panic")?.context("YUV decode failed")?;
-    let small =
-        small_r.context("RGB-512 decode task panic")?.context("RGB-512 decode failed")?;
+    let (yuv_buf, yuv_w, yuv_h, y_len, uv_len) = yuv_r
+        .context("YUV decode task panic")?
+        .context("YUV decode failed")?;
+    let small = small_r
+        .context("RGB-512 decode task panic")?
+        .context("RGB-512 decode failed")?;
 
     // Ensure even dimensions for SVT-AV1 / YUV420.
     // turbojpeg rounds the allocated buffer up to even rows, so we can safely
     // slice the buffer to enc_w × enc_h without referencing out-of-range data.
-    let enc_w      = yuv_w & !1;
-    let enc_h      = yuv_h & !1;
-    let y_stride   = enc_w as usize;
-    let uv_stride  = enc_w as usize / 2;          // enc_w is guaranteed even
-    let y_enc_len  = y_stride * enc_h as usize;
+    let enc_w = yuv_w & !1;
+    let enc_h = yuv_h & !1;
+    let y_stride = enc_w as usize;
+    let uv_stride = enc_w as usize / 2; // enc_w is guaranteed even
+    let y_enc_len = y_stride * enc_h as usize;
     let uv_enc_len = uv_stride * enc_h as usize / 2;
 
-    let thumb_name  = format!("{}.avif", file_name);
-    let thumb_path  = dirs.thumbnail.join(&thumb_name);
+    let thumb_name = format!("{}.avif", file_name);
+    let thumb_path = dirs.thumbnail.join(&thumb_name);
     let avif_output = output_path.clone();
 
     // Three-way parallel: (phash ∥ crop→thumb-encode)  vs  full-res YUV encode.
@@ -994,11 +1050,15 @@ pub async fn process_image_v_d(input: &Path, dirs: &Directories) -> Result<Image
             std::thread::scope(|s| {
                 let ph = s.spawn(|| compute_phash(img));
                 let th = s.spawn(|| prepare_thumbnail_pixels(img));
-                p_hash    = ph.join().expect("phash panic");
+                p_hash = ph.join().expect("phash panic");
                 thumb_img = Some(th.join().expect("crop panic"));
             });
             avif::encode_avif(
-                &thumb_img.unwrap(), &thumb_path, 40, 10, 150,
+                &thumb_img.unwrap(),
+                &thumb_path,
+                40,
+                10,
+                150,
                 thumbnail_encode_threads(),
             )
             .context("thumbnail AVIF encode failed")?;
@@ -1013,8 +1073,15 @@ pub async fn process_image_v_d(input: &Path, dirs: &Directories) -> Result<Image
             let u = &yuv_buf[y_len..y_len + uv_enc_len];
             let v = &yuv_buf[y_len + uv_len..y_len + uv_len + uv_enc_len];
             avif::encode_avif_from_yuv_planes(
-                y, u, v, enc_w, enc_h, &avif_output,
-                18, 8, fullres_encode_threads(),
+                y,
+                u,
+                v,
+                enc_w,
+                enc_h,
+                &avif_output,
+                18,
+                8,
+                fullres_encode_threads(),
             )
         }),
     );
@@ -1027,11 +1094,11 @@ pub async fn process_image_v_d(input: &Path, dirs: &Directories) -> Result<Image
         "process_image_v_d complete"
     );
     Ok(ImageResult {
-        filename:           avif_name,
+        filename: avif_name,
         thumbnail_filename: thumb_name,
-        uploaded_filename:  file_name,
+        uploaded_filename: file_name,
         p_hash,
-        width:  out_w,
+        width: out_w,
         height: out_h,
     })
 }
@@ -1130,12 +1197,12 @@ pub fn dct1d_partial(input: &[f64], output: &mut [f64], k_max: usize) {
     use std::f64::consts::PI;
     let n = input.len();
     let factor = PI / (2.0 * n as f64);
-    for k in 0..k_max {
+    for (k, slot) in output.iter_mut().enumerate().take(k_max) {
         let mut sum = 0f64;
         for (x, &v) in input.iter().enumerate() {
             sum += v * (factor * k as f64 * (2 * x + 1) as f64).cos();
         }
-        output[k] = sum;
+        *slot = sum;
     }
 }
 
@@ -1160,7 +1227,11 @@ const HASH_BITS_LEN: usize = 256;
 ///
 /// No ffmpeg subprocess, no temporary JPEG files.
 /// Used by the video path; images use `prepare_thumbnail_pixels` + parallel encode.
-pub async fn create_thumbnail(img: &image::DynamicImage, dst: &Path, _dirs: &Directories) -> Result<()> {
+pub async fn create_thumbnail(
+    img: &image::DynamicImage,
+    dst: &Path,
+    _dirs: &Directories,
+) -> Result<()> {
     let crop_start = std::time::Instant::now();
     let thumb_img = prepare_thumbnail_pixels(img);
     debug!(
@@ -1173,8 +1244,8 @@ pub async fn create_thumbnail(img: &image::DynamicImage, dst: &Path, _dirs: &Dir
     tokio::task::spawn_blocking(move || {
         avif::encode_avif(&thumb_img, &dst, 40, 10, 150, thumbnail_encode_threads())
     })
-        .await?
-        .context("SVT-AV1 thumbnail encode")?;
+    .await?
+    .context("SVT-AV1 thumbnail encode")?;
     debug!(
         elapsed_ms = encode_start.elapsed().as_millis(),
         "create_thumbnail: SVT-AV1 AVIF encode"
@@ -1199,7 +1270,11 @@ pub(crate) fn encode_avif_inprocess(img: &image::DynamicImage, dst: &Path) -> Re
     let pixels: Vec<RGB8> = rgb
         .as_raw()
         .chunks_exact(3)
-        .map(|c| RGB8 { r: c[0], g: c[1], b: c[2] })
+        .map(|c| RGB8 {
+            r: c[0],
+            g: c[1],
+            b: c[2],
+        })
         .collect();
 
     let encoded = Encoder::new()
@@ -1248,8 +1323,12 @@ pub fn smart_crop(img: &image::DynamicImage, target_w: u32, target_h: u32) -> im
     let analysis_scale = analysis_scale.min(1.0); // never upscale
     let an_w = ((src_w as f32 * analysis_scale).round() as u32).max(1);
     let an_h = ((src_h as f32 * analysis_scale).round() as u32).max(1);
-    let an_crop_w = ((crop_w as f32 * analysis_scale).round() as u32).max(1).min(an_w);
-    let an_crop_h = ((crop_h as f32 * analysis_scale).round() as u32).max(1).min(an_h);
+    let an_crop_w = ((crop_w as f32 * analysis_scale).round() as u32)
+        .max(1)
+        .min(an_w);
+    let an_crop_h = ((crop_h as f32 * analysis_scale).round() as u32)
+        .max(1)
+        .min(an_h);
 
     let small = img.resize_exact(an_w, an_h, FilterType::Triangle);
     let gray = small.to_luma8();
@@ -1262,10 +1341,14 @@ pub fn smart_crop(img: &image::DynamicImage, target_w: u32, target_h: u32) -> im
 
     let mut y_an = 0u32;
     loop {
-        if y_an + an_crop_h > an_h { break; }
+        if y_an + an_crop_h > an_h {
+            break;
+        }
         let mut x_an = 0u32;
         loop {
-            if x_an + an_crop_w > an_w { break; }
+            if x_an + an_crop_w > an_w {
+                break;
+            }
             let energy = region_gradient_energy(&gray, x_an, y_an, an_crop_w, an_crop_h, step);
             if energy > best_energy {
                 best_energy = energy;
@@ -1273,19 +1356,23 @@ pub fn smart_crop(img: &image::DynamicImage, target_w: u32, target_h: u32) -> im
                 best_y_an = y_an;
             }
             let next = x_an + step;
-            if next + an_crop_w > an_w { break; }
+            if next + an_crop_w > an_w {
+                break;
+            }
             x_an = next;
         }
         let next = y_an + step;
-        if next + an_crop_h > an_h { break; }
+        if next + an_crop_h > an_h {
+            break;
+        }
         y_an = next;
     }
 
     // Map best analysis-space crop back to source coordinates.
-    let src_x = ((best_x_an as f32 / analysis_scale).round() as u32)
-        .min(src_w.saturating_sub(crop_w));
-    let src_y = ((best_y_an as f32 / analysis_scale).round() as u32)
-        .min(src_h.saturating_sub(crop_h));
+    let src_x =
+        ((best_x_an as f32 / analysis_scale).round() as u32).min(src_w.saturating_sub(crop_w));
+    let src_y =
+        ((best_y_an as f32 / analysis_scale).round() as u32).min(src_h.saturating_sub(crop_h));
 
     img.crop_imm(src_x, src_y, crop_w, crop_h)
 }
@@ -1313,10 +1400,10 @@ pub fn region_gradient_energy(
                 let ny = (y as i32 + dy).clamp(0, ih as i32 - 1) as u32;
                 gray.get_pixel(nx, ny).0[0] as i32
             };
-            let gx = get(1, -1) + 2 * get(1, 0) + get(1, 1)
-                - get(-1, -1) - 2 * get(-1, 0) - get(-1, 1);
-            let gy = get(-1, 1) + 2 * get(0, 1) + get(1, 1)
-                - get(-1, -1) - 2 * get(0, -1) - get(1, -1);
+            let gx =
+                get(1, -1) + 2 * get(1, 0) + get(1, 1) - get(-1, -1) - 2 * get(-1, 0) - get(-1, 1);
+            let gy =
+                get(-1, 1) + 2 * get(0, 1) + get(1, 1) - get(-1, -1) - 2 * get(0, -1) - get(1, -1);
             energy += (gx * gx + gy * gy) as u64;
             x += step;
         }
@@ -1600,14 +1687,21 @@ mod tests {
             *v = i as f64;
         }
         let m = median_of_256(&values);
-        assert!((m - 127.5).abs() < 1e-10, "median should be 127.5, got {}", m);
+        assert!(
+            (m - 127.5).abs() < 1e-10,
+            "median should be 127.5, got {}",
+            m
+        );
     }
 
     #[test]
     fn test_median_of_256_all_same() {
         let values = [42.0f64; 256];
         let m = median_of_256(&values);
-        assert!((m - 42.0).abs() < 1e-10, "median of constant array should be 42.0");
+        assert!(
+            (m - 42.0).abs() < 1e-10,
+            "median of constant array should be 42.0"
+        );
     }
 
     #[test]
@@ -1698,7 +1792,11 @@ mod tests {
             let mut buf = ImageBuffer::new(256u32, 256u32);
             for (x, y, p) in buf.enumerate_pixels_mut() {
                 let v = ((x.wrapping_add(y)) % 256) as u8;
-                *p = Rgb([v.saturating_add(2), v.saturating_add(2), v.saturating_add(2)]);
+                *p = Rgb([
+                    v.saturating_add(2),
+                    v.saturating_add(2),
+                    v.saturating_add(2),
+                ]);
             }
             DynamicImage::ImageRgb8(buf)
         };
@@ -1722,7 +1820,11 @@ mod tests {
         let img = solid_rgb(128, 128, 128, 400, 200);
         let cropped = smart_crop(&img, 150, 150);
         // Output must have square AR (shorter axis of source = 200)
-        assert_eq!(cropped.width(), 200, "crop width should be 200 (short axis)");
+        assert_eq!(
+            cropped.width(),
+            200,
+            "crop width should be 200 (short axis)"
+        );
         assert_eq!(cropped.height(), 200, "crop height should be 200");
     }
 
@@ -1795,7 +1897,10 @@ mod tests {
         let flat_energy = region_gradient_energy(&gray, 0, 0, 30, 64, 1);
         let edge_energy = region_gradient_energy(&gray, 34, 0, 30, 64, 1);
         assert_eq!(flat_energy, 0, "flat sub-region energy must be 0");
-        assert!(edge_energy == 0, "fully white sub-region also has no Sobel gradient");
+        assert!(
+            edge_energy == 0,
+            "fully white sub-region also has no Sobel gradient"
+        );
     }
 
     // ── Directories ───────────────────────────────────────────────────────────
@@ -1841,7 +1946,11 @@ mod tests {
         let img = solid_rgb(200, 100, 50, 8, 8);
         // ravif should handle even tiny images.
         let result = encode_avif_inprocess(&img, &dst);
-        assert!(result.is_ok(), "inprocess encode failed: {:?}", result.err());
+        assert!(
+            result.is_ok(),
+            "inprocess encode failed: {:?}",
+            result.err()
+        );
     }
 
     // ── create_thumbnail ──────────────────────────────────────────────────────
@@ -1913,7 +2022,10 @@ mod tests {
         let result = process_image(&src, &dirs).await.unwrap();
         // At least one of the four hash components must be non-zero.
         let any_nonzero = result.p_hash.iter().any(|&h| h != 0);
-        assert!(any_nonzero, "phash of a non-trivial image should not be all zeros");
+        assert!(
+            any_nonzero,
+            "phash of a non-trivial image should not be all zeros"
+        );
     }
 
     // ── process_video ─────────────────────────────────────────────────────────
@@ -1925,21 +2037,34 @@ mod tests {
         let o = std::process::Command::new("ffmpeg")
             .args([
                 "-y",
-                "-f", "lavfi",
-                "-i", "testsrc2=size=64x64:duration=2",
-                "-c:v", "libx264",
-                "-pix_fmt", "yuv420p",
-                "-t", "2",
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=64x64:duration=2",
+                "-c:v",
+                "libx264",
+                "-pix_fmt",
+                "yuv420p",
+                "-t",
+                "2",
                 out.to_str().unwrap(),
             ])
             .output()
             .ok()?;
-        if o.status.success() { Some(out) } else { None }
+        if o.status.success() {
+            Some(out)
+        } else {
+            None
+        }
     }
 
     #[tokio::test]
     async fn test_process_video_returns_video_result() {
-        if std::process::Command::new("ffmpeg").arg("-version").output().is_err() {
+        if std::process::Command::new("ffmpeg")
+            .arg("-version")
+            .output()
+            .is_err()
+        {
             return;
         }
         let (dirs, _tmp) = make_dirs();
@@ -1950,8 +2075,14 @@ mod tests {
 
         let result = process_video(&video, &dirs).await.unwrap();
 
-        assert!(!result.filename.is_empty(), "video filename must not be empty");
-        assert!(!result.thumbnail_filename.is_empty(), "thumbnail must not be empty");
+        assert!(
+            !result.filename.is_empty(),
+            "video filename must not be empty"
+        );
+        assert!(
+            !result.thumbnail_filename.is_empty(),
+            "thumbnail must not be empty"
+        );
         assert!(
             dirs.video.join(&result.filename).exists(),
             "video file must exist in video dir"
@@ -1965,17 +2096,20 @@ mod tests {
     #[tokio::test]
     async fn test_process_video_missing_input_returns_error() {
         let (dirs, _tmp) = make_dirs();
-        let result = process_video(
-            std::path::Path::new("/nonexistent/video.mp4"),
-            &dirs,
-        )
-        .await;
-        assert!(result.is_err(), "process_video must fail on nonexistent input");
+        let result = process_video(std::path::Path::new("/nonexistent/video.mp4"), &dirs).await;
+        assert!(
+            result.is_err(),
+            "process_video must fail on nonexistent input"
+        );
     }
 
     #[tokio::test]
     async fn test_process_video_dimensions_are_nonzero() {
-        if std::process::Command::new("ffmpeg").arg("-version").output().is_err() {
+        if std::process::Command::new("ffmpeg")
+            .arg("-version")
+            .output()
+            .is_err()
+        {
             return;
         }
         let (dirs, _tmp) = make_dirs();
@@ -1986,8 +2120,14 @@ mod tests {
 
         let result = process_video(&video, &dirs).await.unwrap();
         // ffprobe should detect the 64×64 dimension from the lavfi testsrc2.
-        assert!(result.width > 0, "width must be > 0 when ffprobe is available");
-        assert!(result.height > 0, "height must be > 0 when ffprobe is available");
+        assert!(
+            result.width > 0,
+            "width must be > 0 when ffprobe is available"
+        );
+        assert!(
+            result.height > 0,
+            "height must be > 0 when ffprobe is available"
+        );
     }
 
     // ── e2e: testset ──────────────────────────────────────────────────────────
@@ -2014,12 +2154,18 @@ mod tests {
 
         let json = match std::fs::read_to_string(&manifest_path) {
             Ok(s) => s,
-            Err(e) => { eprintln!("SKIP testset: cannot read manifest: {e}"); return vec![]; }
+            Err(e) => {
+                eprintln!("SKIP testset: cannot read manifest: {e}");
+                return vec![];
+            }
         };
 
         let entries: Vec<serde_json::Value> = match serde_json::from_str(&json) {
             Ok(v) => v,
-            Err(e) => { eprintln!("SKIP testset: invalid manifest JSON: {e}"); return vec![]; }
+            Err(e) => {
+                eprintln!("SKIP testset: invalid manifest JSON: {e}");
+                return vec![];
+            }
         };
 
         let limit = std::env::var("WALLIUM_TESTSET_SIZE")
@@ -2037,7 +2183,11 @@ mod tests {
                 let image = entry["image"].as_str()?;
                 let filename = image.replace('/', "_");
                 let path = images_dir.join(filename);
-                if path.exists() { Some(path) } else { None }
+                if path.exists() {
+                    Some(path)
+                } else {
+                    None
+                }
             })
             .take(limit)
             .collect()
@@ -2053,7 +2203,10 @@ mod tests {
         if images.is_empty() {
             return; // dataset not downloaded — skip without failure
         }
-        eprintln!("e2e: running process_image against {} testset images", images.len());
+        eprintln!(
+            "e2e: running process_image against {} testset images",
+            images.len()
+        );
 
         let mut failed_images: Vec<String> = Vec::new();
 
@@ -2074,11 +2227,13 @@ mod tests {
                     assert!(result.height > 0, "height > 0 for {:?}", img_path);
                     assert!(
                         dirs.image.join(&result.filename).exists(),
-                        "AVIF must exist for {:?}", img_path
+                        "AVIF must exist for {:?}",
+                        img_path
                     );
                     assert!(
                         dirs.thumbnail.join(&result.thumbnail_filename).exists(),
-                        "thumbnail must exist for {:?}", img_path
+                        "thumbnail must exist for {:?}",
+                        img_path
                     );
                 }
                 Err(e) => {
@@ -2208,8 +2363,8 @@ mod tests {
         let pixels: Vec<u8> = (0..w * h * 3).map(|i| (i % 256) as u8).collect();
         let img = turbojpeg::Image {
             pixels: pixels.as_slice(),
-            width:  w,
-            pitch:  w * 3,
+            width: w,
+            pitch: w * 3,
             height: h,
             format: turbojpeg::PixelFormat::RGB,
         };
@@ -2222,12 +2377,12 @@ mod tests {
     fn test_decode_jpeg_to_yuv_planes_basic() {
         // 4:2:0 JPEG → YUV planes should decode successfully with correct sizes.
         let data = make_jpeg_bytes(128, 64, turbojpeg::Subsamp::Sub2x2);
-        let (buf, w, h, y_len, uv_len) = decode_jpeg_to_yuv_planes(&data)
-            .expect("Sub2x2 JPEG should decode to YUV planes");
+        let (buf, w, h, y_len, uv_len) =
+            decode_jpeg_to_yuv_planes(&data).expect("Sub2x2 JPEG should decode to YUV planes");
         assert_eq!(w, 128, "width from header");
-        assert_eq!(h, 64,  "height from header");
-        assert_eq!(y_len, 128 * 64,     "Y plane size for 128×64");
-        assert_eq!(uv_len, 64 * 32,     "UV plane size for 128×64 Sub2x2");
+        assert_eq!(h, 64, "height from header");
+        assert_eq!(y_len, 128 * 64, "Y plane size for 128×64");
+        assert_eq!(uv_len, 64 * 32, "UV plane size for 128×64 Sub2x2");
         assert_eq!(buf.len(), y_len + 2 * uv_len, "total buffer = Y + U + V");
     }
 
@@ -2241,20 +2396,25 @@ mod tests {
             "4:4:4 JPEG should be rejected by decode_jpeg_to_yuv_planes"
         );
         let msg = result.unwrap_err().to_string().to_lowercase();
-        assert!(msg.contains("sub2x2") || msg.contains("subsamp"),
-                "error should mention subsampling: {msg}");
+        assert!(
+            msg.contains("sub2x2") || msg.contains("subsamp"),
+            "error should mention subsampling: {msg}"
+        );
     }
 
     #[test]
     fn test_decode_jpeg_to_yuv_planes_slices_non_overlapping() {
         // Verify that Y | U | V regions in the returned buffer don't overlap.
         let data = make_jpeg_bytes(256, 256, turbojpeg::Subsamp::Sub2x2);
-        let (buf, _w, _h, y_len, uv_len) = decode_jpeg_to_yuv_planes(&data)
-            .expect("decode should succeed");
+        let (buf, _w, _h, y_len, uv_len) =
+            decode_jpeg_to_yuv_planes(&data).expect("decode should succeed");
         // Y: [0, y_len), U: [y_len, y_len+uv_len), V: [y_len+uv_len, end)
         assert!(y_len > 0);
         assert!(uv_len > 0);
-        assert!(y_len + 2 * uv_len == buf.len(), "planes fill buffer exactly");
+        assert!(
+            y_len + 2 * uv_len == buf.len(),
+            "planes fill buffer exactly"
+        );
     }
 
     // ── decode_jpeg_turbo_from_data ──────────────────────────────────────────
@@ -2262,8 +2422,7 @@ mod tests {
     #[test]
     fn test_decode_jpeg_turbo_from_data_basic() {
         let data = make_jpeg_bytes(200, 150, turbojpeg::Subsamp::Sub2x2);
-        let img = decode_jpeg_turbo_from_data(&data, 0)
-            .expect("should decode from bytes");
+        let img = decode_jpeg_turbo_from_data(&data, 0).expect("should decode from bytes");
         assert_eq!(img.width(), 200);
         assert_eq!(img.height(), 150);
     }
@@ -2272,8 +2431,7 @@ mod tests {
     fn test_decode_jpeg_turbo_from_data_dct_downscale() {
         // Image wider than max_decode_width * 2 → should be halved.
         let data = make_jpeg_bytes(2000, 1000, turbojpeg::Subsamp::Sub2x2);
-        let img = decode_jpeg_turbo_from_data(&data, 920)
-            .expect("should DCT-downscale");
+        let img = decode_jpeg_turbo_from_data(&data, 920).expect("should DCT-downscale");
         // libjpeg-turbo 1/2 scaling: 2000 → 1000
         assert_eq!(img.width(), 1000, "expected DCT 1/2 width");
         assert_eq!(img.height(), 500, "expected DCT 1/2 height");
@@ -2346,9 +2504,14 @@ mod tests {
     /// The gradient goes from top-left (r_start, g_start, b_start)
     /// to bottom-right (r_end, g_end, b_end), producing a non-trivial phash.
     fn gradient_rgb(
-        r_start: u8, g_start: u8, b_start: u8,
-        r_end: u8, g_end: u8, b_end: u8,
-        w: u32, h: u32,
+        r_start: u8,
+        g_start: u8,
+        b_start: u8,
+        r_end: u8,
+        g_end: u8,
+        b_end: u8,
+        w: u32,
+        h: u32,
     ) -> DynamicImage {
         let mut buf = ImageBuffer::new(w, h);
         for (x, y, p) in buf.enumerate_pixels_mut() {
@@ -2580,15 +2743,20 @@ mod tests {
     async fn test_regenerate_image_basic() {
         let tmp = TempDir::new().unwrap();
         let dirs = Directories {
-            image:     tmp.path().join("images"),
+            image: tmp.path().join("images"),
             thumbnail: tmp.path().join("thumbnails"),
-            video:     tmp.path().join("videos"),
-            tmp:       tmp.path().join("tmp"),
-            upload:    tmp.path().join("upload"),
+            video: tmp.path().join("videos"),
+            tmp: tmp.path().join("tmp"),
+            upload: tmp.path().join("upload"),
         };
-        for d in [&dirs.image, &dirs.thumbnail, &dirs.video, &dirs.tmp,
-                  &dirs.upload, &dirs.tmp.join("thumbnails")]
-        {
+        for d in [
+            &dirs.image,
+            &dirs.thumbnail,
+            &dirs.video,
+            &dirs.tmp,
+            &dirs.upload,
+            &dirs.tmp.join("thumbnails"),
+        ] {
             std::fs::create_dir_all(d).unwrap();
         }
 
@@ -2600,9 +2768,15 @@ mod tests {
             .await
             .expect("regenerate_image must succeed");
 
-        assert!(!res.new_filename.is_empty(), "new_filename must not be empty");
-        assert!(!res.new_thumbnail_filename.is_empty(), "thumbnail filename must not be empty");
-        assert!(res.width  > 0, "width must be > 0");
+        assert!(
+            !res.new_filename.is_empty(),
+            "new_filename must not be empty"
+        );
+        assert!(
+            !res.new_thumbnail_filename.is_empty(),
+            "thumbnail filename must not be empty"
+        );
+        assert!(res.width > 0, "width must be > 0");
         assert!(res.height > 0, "height must be > 0");
 
         assert!(
@@ -2623,15 +2797,20 @@ mod tests {
     async fn test_regenerate_image_unique_names() {
         let tmp = TempDir::new().unwrap();
         let dirs = Directories {
-            image:     tmp.path().join("images"),
+            image: tmp.path().join("images"),
             thumbnail: tmp.path().join("thumbnails"),
-            video:     tmp.path().join("videos"),
-            tmp:       tmp.path().join("tmp"),
-            upload:    tmp.path().join("upload"),
+            video: tmp.path().join("videos"),
+            tmp: tmp.path().join("tmp"),
+            upload: tmp.path().join("upload"),
         };
-        for d in [&dirs.image, &dirs.thumbnail, &dirs.video, &dirs.tmp,
-                  &dirs.upload, &dirs.tmp.join("thumbnails")]
-        {
+        for d in [
+            &dirs.image,
+            &dirs.thumbnail,
+            &dirs.video,
+            &dirs.tmp,
+            &dirs.upload,
+            &dirs.tmp.join("thumbnails"),
+        ] {
             std::fs::create_dir_all(d).unwrap();
         }
 
@@ -2641,14 +2820,20 @@ mod tests {
         let r1 = regenerate_image(&src, &dirs).await.expect("first regen");
         let r2 = regenerate_image(&src, &dirs).await.expect("second regen");
 
-        assert_ne!(r1.new_filename, r2.new_filename,
-            "consecutive regenerations must produce different filenames");
-        assert_ne!(r1.new_thumbnail_filename, r2.new_thumbnail_filename,
-            "consecutive thumbnail filenames must differ");
+        assert_ne!(
+            r1.new_filename, r2.new_filename,
+            "consecutive regenerations must produce different filenames"
+        );
+        assert_ne!(
+            r1.new_thumbnail_filename, r2.new_thumbnail_filename,
+            "consecutive thumbnail filenames must differ"
+        );
 
         // Neither output should share the source stem.
-        assert!(!r1.new_filename.contains("input"),
-            "output filename must not contain source stem");
+        assert!(
+            !r1.new_filename.contains("input"),
+            "output filename must not contain source stem"
+        );
     }
 
     /// regenerate_image on a PNG (non-JPEG) must also succeed via the
@@ -2657,22 +2842,29 @@ mod tests {
     async fn test_regenerate_image_png_input() {
         let tmp = TempDir::new().unwrap();
         let dirs = Directories {
-            image:     tmp.path().join("images"),
+            image: tmp.path().join("images"),
             thumbnail: tmp.path().join("thumbnails"),
-            video:     tmp.path().join("videos"),
-            tmp:       tmp.path().join("tmp"),
-            upload:    tmp.path().join("upload"),
+            video: tmp.path().join("videos"),
+            tmp: tmp.path().join("tmp"),
+            upload: tmp.path().join("upload"),
         };
-        for d in [&dirs.image, &dirs.thumbnail, &dirs.video, &dirs.tmp,
-                  &dirs.upload, &dirs.tmp.join("thumbnails")]
-        {
+        for d in [
+            &dirs.image,
+            &dirs.thumbnail,
+            &dirs.video,
+            &dirs.tmp,
+            &dirs.upload,
+            &dirs.tmp.join("thumbnails"),
+        ] {
             std::fs::create_dir_all(d).unwrap();
         }
 
         let src = tmp.path().join("src.png");
         solid_rgb(10, 20, 30, 200, 150).save(&src).unwrap();
 
-        let res = regenerate_image(&src, &dirs).await.expect("PNG regen must succeed");
+        let res = regenerate_image(&src, &dirs)
+            .await
+            .expect("PNG regen must succeed");
         assert!(dirs.image.join(&res.new_filename).exists());
         assert!(dirs.thumbnail.join(&res.new_thumbnail_filename).exists());
     }

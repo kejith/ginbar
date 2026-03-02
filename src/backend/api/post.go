@@ -498,6 +498,8 @@ func queueETA(snap QueueSnapshot, pos int) int {
 // processAndInsertPost is shared by CreatePost and UploadPost.
 // It detects the content type, runs the image/video pipeline, deduplicates,
 // and inserts a post row.
+//
+//nolint:unused
 func (s *Server) processAndInsertPost(c fiber.Ctx, srcURL, inputFile, userName, postFilter string) (*dbgen.Post, error) {
 	return s.processAndInsertPostCtx(c.Context(), srcURL, inputFile, userName, postFilter)
 }

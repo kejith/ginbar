@@ -80,6 +80,8 @@ func (s *Server) requireAdmin(c fiber.Ctx) error {
 
 // requireSecret is a Fiber middleware that rejects requests from users whose
 // level is below LevelSecret.  It implicitly requires authentication.
+//
+//nolint:unused
 func (s *Server) requireSecret(c fiber.Ctx) error {
 	u, err := s.sessionUser(c)
 	if err != nil || u == nil || u.ID == 0 {

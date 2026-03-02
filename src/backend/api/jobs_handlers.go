@@ -56,8 +56,8 @@ func (s *Server) AdminJobsStream(c fiber.Ctx) error {
 				}
 				writeSSE(w, fiber.Map{"jobs": snaps})
 			case <-heartbeat.C:
-				fmt.Fprintf(w, ": heartbeat\n\n")
-				w.Flush()
+				_, _ = fmt.Fprintf(w, ": heartbeat\n\n")
+				_ = w.Flush()
 			}
 		}
 	})
@@ -111,8 +111,8 @@ func (s *Server) UserJobsStream(c fiber.Ctx) error {
 				// Re-filter for this user (the broadcast sends all snapshots).
 				writeSSE(w, fiber.Map{"jobs": s.jobs.ListVisible(viewerID, viewerLevel)})
 			case <-heartbeat.C:
-				fmt.Fprintf(w, ": heartbeat\n\n")
-				w.Flush()
+				_, _ = fmt.Fprintf(w, ": heartbeat\n\n")
+				_ = w.Flush()
 			}
 		}
 	})
