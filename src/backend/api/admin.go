@@ -460,6 +460,12 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 		defer pollTick.Stop()
 		var lastPolledCount int
 
+		// Stall detection: if no progress is observed for this long, assume
+		// the worker has crashed or is permanently stuck, and abort the SSE
+		// loop so the client isn't left hanging indefinitely.
+		const stallTimeout = 10 * time.Minute
+		lastProgressAt := time.Now()
+
 		done := total == 0
 	loop:
 		for !done {
@@ -482,6 +488,7 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 					failed++
 				}
 				cur := updated + failed
+				lastProgressAt = time.Now()
 				job.SetProgress(cur, total,
 					fmt.Sprintf("updated %d · failed %d", updated, failed))
 				writeSSE(w, regenProgressEvent{
@@ -501,9 +508,16 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 				// messages are dropped due to buffer overflow.
 				n, pollErr := rdb.Get(ctx, regenDoneKey).Int()
 				if pollErr != nil || n <= lastPolledCount {
+					// No progress — check for stall.
+					if time.Since(lastProgressAt) > stallTimeout {
+						log.WarnContext(ctx, "regenerate: aborting — no progress for 10 min",
+							"total", total, "current", updated+failed)
+						break loop
+					}
 					continue
 				}
 				lastPolledCount = n
+				lastProgressAt = time.Now()
 				// Sync the local counters with the ground truth.
 				cur := updated + failed
 				if n > cur {

@@ -780,13 +780,38 @@ async fn drain_regen(
     info!(count = n, "regen: processing batch");
     let drain_start = std::time::Instant::now();
 
+    /// Maximum wall-clock time a single regen item may take before it is
+    /// considered stuck and skipped.  5 minutes is generous — a typical
+    /// 1 MP AVIF re-encode takes < 10 s; this covers very large images and
+    /// slow ffmpeg AVIF decodes without letting a single stuck item block
+    /// the entire batch forever.
+    const ITEM_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(300);
+
     futures_util::stream::iter(items)
         .for_each_concurrent(Some(concurrency), |item| {
             let pool = pool.clone();
             let redis_client = redis_client.clone();
             let dirs = dirs.clone();
             async move {
-                let result = process_regen_item(&pool, &dirs, &item).await;
+                let result = match tokio::time::timeout(
+                    ITEM_TIMEOUT,
+                    process_regen_item(&pool, &dirs, &item),
+                )
+                .await
+                {
+                    Ok(inner) => inner,
+                    Err(_elapsed) => {
+                        warn!(
+                            post_id = item.post_id,
+                            timeout_secs = ITEM_TIMEOUT.as_secs(),
+                            "regen: item timed out, skipping"
+                        );
+                        Err(anyhow::anyhow!(
+                            "timed out after {} s",
+                            ITEM_TIMEOUT.as_secs()
+                        ))
+                    }
+                };
                 let ok = result.is_ok();
                 if !ok {
                     let err_chain = result

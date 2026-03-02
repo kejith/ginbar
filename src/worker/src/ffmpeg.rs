@@ -192,6 +192,11 @@ pub async fn convert_to_avif(
 /// can decode it (avif, jxl …).  Only call this for formats not natively
 /// supported by the `image` crate (i.e. NOT jpeg/png/webp/gif/bmp/tiff).
 pub async fn normalize_to_jpeg(input: &Path, output: &Path) -> Result<()> {
+    /// Maximum time to wait for ffmpeg to normalize a single image.
+    /// 60 s is generous for any single-frame decode; if ffmpeg hasn't
+    /// finished by then it is stuck (corrupt input, decoder bug, etc.).
+    const FFMPEG_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
     let input_str = input.to_string_lossy();
     let output_str = output.to_string_lossy();
     let threads = ffmpeg_thread_count().to_string();
@@ -209,10 +214,22 @@ pub async fn normalize_to_jpeg(input: &Path, output: &Path) -> Result<()> {
         &output_str,
     ];
 
-    let out = priority_cmd("ffmpeg", &args)
-        .output()
-        .await
-        .context("ffmpeg normalize")?;
+    let mut child = priority_cmd("ffmpeg", &args)
+        .kill_on_drop(true)
+        .spawn()
+        .context("ffmpeg normalize: spawn")?;
+
+    let out = match tokio::time::timeout(FFMPEG_TIMEOUT, child.wait_with_output()).await {
+        Ok(res) => res.context("ffmpeg normalize: wait")?,
+        Err(_elapsed) => {
+            // kill_on_drop will SIGKILL the child when `child` is dropped.
+            anyhow::bail!(
+                "ffmpeg normalize timed out after {} s for {}",
+                FFMPEG_TIMEOUT.as_secs(),
+                input.display()
+            );
+        }
+    };
 
     if !out.status.success() {
         let stderr = String::from_utf8_lossy(&out.stderr);
