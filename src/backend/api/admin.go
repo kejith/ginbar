@@ -445,7 +445,10 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 			"key", regenDoneKey)
 
 		// Push all regen items atomically via a pipeline.
+		// Also build a local map (post_id → serialised JSON) used by crash recovery
+		// to re-enqueue items that were in-flight when the worker was killed.
 		pushStart := time.Now()
+		itemsByPostID := make(map[int32]string, total)
 		pipe := rdb.Pipeline()
 		for _, p := range posts {
 			b, _ := json.Marshal(regenQueueItem{
@@ -454,6 +457,7 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 				ThumbnailFilename: p.ThumbnailFilename,
 				JobKey:            jobKey,
 			})
+			itemsByPostID[p.ID] = string(b)
 			pipe.RPush(ctx, "wallium:regen:queue", string(b))
 		}
 		if _, err := pipe.Exec(ctx); err != nil {
@@ -486,6 +490,13 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 		// the worker has crashed or is permanently stuck, and abort the SSE
 		// loop so the client isn't left hanging indefinitely.
 		const stallTimeout = 10 * time.Minute
+		// Crash recovery threshold: if stalled for this long AND the queue is
+		// empty, the worker likely crashed mid-batch and lost the items it had
+		// already popped from Redis.  Check the inflight set and re-enqueue any
+		// survivors.  60 s is safely above the normal encode time (< 30 s) and
+		// well below the full stall timeout, so we recover within ~1-2 minutes.
+		const crashRecoveryThreshold = 60 * time.Second
+		var recoveryAttempts int // limit to 3 so we don't loop forever
 		lastProgressAt := time.Now()
 		loopIter := 0
 
@@ -579,6 +590,54 @@ func (s *Server) RegenerateImages(c fiber.Ctx) error {
 						exitReason = "stall_timeout"
 						break loop
 					}
+
+					// Crash recovery: queue empty + stalled long enough + items remain.
+					// The worker likely crashed mid-batch; its inflight set records
+					// the orphaned post_ids.
+					if sinceProgress > crashRecoveryThreshold && recoveryAttempts < 3 {
+						queueLen, _ := rdb.LLen(ctx, "wallium:regen:queue").Result()
+						if queueLen == 0 {
+							inflight, smErr := rdb.SMembers(ctx, "wallium:regen:inflight:"+jobKey).Result()
+							if smErr == nil && len(inflight) > 0 {
+								recoveryAttempts++
+								log.WarnContext(ctx, "regenerate: worker crash detected — re-enqueueing inflight items",
+									"inflight_count", len(inflight),
+									"recovery_attempt", recoveryAttempts,
+									"stall_s", int(sinceProgress.Seconds()))
+								recovPipe := rdb.Pipeline()
+								requeued := 0
+								for _, idStr := range inflight {
+									id64, parseErr := strconv.ParseInt(idStr, 10, 32)
+									if parseErr != nil {
+										continue
+									}
+									postID := int32(id64)
+									if item, ok := itemsByPostID[postID]; ok {
+										recovPipe.RPush(ctx, "wallium:regen:queue", item)
+										requeued++
+									}
+								}
+								if requeued > 0 {
+									if _, execErr := recovPipe.Exec(ctx); execErr != nil {
+										log.WarnContext(ctx, "regenerate: re-enqueue pipeline failed",
+											"err", execErr)
+									} else {
+										rdb.Publish(ctx, "wallium:regen:wake", "1")
+										lastProgressAt = time.Now() // reset stall timer
+										log.WarnContext(ctx, "regenerate: re-enqueued inflight items after crash",
+											"requeued", requeued,
+											"recovery_attempt", recoveryAttempts)
+										writeSSE(w, regenProgressEvent{
+											Phase: "progress", Total: total,
+											Current: updated + failed,
+											Updated: updated, Failed: failed, Skipped: 0,
+										})
+									}
+								}
+							}
+						}
+					}
+
 					log.DebugContext(ctx, "regenerate: poll: no new progress",
 						"counter_val", n, "last_polled", lastPolledCount,
 						"stall_s", int(sinceProgress.Seconds()),

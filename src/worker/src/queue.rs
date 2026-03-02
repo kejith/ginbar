@@ -38,6 +38,12 @@ pub const REGEN_WAKE_CHANNEL: &str = "wallium:regen:wake";
 /// Incremented atomically after every item (ok or fail) — the reliable
 /// fallback for progress tracking when Pub/Sub messages are dropped.
 pub const REGEN_COUNTER_KEY_PREFIX: &str = "wallium:regen:done:";
+/// Prefix for per-job inflight item sets: `REGEN_INFLIGHT_KEY_PREFIX + job_key`.
+/// All post_ids that have been popped from the queue but not yet fully
+/// processed are stored here (SADD on pop, SREM on completion).  If the
+/// worker process crashes the set retains the lost post_ids; the backend
+/// checks this on stall detection and re-enqueues the survivors.
+pub const REGEN_INFLIGHT_KEY_PREFIX: &str = "wallium:regen:inflight:";
 
 /// The processing phase a post is currently in.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -827,6 +833,46 @@ async fn drain_regen(
     );
     let drain_start = std::time::Instant::now();
 
+    // ─── Register inflight items for crash recovery ───────────────────────────
+    // SADD all post_ids into a per-job Redis Set before any processing starts.
+    // If the worker process is killed before an item's SREM runs (below), the
+    // backend can detect the orphaned IDs via SMEMBERS and re-enqueue them.
+    {
+        match tokio::time::timeout(
+            REDIS_OP_TIMEOUT * 2,
+            redis_client.get_multiplexed_async_connection(),
+        )
+        .await
+        {
+            Ok(Ok(mut conn)) => {
+                let mut by_job: std::collections::HashMap<&str, Vec<String>> =
+                    std::collections::HashMap::new();
+                for item in &items {
+                    by_job
+                        .entry(item.job_key.as_str())
+                        .or_default()
+                        .push(item.post_id.to_string());
+                }
+                for (job_key, post_ids) in &by_job {
+                    let inflight_key =
+                        format!("{}{}", REGEN_INFLIGHT_KEY_PREFIX, job_key);
+                    let _: redis::RedisResult<i64> =
+                        conn.sadd(&inflight_key, post_ids).await;
+                    let _: redis::RedisResult<bool> =
+                        conn.expire(&inflight_key, 86400i64).await;
+                    debug!(
+                        job_key,
+                        count = post_ids.len(),
+                        "regen: registered inflight items for crash recovery"
+                    );
+                }
+            }
+            _ => warn!(
+                "regen: could not register inflight items — Redis connection failed"
+            ),
+        }
+    }
+
     /// Maximum wall-clock time a single regen item may take before it is
     /// considered stuck and skipped.  30 s is generous — a typical
     /// 1 MP AVIF re-encode takes < 10 s; this covers large images without
@@ -918,6 +964,33 @@ async fn drain_regen(
                         pub_elapsed_ms = pub_start.elapsed().as_millis(),
                         "regen: publish_regen_progress returned"
                     );
+                }
+
+                // ─── Deregister from the inflight set ─────────────────────────
+                // This is the very last operation for this item (success or
+                // fail + published).  If we crash before reaching here the
+                // post_id stays in the inflight set and gets recovered by the
+                // backend.
+                let inflight_key =
+                    format!("{}{}", REGEN_INFLIGHT_KEY_PREFIX, item.job_key);
+                match tokio::time::timeout(
+                    REDIS_OP_TIMEOUT,
+                    redis_client.get_multiplexed_async_connection(),
+                )
+                .await
+                {
+                    Ok(Ok(mut conn)) => {
+                        let _: redis::RedisResult<i64> =
+                            conn.srem(&inflight_key, item.post_id.to_string()).await;
+                        debug!(
+                            post_id = item.post_id,
+                            "regen: removed from inflight set"
+                        );
+                    }
+                    _ => warn!(
+                        post_id = item.post_id,
+                        "regen: could not remove from inflight set — Redis connection failed"
+                    ),
                 }
             }
         })
