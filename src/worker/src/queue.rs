@@ -44,6 +44,12 @@ pub const REGEN_COUNTER_KEY_PREFIX: &str = "wallium:regen:done:";
 /// worker process crashes the set retains the lost post_ids; the backend
 /// checks this on stall detection and re-enqueues the survivors.
 pub const REGEN_INFLIGHT_KEY_PREFIX: &str = "wallium:regen:inflight:";
+/// Redis list key where items that have been popped from [`REGEN_QUEUE_KEY`]
+/// but not yet fully processed are held.  Written atomically via `LMOVE` so
+/// that a worker crash leaves orphaned items here rather than losing them.
+/// On startup the worker drains this list back to [`REGEN_QUEUE_KEY`] before
+/// accepting new work, making recovery fully automatic.
+pub const REGEN_PROCESSING_KEY: &str = "wallium:regen:processing";
 
 /// The processing phase a post is currently in.
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -720,6 +726,11 @@ pub struct RegenItem {
     /// job key (counter update is skipped).
     #[serde(default)]
     pub job_key: String,
+    /// Original serialised JSON string, populated after deserialization.
+    /// Stored so we can `LREM` the exact value from [`REGEN_PROCESSING_KEY`]
+    /// after the item is fully processed (reliable queue pattern).
+    #[serde(skip)]
+    pub raw_json: String,
 }
 
 /// Run the image-regeneration worker queue until SIGINT/SIGTERM.
@@ -756,6 +767,14 @@ pub async fn run_regen_queue(
 
     let mut shutdown = Box::pin(tokio::signal::ctrl_c());
     let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
+
+    // ── Startup recovery (reliable queue) ────────────────────────────────────
+    // Any items that were in `REGEN_PROCESSING_KEY` when the previous worker
+    // process crashed are moved back to the front of `REGEN_QUEUE_KEY` so
+    // they will be retried in this run.  This is the LMOVE-based reliable
+    // queue pattern: items are only truly removed from Redis after they have
+    // been fully processed and acknowledged.
+    recover_processing_list(&redis_client).await;
 
     // Drain on startup to pick up any items left from a previous run.
     drain_regen(&pool, &redis_client, &dirs, concurrency).await;
@@ -832,46 +851,6 @@ async fn drain_regen(
         pop_elapsed_ms, concurrency, "regen: processing batch"
     );
     let drain_start = std::time::Instant::now();
-
-    // ─── Register inflight items for crash recovery ───────────────────────────
-    // SADD all post_ids into a per-job Redis Set before any processing starts.
-    // If the worker process is killed before an item's SREM runs (below), the
-    // backend can detect the orphaned IDs via SMEMBERS and re-enqueue them.
-    {
-        match tokio::time::timeout(
-            REDIS_OP_TIMEOUT * 2,
-            redis_client.get_multiplexed_async_connection(),
-        )
-        .await
-        {
-            Ok(Ok(mut conn)) => {
-                let mut by_job: std::collections::HashMap<&str, Vec<String>> =
-                    std::collections::HashMap::new();
-                for item in &items {
-                    by_job
-                        .entry(item.job_key.as_str())
-                        .or_default()
-                        .push(item.post_id.to_string());
-                }
-                for (job_key, post_ids) in &by_job {
-                    let inflight_key =
-                        format!("{}{}", REGEN_INFLIGHT_KEY_PREFIX, job_key);
-                    let _: redis::RedisResult<i64> =
-                        conn.sadd(&inflight_key, post_ids).await;
-                    let _: redis::RedisResult<bool> =
-                        conn.expire(&inflight_key, 86400i64).await;
-                    debug!(
-                        job_key,
-                        count = post_ids.len(),
-                        "regen: registered inflight items for crash recovery"
-                    );
-                }
-            }
-            _ => warn!(
-                "regen: could not register inflight items — Redis connection failed"
-            ),
-        }
-    }
 
     /// Maximum wall-clock time a single regen item may take before it is
     /// considered stuck and skipped.  30 s is generous — a typical
@@ -966,13 +945,12 @@ async fn drain_regen(
                     );
                 }
 
-                // ─── Deregister from the inflight set ─────────────────────────
-                // This is the very last operation for this item (success or
-                // fail + published).  If we crash before reaching here the
-                // post_id stays in the inflight set and gets recovered by the
-                // backend.
-                let inflight_key =
-                    format!("{}{}", REGEN_INFLIGHT_KEY_PREFIX, item.job_key);
+                // ─── Acknowledge completion (reliable queue) ──────────────────
+                // LREM removes exactly this item's JSON from the processing
+                // list.  This is the final acknowledgement — only reached
+                // after the item has been processed AND its progress has been
+                // published.  If we crash before this line the item stays in
+                // the processing list and will be re-queued on next startup.
                 match tokio::time::timeout(
                     REDIS_OP_TIMEOUT,
                     redis_client.get_multiplexed_async_connection(),
@@ -981,15 +959,15 @@ async fn drain_regen(
                 {
                     Ok(Ok(mut conn)) => {
                         let _: redis::RedisResult<i64> =
-                            conn.srem(&inflight_key, item.post_id.to_string()).await;
+                            conn.lrem(REGEN_PROCESSING_KEY, 1, &item.raw_json).await;
                         debug!(
                             post_id = item.post_id,
-                            "regen: removed from inflight set"
+                            "regen: acknowledged — removed from processing list"
                         );
                     }
                     _ => warn!(
                         post_id = item.post_id,
-                        "regen: could not remove from inflight set — Redis connection failed"
+                        "regen: could not LREM from processing list — Redis connection failed;                          item will be retried on next worker startup"
                     ),
                 }
             }
@@ -1003,45 +981,119 @@ async fn drain_regen(
     );
 }
 
-/// Batch LPOP size: pop this many items per round-trip to minimise Redis latency
-/// overhead when the queue has thousands of entries.  A single LPOP with count
-/// costs the same as one without count — so this trades N round-trips for
-/// ceil(N/BATCH_SIZE) round-trips at the cost of a slightly larger allocation.
-const REGEN_POP_BATCH: std::num::NonZeroUsize =
-    std::num::NonZeroUsize::new(500).unwrap();
+/// How many `LMOVE` commands to send in one pipeline round-trip.
+/// Each LMOVE atomically moves one item from [`REGEN_QUEUE_KEY`] to
+/// [`REGEN_PROCESSING_KEY`] and returns the JSON string (or `None` when the
+/// queue is empty).  Pipelining 500 at a time keeps startup latency low
+/// without requiring multiple round-trips per batch.
+const REGEN_POP_BATCH: usize = 500;
 
-/// LPOP all items currently in the regen queue in batches of [`REGEN_POP_BATCH`].
+/// Move all items currently in [`REGEN_QUEUE_KEY`] into [`REGEN_PROCESSING_KEY`]
+/// and return them as parsed [`RegenItem`]s.
 ///
-/// Replaces the old single-item LPOP loop that issued one Redis round-trip per
-/// item — 5 000 items × 1-5 ms = 5-25 s of pure Redis overhead before work
-/// even starts.
+/// Uses pipelined `LMOVE` (left→right) so each transfer is atomic: an item is
+/// either in the queue or in the processing list — it can never disappear even
+/// if the worker is killed mid-batch.  On the next startup,
+/// [`recover_processing_list`] moves any leftover items back to the queue.
 async fn pop_regen_items(redis_client: &redis::Client) -> Result<Vec<RegenItem>> {
     let mut conn = redis_client.get_multiplexed_async_connection().await?;
     let mut items = Vec::new();
     loop {
-        // LPOP key count returns a Vec<String> (empty when the list is empty).
-        let batch: Vec<String> = conn
-            .lpop(REGEN_QUEUE_KEY, Some(REGEN_POP_BATCH))
-            .await
-            .unwrap_or_default();
-        if batch.is_empty() {
+        // Pipeline REGEN_POP_BATCH LMOVE commands in one network round-trip.
+        // Returns Vec<Option<String>>: Some(json) for each moved item, None
+        // once the queue is exhausted.
+        let mut pipe = redis::pipe();
+        for _ in 0..REGEN_POP_BATCH {
+            pipe.lmove(
+                REGEN_QUEUE_KEY,
+                REGEN_PROCESSING_KEY,
+                redis::Direction::Left,
+                redis::Direction::Right,
+            );
+        }
+        let batch: Vec<Option<String>> = pipe.query_async(&mut conn).await?;
+
+        let non_nil: Vec<String> = batch.into_iter().flatten().collect();
+        let got = non_nil.len();
+        if got == 0 {
             break;
         }
-        debug!(
-            batch_size = batch.len(),
-            "regen pop: got batch from Redis LPOP"
-        );
-        for json in batch {
-            match serde_json::from_str::<RegenItem>(&json) {
-                Ok(item) => items.push(item),
-                Err(e) => warn!(
-                    err = %e, raw = %json,
-                    "regen: invalid queue item, skipping"
-                ),
+        debug!(batch_size = got, "regen pop: moved batch via LMOVE");
+        for raw_json in non_nil {
+            match serde_json::from_str::<RegenItem>(&raw_json) {
+                Ok(mut item) => {
+                    item.raw_json = raw_json;
+                    items.push(item);
+                }
+                Err(e) => {
+                    warn!(err = %e, raw = %raw_json, "regen: invalid queue item, skipping");
+                    // Remove the unparseable item from the processing list so
+                    // it does not get re-queued indefinitely on restarts.
+                    let _: redis::RedisResult<i64> =
+                        conn.lrem(REGEN_PROCESSING_KEY, 1, &raw_json).await;
+                }
             }
+        }
+        // If we got fewer items than the batch size the queue is now empty.
+        if got < REGEN_POP_BATCH {
+            break;
         }
     }
     Ok(items)
+}
+
+/// Move all items left in [`REGEN_PROCESSING_KEY`] back to [`REGEN_QUEUE_KEY`].
+///
+/// Called once on worker startup before processing begins.  Any items that
+/// were in-flight when the previous worker process crashed are re-inserted at
+/// the *front* of the queue (LMOVE processing→queue right→left, i.e. prepend)
+/// so they are retried before newly enqueued work.
+async fn recover_processing_list(redis_client: &redis::Client) {
+    let mut conn = match tokio::time::timeout(
+        REDIS_OP_TIMEOUT * 2,
+        redis_client.get_multiplexed_async_connection(),
+    )
+    .await
+    {
+        Ok(Ok(c)) => c,
+        _ => {
+            warn!("regen recovery: could not connect to Redis — skipping");
+            return;
+        }
+    };
+
+    // Check how many items need to be recovered before looping.
+    let pending: i64 = conn.llen(REGEN_PROCESSING_KEY).await.unwrap_or(0);
+    if pending == 0 {
+        return;
+    }
+    warn!(
+        pending,
+        "regen recovery: found items in processing list — worker likely crashed;          re-queuing for retry"
+    );
+
+    // Move items one-at-a-time (LMOVE processing→queue right→left = prepend).
+    // We can't pipeline here because we loop until None.
+    let mut recovered = 0i64;
+    loop {
+        let result: redis::RedisResult<Option<String>> = conn
+            .lmove(
+                REGEN_PROCESSING_KEY,
+                REGEN_QUEUE_KEY,
+                redis::Direction::Right,
+                redis::Direction::Left,
+            )
+            .await;
+        match result {
+            Ok(Some(_)) => recovered += 1,
+            Ok(None) => break,
+            Err(e) => {
+                warn!(err = %e, recovered, "regen recovery: LMOVE error — stopping");
+                break;
+            }
+        }
+    }
+    warn!(recovered, "regen recovery: re-queued items successfully");
 }
 
 /// Process a single regen item: regenerate the image, update the DB, remove old files.
@@ -1718,6 +1770,7 @@ mod tests {
             filename: "abc.avif".to_string(),
             thumbnail_filename: "abc_thumb.avif".to_string(),
             job_key: "test-job-uuid".to_string(),
+            raw_json: String::new(),
         };
         let json = serde_json::to_string(&item).expect("serialize RegenItem");
         let decoded: RegenItem = serde_json::from_str(&json).expect("deserialize RegenItem");
@@ -1776,12 +1829,14 @@ mod tests {
                 filename: "a.avif".to_string(),
                 thumbnail_filename: "a_t.avif".to_string(),
                 job_key: "pop-test".to_string(),
+                raw_json: String::new(),
             },
             RegenItem {
                 post_id: 2,
                 filename: "b.avif".to_string(),
                 thumbnail_filename: "b_t.avif".to_string(),
                 job_key: "pop-test".to_string(),
+                raw_json: String::new(),
             },
         ];
         for item in &items_to_push {
@@ -1837,6 +1892,7 @@ mod tests {
             filename: "v.avif".to_string(),
             thumbnail_filename: "v_t.avif".to_string(),
             job_key: "skip-test".to_string(),
+            raw_json: String::new(),
         };
         let _: () = redis::cmd("RPUSH")
             .arg(REGEN_QUEUE_KEY)
@@ -1902,6 +1958,7 @@ mod tests {
             filename: original_filename.clone(),
             thumbnail_filename: original_thumb.clone(),
             job_key: "e2e-test-job".to_string(),
+            raw_json: String::new(),
         };
 
         process_regen_item(&pool, &dirs, &item)
@@ -1950,6 +2007,7 @@ mod tests {
             filename: "nonexistent_file_that_does_not_exist.avif".to_string(),
             thumbnail_filename: "nonexistent_thumb.avif".to_string(),
             job_key: "missing-test".to_string(),
+            raw_json: String::new(),
         };
 
         let result = process_regen_item(&pool, &dirs, &item).await;
