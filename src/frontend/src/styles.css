@@ -23,25 +23,29 @@ button { font: inherit; }
   gap: 1rem;
   padding: 0.55rem 0.75rem;
   border-bottom: 1px solid #272c34;
-  background: rgb(11 13 16 / 92%);
-  backdrop-filter: blur(10px);
+  background: #0b0d10;
 }
 
 .topbar > div { display: flex; align-items: baseline; gap: 0.8rem; }
 .topbar span { color: #929aa6; font-size: 0.8rem; }
 .topbar-meta { white-space: nowrap; }
 
-.board { --columns: 1; width: 100%; }
+.board {
+  --columns: 1;
+  --row-size: 220px;
+  width: 100%;
+  overflow-anchor: auto;
+}
 
 .board-row {
   content-visibility: auto;
   contain: layout paint style;
-  contain-intrinsic-block-size: 220px;
+  contain-intrinsic-block-size: var(--row-size);
 }
 
 .board-row--expanded {
   content-visibility: visible;
-  contain-intrinsic-block-size: auto;
+  contain-intrinsic-block-size: none;
 }
 
 .thumbnail-row {
@@ -49,6 +53,7 @@ button { font: inherit; }
   grid-template-columns: repeat(var(--columns), minmax(0, 1fr));
   gap: 2px;
   width: 100%;
+  padding-block-end: 2px;
 }
 
 .thumbnail {
@@ -130,7 +135,11 @@ button { font: inherit; }
 .tag-list { display: flex; flex-wrap: wrap; gap: 0.4rem; }
 .tag-list span { padding: 0.2rem 0.4rem; background: #20262e; font-size: 0.78rem; }
 
-.load-sentinel { height: 1px; }
+.load-sentinel {
+  height: 1px;
+  contain: strict;
+  pointer-events: none;
+}
 
 .benchmark-panel {
   position: fixed;
@@ -138,11 +147,11 @@ button { font: inherit; }
   right: 0.6rem;
   bottom: 0.6rem;
   display: grid;
-  min-width: 180px;
+  min-width: 190px;
   gap: 0.2rem;
   padding: 0.6rem 0.7rem;
   border: 1px solid #39414d;
-  background: rgb(11 13 16 / 94%);
+  background: rgb(11 13 16 / 96%);
   font: 12px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
   pointer-events: none;
 }
