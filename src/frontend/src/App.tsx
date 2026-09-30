@@ -107,7 +107,7 @@ const App: Component = () => {
       });
     });
 
-  const selectPost = (id: numer, mode: HistoryMode = "push", ensureVisible = false) => {
+  const selectPost = (id: number, mode: HistoryMode = "push", ensureVisible = false) => {
     const index = postIndexById.get(id);
     if (index === undefined) return Promise.resolve(0);
 
@@ -143,13 +143,13 @@ const App: Component = () => {
       if (mode !== "none") history.replaceState({}, "", "/");
       return;
     }
-    selectPost(id, mode, true);
+    void selectPost(id, mode, true);
   };
 
   const navigate = (direction: -1 | 1) => {
     const current = selectedIndex();
     const index = current < 0 ? 0 : nextPostIndex(current, direction, posts.length);
-    selectPost(posts[index].id, "push", true);
+    void selectPost(posts[index].id, "push", true);
   };
 
   const onKeyDown = (event: KeyboardEvent) => {
@@ -186,7 +186,7 @@ const App: Component = () => {
         setVisibleCount((count) => Math.min(posts.length, count + LOAD_CHUNK));
       },
       { rootMargin: "1200px 0px" },
-     );
+    );
     intersectionObserver.observe(sentinelElement);
 
     const onPopState = () => syncRoute("none");
@@ -272,7 +272,7 @@ const App: Component = () => {
               selectedId={selectedId}
               selectedRowIndex={selectedRowIndex}
               selectedPost={selectedPost}
-              onSelect={(id) => selectPost(id)}
+              onSelect={(id) => void selectPost(id)}
               onClose={closePost}
             />
           )}
