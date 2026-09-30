@@ -1,136 +1,96 @@
 # Ginbar v2 State / Handoff
 
 Last updated: 2026-09-30
-Phase: M0 complete; M1 not started
+Phase: M1 in progress — backend-free board prototype implemented; real Solid build/profile still required
 Integration branch: `v2`
+Active implementation branch: `astra/m1-board-prototype`
 Legacy branch: `master` (read-only for rewrite work)
 
 ## Read this first
 
-This file is the minimal resume point for humans and GPT-6 Astra. Read it before `PLAN.md`. Keep it short and update it after every meaningful work session.
+This file is the minimal resume point for humans and GPT-6 Astra. Read it before `PLAN.md`. Do not use chat history as project memory.
 
-## Current status
+## Branch status
 
-- `v2` exists and was split from `master` at `181fa44d79c7b4a1984c1a35795762dd503b3f77`.
-- `master` has not been modified for the rewrite and must remain untouched.
-- No v2 product implementation has started.
-- Durable rewrite plan added in commit `924439ea8b1852d1ce133bcf6598831d173182df`.
-- ChatGPT project instruction prompt added in commit `19b5cb6f6a99f4d14c875ba023de1865e66b240e`.
-- Architecture/product/performance decisions below are accepted working decisions unless new benchmark evidence invalidates them.
+- `v2` remains the rewrite integration root and was split from `master` at `181fa44d79c7b4a1984c1a35795762dd503b3f77`.
+- This session branched from `v2` head `38c515afd2862cb6a3b6a6c677c9b34fa210b662` into `astra/m1-board-prototype`.
+- `master` and `v2` were not modified by M1 implementation work.
+- Relevant branch commits so far:
+  - `d7d6a083d72c61ba9144b4080e616742c989fd90` — initial M1 Solid board prototype
+  - `6be8e41b673403590050be2f26542e3f271e1da7` — corrected/cleaned prototype source
+  - `75caf6c8d60b12b39bd8fc81776c8a24f422daef` — corrected M1 benchmark notes
 
-## Locked product decisions
+## M1 implemented so far
 
-- Clean slate; v1 data/database may be discarded.
-- pr0gramm-style authenticated media board; no anonymous posting.
-- Invitation-only registration initially; authentication architecture must be extensible later.
-- All current v1 features return by end of rewrite; private messages come late.
-- Global feed remains chronological by post ID descending.
-- Equal-square responsive thumbnails use 100% board width.
-- Selected post expands as one full-width row directly below its thumbnail row.
-- Same inline behavior on mobile.
-- Videos constrained to viewport height; images may span multiple screens.
-- Canonical `/post/:id`; direct links reconstruct surrounding feed.
-- Arrow keys + J/K navigation.
-- Search supports include/exclude tags and structured predicates such as `score:>=100`.
-- Users may add tags; only moderators/admins remove tags.
-- Comments are nested.
-- One visual theme initially.
-- Evergreen browsers + Safari only.
+The active frontend entry/config is now a minimal SolidJS + TypeScript + Vite prototype using plain CSS. The stale React entry files and stale pnpm lock/workspace files were removed from the active frontend scaffold. Unrelated legacy backend/worker code was left untouched.
 
-## Working architecture
+Prototype behavior:
 
-- nginx: TLS, frontend assets, media files, `/api` proxy.
-- Go: API/application workflows.
-- PostgreSQL: authoritative application state and durable media jobs.
-- Redis: ephemeral sessions/cache/rate-limits/wakeups/events; not sole durable copy of critical jobs.
-- Rust: media worker.
-- Local NVMe: media storage.
-- Frontend: TypeScript + Vite; SolidJS is the initial candidate and must earn final selection in M1 benchmark.
-- Plain CSS; no general UI kit/animation framework/runtime CSS-in-JS by default.
-- Feed pagination: cursor by post ID only, no OFFSET.
-- Search: lexer/parser/AST compiled to parameterized SQL.
-- Data relationships use immutable numeric IDs, never usernames as foreign keys.
-- Preferred job claim model: PostgreSQL transaction + `FOR UPDATE SKIP LOCKED`; Redis may wake workers.
+- 10,000 deterministic fake posts ordered by ID descending
+- responsive 100%-width equal-square thumbnail rows
+- deterministic post-index -> row mapping
+- exactly one full-width expanded post directly below the selected thumbnail row
+- same-row selection swaps expanded content without relocating the row
+- cross-row selection moves the expanded row below the new row
+- canonical `/post/:id`, direct-load reconstruction, History API Back/Forward synchronization
+- Arrow keys and J/K navigation; Escape closes the expanded post
+- images use intrinsic dimensions; videos are constrained by `100svh`
+- incremental retention starts at 320 posts and grows in 320-post chunks with `IntersectionObserver`
+- row-level `content-visibility: auto` plus layout/paint/style containment
+- no virtualization
+- optional `?bench` instrumentation exposes `window.__ginbarM1` for selection/retention runs and records next-frame selection latency plus Long Tasks where supported
 
-## Performance doctrine
+Durable detail and benchmark procedure: `docs/v2/M1.md`.
 
-Performance is a primary requirement in every decision. For every code change, ask in order:
+## Checks run
 
-1. Can this work/data/round trip be removed?
-2. Is there a better architecture/algorithm/data model?
-3. Can safe caching/precomputation/streaming/concurrency remove latency/work?
-4. Is there a lower-overhead proven primitive/library?
-5. Only then: is micro-optimization supported by profiling?
+- `node --test src/board-model.test.js`: 5/5 passing.
+- Source-level TypeScript check passed with local declaration stubs for Solid/Vite because external npm dependencies could not be installed in this execution environment.
+- The committed `App.tsx` content blob (`bde8d21f0042c08c8d61502ba63265525ca31f7b`) matches the locally typechecked source exactly.
+- `npm ping --registry=https://registry.npmjs.org --fetch-timeout=3000 --fetch-retries=0` fails with `EAI_AGAIN getaddrinfo`; a package-lock-only install also timed out. Therefore a real dependency install, real Solid/Vite type declarations, production build, and Solid runtime browser profile were not run here.
 
-Measure performance-sensitive changes. Do not claim speedups without evidence when measurement is feasible. Feature completion includes relevant performance regression coverage.
+## Measured lower-bound baseline
 
-## Target host
+A framework-free headless-Chromium DOM harness using the same row grouping/containment strategy measured forced-layout relocation cost. This is an architectural lower bound only; it excludes Solid runtime/compiler work and is **not** the M1 framework-gate result.
 
-- Ubuntu 24.04 bare metal
-- Intel i7-7700, 4C/8T, max ~4.2 GHz
-- 64 GiB RAM
-- ~477 GB x2 NVMe RAID1
-- measured sequential storage: ~1.7 GB/s write, ~3.3 GB/s read
-- 1 Gbit/s full duplex NIC
-- shared with GitLab/game/other services
+| Viewport | Retained thumbnails | Same-row p95 | Cross-row p95 |
+| --- | ---: | ---: | ---: |
+| 1440x900 | 320 | 0.2 ms | 0.3 ms |
+| 1440x900 | 5,000 | 0.8 ms | 1.1 ms |
+| 390x844 | 320 | 0.2 ms | 0.4 ms |
+| 390x844 | 5,000 | 1.7 ms | 1.9 ms |
 
-CPU is the primary scarce resource; RAM/disk are relatively abundant and network will generally cap static media before NVMe throughput.
+Interpretation: deterministic row grouping plus CSS containment is not itself an obvious M1-scale bottleneck. These numbers do not justify retaining thousands of DOM nodes indefinitely and do not establish Solid performance.
 
-Initial media-worker hypotheses only (must benchmark real pipeline):
-- 1 media job concurrently
-- video ffmpeg threads ~2-3
-- image concurrency ~2
-- download concurrency ~4-8
-- investigate usable Intel Quick Sync H.264/HEVC separately
-- initial PostgreSQL max pool around 8, increase only from measured contention
+## Decisions from this slice
 
-## Next task — M1 board performance prototype
+- Keep SolidJS as the M1 candidate; do not lock the framework until the real runtime profile exists.
+- Keep the dependency surface minimal: Solid + Vite/plugin + TypeScript only for this prototype.
+- Use native History, ResizeObserver and IntersectionObserver APIs; no router/store/virtualizer dependency for M1.
+- Keep rows as first-class layout units so selection only changes the selected row state and expanded content.
+- Do not add virtualization yet. Profile retained DOM first; only add it if measured DOM retention is the bottleneck without breaking inline-row behavior.
+- Prototype parameters (176 px minimum thumbnail target, 10-column cap, 320-post load chunk) are test inputs, not final product constants.
 
-Create a short-lived branch from current `v2` for M1. Do not touch `master`.
+## Locked rewrite invariants still in force
 
-Build a backend-free benchmark/prototype with thousands of fake posts. The prototype must prove the core board architecture before backend work begins:
+- `master` is never a rewrite target.
+- Performance is a primary requirement; remove work before optimizing work.
+- Global feed ordering is post ID descending; feed pagination later uses ID cursors, never OFFSET.
+- Selected posts expand inline below their thumbnail row on desktop and mobile.
+- Canonical `/post/:id` and coherent browser history are required.
+- Frontend remains plain CSS with no general UI kit/runtime CSS-in-JS by default.
+- Preferred backend architecture remains nginx + Go + PostgreSQL + Redis + Rust media worker + local NVMe.
+- PostgreSQL is authoritative; Redis is never the sole durable copy of critical jobs.
 
-1. responsive 100%-width equal-square rows
-2. deterministic post -> row mapping
-3. one inline full-width expanded row below selected thumbnail row
-4. selecting within same row swaps content without relocating expanded row
-5. selecting across rows relocates expanded row cleanly
-6. `/post/:id`, browser Back/Forward, direct-load state
-7. arrow + J/K navigation
-8. image/video sizing rules
-9. long scrolling + incremental loading/retention
-10. CSS containment and DOM strategy
-11. profiling/benchmark harness and recorded baseline
+## Unresolved / M1 gate not yet passed
 
-The shell must react locally to selection without waiting for network. Do not introduce virtualization unless profiling demonstrates that retained DOM is the actual bottleneck.
+- Generate a fresh lockfile from the new dependency graph in an environment with npm registry access.
+- Run the actual `npm` install, `tsc --noEmit`, Vite production build, and inspect bundle output.
+- Run the real Solid prototype in desktop and mobile-class Chromium/Safari-compatible testing.
+- Profile direct `/post/:id`, same-row/cross-row selection, Back/Forward, J/K/arrows, long scrolling, DOM count, heap growth, and long tasks at 320 / 2,000 / 5,000 / 10,000 retained posts.
+- Decide whether retention needs a cap or virtualization only from those measurements.
+- Lock or reject Solid only after that evidence. M2 must not start before M1 passes.
 
-### M1 framework gate
+## Single best next task
 
-Start with SolidJS + TypeScript + Vite as the preferred candidate. Keep the prototype dependency surface minimal. If profiling exposes a credible Solid-specific limitation, implement only the smallest comparable alternative needed to make an evidence-based framework decision. Do not benchmark frameworks recreationally.
-
-## Stop conditions / unresolved questions
-
-No blocking product questions currently remain for M1.
-
-Later work still needs evidence/decisions for:
-- exact thumbnail target size / responsive column breakpoints (derive and test during M1)
-- concrete performance budgets after first prototype baseline
-- final password hashing parameters/algorithm on target host
-- actual QSV device availability/performance
-- final media worker concurrency from real AVIF/video tests
-- whether any external consumer requires v1 API compatibility (assume no until identified)
-
-## Session close protocol
-
-Before ending meaningful work, replace/update this file with:
-
-- phase/status
-- branch used and relevant commits
-- exactly what changed
-- tests/checks run and results
-- benchmarks with baseline/comparison when relevant
-- decisions made and why
-- unresolved failures/questions
-- one explicit next task
-
-Do not copy long implementation logs here. Link to durable code/tests/docs and keep this file optimized for rapid resume.
+On a machine with npm registry access, generate the fresh frontend lockfile, run the real Solid/Vite build and typecheck, launch the prototype, then capture desktop (1440x900) and mobile-class (390x844) profiles using `window.__ginbarM1` at 320 / 2,000 / 5,000 / 10,000 retained posts plus direct-route/history/keyboard checks. Use those measurements to decide the Solid framework gate and DOM-retention strategy.
