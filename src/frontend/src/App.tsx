@@ -1,8 +1,8 @@
 import {
   For,
   Show,
-  createEffect,
   createMemo,
+  createSelector,
   createSignal,
   onCleanup,
   onMount,
@@ -14,13 +14,15 @@ import {
   LOAD_CHUNK,
   POST_COUNT,
   columnsForWidth,
-  groupRows,
+  extendRange,
+  extendRangeToIndex,
   makeFakePosts,
   nextPostIndex,
   pathForPost,
   postIdFromPath,
-  requiredVisibleCount,
+  rangeAroundIndex,
   rowIndexForPostIndex,
+  rowRangeForIndexRange,
 } from "./board-model.js";
 
 interface FakePost {
@@ -32,30 +34,77 @@ interface FakePost {
   tags: string[];
 }
 
+interface IndexRange {
+  start: number;
+  end: number;
+}
+
 type HistoryMode = "push" | "replace" | "none";
+type LoadMode = "extend" | "center";
+type BenchmarkPattern = "same-row" | "cross-row";
+
+interface SelectionTiming {
+  syncMs: number;
+  frameMs: number;
+}
+
+interface Percentiles {
+  p50: number;
+  p95: number;
+  max: number;
+}
+
+interface BenchmarkSummary {
+  iterations: number;
+  sync: Percentiles;
+  frame: Percentiles;
+}
+
+interface BenchmarkStats {
+  selectionSamples: SelectionTiming[];
+  longTasks: number;
+  lastSyncMs: number;
+  lastFrameMs: number;
+}
+
+interface BenchmarkSnapshot {
+  columns: number;
+  logicalRange: IndexRange;
+  renderedRows: number;
+  thumbnails: number;
+  domNodes: number;
+  rowMounts: number;
+  rowUnmounts: number;
+  longTasks: number;
+  heapBytes: number | null;
+}
+
+interface MatrixResult {
+  requestedPosts: number;
+  snapshot: BenchmarkSnapshot;
+  sameRow: BenchmarkSummary;
+  crossRow: BenchmarkSummary;
+  invariants: InvariantResult;
+}
+
+interface InvariantResult {
+  ok: boolean;
+  errors: string[];
+}
 
 declare global {
   interface Window {
     __ginbarM1?: {
       select(id: number): void;
-      retain(count: number): void;
-      run(pattern: "same-row" | "cross-row", iterations?: number): Promise<BenchmarkSummary>;
+      retain(count: number): Promise<BenchmarkSnapshot>;
+      run(pattern: BenchmarkPattern, iterations?: number): Promise<BenchmarkSummary>;
+      runMatrix(iterations?: number): Promise<MatrixResult[]>;
+      snapshot(): BenchmarkSnapshot;
+      assertInvariants(): InvariantResult;
+      resetStats(): void;
       stats(): Readonly<BenchmarkStats>;
     };
   }
-}
-
-interface BenchmarkStats {
-  selectionSamples: number[];
-  longTasks: number;
-  lastSelectionMs: number;
-}
-
-interface BenchmarkSummary {
-  iterations: number;
-  p50: number;
-  p95: number;
-  max: number;
 }
 
 const posts = makeFakePosts() as FakePost[];
@@ -66,24 +115,47 @@ const fakeMedia =
 const percentile = (samples: number[], fraction: number) => {
   if (samples.length === 0) return 0;
   const sorted = [...samples].sort((a, b) => a - b);
-  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * fraction))];
+  return sorted[Math.min(sorted.length - 1, Math.floor((sorted.length - 1) * fraction))];
 };
+
+const summarize = (samples: SelectionTiming[]): BenchmarkSummary => {
+  const sync = samples.map((sample) => sample.syncMs);
+  const frame = samples.map((sample) => sample.frameMs);
+  return {
+    iterations: samples.length,
+    sync: { p50: percentile(sync, 0.5), p95: percentile(sync, 0.95), max: Math.max(0, ...sync) },
+    frame: { p50: percentile(frame, 0.5), p95: percentile(frame, 0.95), max: Math.max(0, ...frame) },
+  };
+};
+
+const settleFrames = (count = 2) =>
+  new Promise<void>((resolve) => {
+    let remaining = Math.max(1, count);
+    const step = () => {
+      remaining -= 1;
+      if (remaining === 0) resolve();
+      else requestAnimationFrame(step);
+    };
+    requestAnimationFrame(step);
+  });
 
 const App: Component = () => {
   let boardElement!: HTMLDivElement;
-  let sentinelElement!: HTMLDivElement;
+  let topSentinelElement!: HTMLDivElement;
+  let bottomSentinelElement!: HTMLDivElement;
+  let rowMounts = 0;
+  let rowUnmounts = 0;
 
   const [columns, setColumns] = createSignal(1);
-  const [visibleCount, setVisibleCount] = createSignal(INITIAL_POSTS);
+  const [loadedRange, setLoadedRange] = createSignal<IndexRange>({ start: 0, end: INITIAL_POSTS });
   const [selectedId, setSelectedId] = createSignal<number | null>(null);
   const [stats, setStats] = createSignal<BenchmarkStats>({
     selectionSamples: [],
     longTasks: 0,
-    lastSelectionMs: 0,
+    lastSyncMs: 0,
+    lastFrameMs: 0,
   });
 
-  const visiblePosts = createMemo(() => posts.slice(0, Math.min(visibleCount(), posts.length)));
-  const rows = createMemo(() => groupRows(visiblePosts(), columns()) as FakePost[][]);
   const selectedIndex = createMemo(() => {
     const id = selectedId();
     return id === null ? -1 : (postIndexById.get(id) ?? -1);
@@ -93,38 +165,82 @@ const App: Component = () => {
     const index = selectedIndex();
     return index < 0 ? null : posts[index];
   });
+  const isSelectedPost = createSelector(selectedId);
+  const isSelectedRow = createSelector(selectedRowIndex);
+
+  const loadedRowRange = createMemo(() => rowRangeForIndexRange(loadedRange(), columns()));
+  const rowIndices = createMemo(() => {
+    const range = loadedRowRange();
+    return Array.from({ length: range.end - range.start }, (_, offset) => range.start + offset);
+  });
+  const renderedPostCount = createMemo(() => {
+    const range = loadedRowRange();
+    const start = range.start * columns();
+    const end = Math.min(posts.length, range.end * columns());
+    return Math.max(0, end - start);
+  });
+
   const benchmarkEnabled = new URLSearchParams(window.location.search).has("bench");
 
-  const markSelectionPaint = (startedAt: number) =>
-    new Promise<number>((resolve) => {
+  const recordNextFrame = (startedAt: number, syncMs: number, recordSample: boolean) =>
+    new Promise<SelectionTiming>((resolve) => {
       requestAnimationFrame(() => {
-        const elapsed = performance.now() - startedAt;
-        setStats((previous) => {
-          const selectionSamples = [...previous.selectionSamples, elapsed].slice(-240);
-          return { ...previous, selectionSamples, lastSelectionMs: elapsed };
-        });
-        resolve(elapsed);
+        const timing = { syncMs, frameMs: performance.now() - startedAt };
+        if (recordSample) {
+          setStats((previous) => ({
+            ...previous,
+            selectionSamples: [...previous.selectionSamples, timing].slice(-240),
+            lastSyncMs: timing.syncMs,
+            lastFrameMs: timing.frameMs,
+          }));
+        }
+        resolve(timing);
       });
     });
 
-  const selectPost = (id: number, mode: HistoryMode = "push", ensureVisible = false) => {
+  const ensureIndexLoaded = (index: number, mode: LoadMode) => {
+    if (mode === "center") {
+      setLoadedRange(rangeAroundIndex(index, posts.length));
+      return;
+    }
+    const range = loadedRange();
+    if (index >= range.start && index < range.end) return;
+    const farOutside = index < range.start - LOAD_CHUNK || index >= range.end + LOAD_CHUNK;
+    setLoadedRange(
+      farOutside
+        ? rangeAroundIndex(index, posts.length)
+        : extendRangeToIndex(range, index, posts.length),
+    );
+  };
+
+  const selectPost = (
+    id: number,
+    mode: HistoryMode = "push",
+    ensureVisible = false,
+    loadMode: LoadMode = "extend",
+    measure = false,
+    recordSample = measure,
+  ): Promise<SelectionTiming> | null => {
     const index = postIndexById.get(id);
-    if (index === undefined) return Promise.resolve(0);
+    if (index === undefined) return null;
 
     const startedAt = performance.now();
-    setVisibleCount((count) => Math.min(POST_COUNT, requiredVisibleCount(index, count)));
+    ensureIndexLoaded(index, loadMode);
     setSelectedId(id);
 
-    if (mode === "push") history.pushState({ postId: id }, "", pathForPost(id));
-    if (mode === "replace") history.replaceState({ postId: id }, "", pathForPost(id));
+    const path = pathForPost(id);
+    if (mode === "push" && window.location.pathname !== path) history.pushState({ postId: id }, "", path);
+    if (mode === "replace") history.replaceState({ postId: id }, "", path);
+
+    const syncMs = performance.now() - startedAt;
 
     if (ensureVisible) {
       requestAnimationFrame(() => {
-        document.querySelector<HTMLElement>(`[data-post-id="${id}"]`)?.scrollIntoView({ block: "nearest" });
+        boardElement.querySelector<HTMLElement>(`[data-post-id="${id}"]`)?.scrollIntoView({ block: "nearest" });
       });
     }
 
-    return markSelectionPaint(startedAt);
+    return measure ? recordNextFrame(startedAt, syncMs, recordSample) : null;
   };
 
   const closePost = () => {
@@ -132,7 +248,7 @@ const App: Component = () => {
     history.pushState({}, "", "/");
   };
 
-  const syncRoute = (mode: HistoryMode = "none") => {
+  const syncRoute = (mode: HistoryMode = "none", loadMode: LoadMode = "extend") => {
     const id = postIdFromPath(window.location.pathname);
     if (id === null) {
       setSelectedId(null);
@@ -143,13 +259,14 @@ const App: Component = () => {
       if (mode !== "none") history.replaceState({}, "", "/");
       return;
     }
-    void selectPost(id, mode, true);
+    selectPost(id, mode, true, loadMode);
   };
 
   const navigate = (direction: -1 | 1) => {
     const current = selectedIndex();
-    const index = current < 0 ? 0 : nextPostIndex(current, direction, posts.length);
-    void selectPost(posts[index].id, "push", true);
+    const startIndex = current < 0 ? loadedRange().start : current;
+    const index = current < 0 ? startIndex : nextPostIndex(startIndex, direction, posts.length);
+    selectPost(posts[index].id, "push", true, "extend", benchmarkEnabled, benchmarkEnabled);
   };
 
   const onKeyDown = (event: KeyboardEvent) => {
@@ -174,22 +291,131 @@ const App: Component = () => {
     }
   };
 
+  const snapshot = (): BenchmarkSnapshot => {
+    const memory = (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory;
+    return {
+      columns: columns(),
+      logicalRange: { ...loadedRange() },
+      renderedRows: rowIndices().length,
+      thumbnails: boardElement.querySelectorAll(".thumbnail").length,
+      domNodes: document.getElementsByTagName("*").length,
+      rowMounts,
+      rowUnmounts,
+      longTasks: stats().longTasks,
+      heapBytes: memory?.usedJSHeapSize ?? null,
+    };
+  };
+
+  const assertInvariants = (): InvariantResult => {
+    const errors: string[] = [];
+    const id = selectedId();
+    const expanded = boardElement.querySelectorAll<HTMLElement>("[data-expanded-post]");
+    const pressed = boardElement.querySelectorAll<HTMLElement>('.thumbnail[aria-pressed="true"]');
+
+    if (id === null) {
+      if (expanded.length !== 0) errors.push(`expected no expanded post, found ${expanded.length}`);
+      if (pressed.length !== 0) errors.push(`expected no selected thumbnail, found ${pressed.length}`);
+    } else {
+      if (expanded.length !== 1) errors.push(`expected one expanded post, found ${expanded.length}`);
+      if (expanded[0]?.dataset.expandedPost !== String(id)) errors.push("expanded post does not match selected id");
+      if (pressed.length !== 1) errors.push(`expected one selected thumbnail, found ${pressed.length}`);
+      if (pressed[0]?.dataset.postId !== String(id)) errors.push("selected thumbnail does not match selected id");
+      const expectedRow = String(selectedRowIndex());
+      if (expanded[0]?.closest<HTMLElement>("[data-row-index]")?.dataset.rowIndex !== expectedRow) {
+        errors.push("expanded post is not inside the selected thumbnail row");
+      }
+    }
+
+    return { ok: errors.length === 0, errors };
+  };
+
+  const resetStats = () => {
+    setStats({ selectionSamples: [], longTasks: 0, lastSyncMs: 0, lastFrameMs: 0 });
+  };
+
+  const retainForBenchmark = async (count: number) => {
+    const bounded = Math.max(INITIAL_POSTS, Math.min(POST_COUNT, Math.trunc(count)));
+    setLoadedRange({ start: 0, end: bounded });
+    setSelectedId(null);
+    window.scrollTo(0, 0);
+    await settleFrames(2);
+    return snapshot();
+  };
+
+  const runBenchmark = async (pattern: BenchmarkPattern, iterations = 120): Promise<BenchmarkSummary> => {
+    const count = Math.max(1, Math.min(240, Math.trunc(iterations)));
+    const rowRange = loadedRowRange();
+    const baseIndex = Math.min(posts.length - 1, rowRange.start * columns());
+    const sameIndex = Math.min(posts.length - 1, baseIndex + Math.min(1, columns() - 1));
+    const crossIndex = Math.min(posts.length - 1, baseIndex + columns());
+    const pair = pattern === "same-row" ? [baseIndex, sameIndex] : [baseIndex, crossIndex];
+    const samples: SelectionTiming[] = [];
+
+    for (let iteration = 0; iteration < count; iteration += 1) {
+      const index = pair[iteration & 1];
+      const measured = selectPost(posts[index].id, "none", false, "extend", true, false);
+      if (measured) samples.push(await measured);
+    }
+    const summary = summarize(samples);
+    const last = samples[samples.length - 1];
+    if (last) {
+      setStats((previous) => ({
+        ...previous,
+        selectionSamples: samples.slice(-240),
+        lastSyncMs: last.syncMs,
+        lastFrameMs: last.frameMs,
+      }));
+    }
+    return summary;
+  };
+
+  const runMatrix = async (iterations = 120): Promise<MatrixResult[]> => {
+    resetStats();
+    const results: MatrixResult[] = [];
+    for (const requestedPosts of [320, 2_000, 5_000, 10_000]) {
+      await retainForBenchmark(requestedPosts);
+      const sameRow = await runBenchmark("same-row", iterations);
+      const crossRow = await runBenchmark("cross-row", iterations);
+      results.push({
+        requestedPosts,
+        snapshot: snapshot(),
+        sameRow,
+        crossRow,
+        invariants: assertInvariants(),
+      });
+    }
+    return results;
+  };
+
   onMount(() => {
     const resizeObserver = new ResizeObserver(([entry]) => {
-      setColumns(columnsForWidth(entry.contentRect.width));
+      const width = entry.contentRect.width;
+      const nextColumns = columnsForWidth(width);
+      const gapPx = 2;
+      const rowSize = Math.max(1, (width - Math.max(0, nextColumns - 1) * gapPx) / nextColumns + gapPx);
+      boardElement.style.setProperty("--columns", String(nextColumns));
+      boardElement.style.setProperty("--row-size", `${rowSize}px`);
+      setColumns(nextColumns);
     });
     resizeObserver.observe(boardElement);
 
     const intersectionObserver = new IntersectionObserver(
-      ([entry]) => {
-        if (!entry.isIntersecting) return;
-        setVisibleCount((count) => Math.min(posts.length, count + LOAD_CHUNK));
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          if (entry.target === topSentinelElement) {
+            setLoadedRange((range) => extendRange(range, posts.length, -1, LOAD_CHUNK));
+          } else if (entry.target === bottomSentinelElement) {
+            setLoadedRange((range) => extendRange(range, posts.length, 1, LOAD_CHUNK));
+          }
+        }
       },
       { rootMargin: "1200px 0px" },
     );
-    intersectionObserver.observe(sentinelElement);
+    intersectionObserver.observe(topSentinelElement);
+    intersectionObserver.observe(bottomSentinelElement);
 
-    const onPopState = () => syncRoute("none");
+    const onPopState = () => syncRoute("none", "extend");
     window.addEventListener("popstate", onPopState);
     window.addEventListener("keydown", onKeyDown);
 
@@ -208,33 +434,18 @@ const App: Component = () => {
 
     window.__ginbarM1 = {
       select: (id) => {
-        void selectPost(id, "push", true);
+        selectPost(id, "push", true, "extend", benchmarkEnabled, benchmarkEnabled);
       },
-      retain: (count) => {
-        const bounded = Math.max(INITIAL_POSTS, Math.min(POST_COUNT, Math.trunc(count)));
-        setVisibleCount(bounded);
-      },
-      run: async (pattern, iterations = 120) => {
-        const count = Math.max(1, Math.min(240, Math.trunc(iterations)));
-        const samples: number[] = [];
-        for (let iteration = 0; iteration < count; iteration += 1) {
-          const index = pattern === "same-row"
-            ? iteration % columns()
-            : (iteration * columns() * 7) % visiblePosts().length;
-          samples.push(await selectPost(posts[index].id, "none"));
-        }
-        samples.sort((a, b) => a - b);
-        return {
-          iterations: count,
-          p50: percentile(samples, 0.5),
-          p95: percentile(samples, 0.95),
-          max: samples[samples.length - 1] ?? 0,
-        };
-      },
+      retain: retainForBenchmark,
+      run: runBenchmark,
+      runMatrix,
+      snapshot,
+      assertInvariants,
+      resetStats,
       stats: () => stats(),
     };
 
-    syncRoute("replace");
+    syncRoute("replace", "center");
 
     onCleanup(() => {
       resizeObserver.disconnect();
@@ -246,10 +457,6 @@ const App: Component = () => {
     });
   });
 
-  createEffect(() => {
-    boardElement?.style.setProperty("--columns", String(columns()));
-  });
-
   return (
     <main class="app-shell">
       <header class="topbar">
@@ -259,33 +466,35 @@ const App: Component = () => {
         </div>
         <div class="topbar-meta">
           <span>{columns()} cols</span>
-          <span>{visiblePosts().length.toLocaleString()} retained</span>
+          <span>{renderedPostCount().toLocaleString()} retained</span>
         </div>
       </header>
 
       <div class="board" ref={boardElement} aria-label="Media board">
-        <For each={rows()}>
-          {(row, rowIndex) => (
+        <div ref={topSentinelElement} class="load-sentinel" aria-hidden="true" />
+        <For each={rowIndices()}>
+          {(rowIndex: number) => (
             <BoardRow
-              row={row}
-              rowIndex={rowIndex()}
-              selectedId={selectedId}
-              selectedRowIndex={selectedRowIndex}
+              rowIndex={rowIndex}
+              columns={columns}
+              isSelectedPost={isSelectedPost}
+              isSelectedRow={isSelectedRow}
               selectedPost={selectedPost}
-              onSelect={(id) => void selectPost(id)}
+              onSelect={(id) => selectPost(id, "push", false, "extend", benchmarkEnabled, benchmarkEnabled)}
               onClose={closePost}
+              onMountRow={() => { rowMounts += 1; }}
+              onUnmountRow={() => { rowUnmounts += 1; }}
             />
           )}
         </For>
+        <div ref={bottomSentinelElement} class="load-sentinel" aria-hidden="true" />
       </div>
-
-      <div ref={sentinelElement} class="load-sentinel" aria-hidden="true" />
 
       <Show when={benchmarkEnabled}>
         <BenchmarkPanel
           stats={stats}
-          visibleCount={() => visiblePosts().length}
-          rowCount={() => rows().length}
+          retainedCount={renderedPostCount}
+          rowCount={() => rowIndices().length}
         />
       </Show>
     </main>
@@ -293,29 +502,43 @@ const App: Component = () => {
 };
 
 interface BoardRowProps {
-  row: FakePost[];
   rowIndex: number;
-  selectedId: Accessor<number | null>;
-  selectedRowIndex: Accessor<number>;
+  columns: Accessor<number>;
+  isSelectedPost(id: number): boolean;
+  isSelectedRow(rowIndex: number): boolean;
   selectedPost: Accessor<FakePost | null>;
   onSelect(id: number): void;
   onClose(): void;
+  onMountRow(): void;
+  onUnmountRow(): void;
 }
 
 const BoardRow: Component<BoardRowProps> = (props) => {
-  const expanded = createMemo(() => props.selectedRowIndex() === props.rowIndex);
+  const row = createMemo(() => {
+    const columns = props.columns();
+    const start = props.rowIndex * columns;
+    return posts.slice(start, Math.min(posts.length, start + columns));
+  });
+
+  onMount(props.onMountRow);
+  onCleanup(props.onUnmountRow);
+
   return (
-    <section class="board-row" classList={{ "board-row--expanded": expanded() }}>
+    <section
+      class="board-row"
+      classList={{ "board-row--expanded": props.isSelectedRow(props.rowIndex) }}
+      data-row-index={props.rowIndex}
+    >
       <div class="thumbnail-row">
-        <For each={props.row}>
-          {(post) => (
+        <For each={row()}>
+          {(post: FakePost) => (
             <button
               type="button"
               class="thumbnail"
-              classList={{ "thumbnail--selected": props.selectedId() === post.id }}
+              classList={{ "thumbnail--selected": props.isSelectedPost(post.id) }}
               data-post-id={post.id}
               aria-label={`Open post ${post.id}`}
-              aria-pressed={props.selectedId() === post.id}
+              aria-pressed={props.isSelectedPost(post.id)}
               onClick={() => props.onSelect(post.id)}
               style={`--thumb-hue: ${(post.id * 29) % 360}`}
             >
@@ -326,7 +549,7 @@ const BoardRow: Component<BoardRowProps> = (props) => {
         </For>
       </div>
 
-      <Show when={expanded() && props.selectedPost()} keyed>
+      <Show when={props.isSelectedRow(props.rowIndex) && props.selectedPost()} keyed>
         {(post: FakePost) => <ExpandedPost post={post} onClose={props.onClose} />}
       </Show>
     </section>
@@ -357,7 +580,7 @@ const ExpandedPost: Component<{ post: FakePost; onClose(): void }> = (props) => 
         <span>{props.post.score} points</span>
       </div>
       <div class="tag-list">
-        <For each={props.post.tags}>{(tag) => <span>{tag}</span>}</For>
+        <For each={props.post.tags}>{(tag: string) => <span>{tag}</span>}</For>
       </div>
       <button type="button" onClick={props.onClose}>Close</button>
     </aside>
@@ -366,19 +589,20 @@ const ExpandedPost: Component<{ post: FakePost; onClose(): void }> = (props) => 
 
 const BenchmarkPanel: Component<{
   stats: Accessor<BenchmarkStats>;
-  visibleCount: Accessor<number>;
+  retainedCount: Accessor<number>;
   rowCount: Accessor<number>;
 }> = (props) => {
-  const p50 = createMemo(() => percentile(props.stats().selectionSamples, 0.5));
-  const p95 = createMemo(() => percentile(props.stats().selectionSamples, 0.95));
+  const syncP95 = createMemo(() => percentile(props.stats().selectionSamples.map((sample) => sample.syncMs), 0.95));
+  const frameP95 = createMemo(() => percentile(props.stats().selectionSamples.map((sample) => sample.frameMs), 0.95));
   return (
     <output class="benchmark-panel">
       <strong>M1 instrumentation</strong>
-      <span>last {props.stats().lastSelectionMs.toFixed(1)} ms</span>
-      <span>p50 {p50().toFixed(1)} ms</span>
-      <span>p95 {p95().toFixed(1)} ms</span>
+      <span>sync {props.stats().lastSyncMs.toFixed(2)} ms</span>
+      <span>frame {props.stats().lastFrameMs.toFixed(1)} ms</span>
+      <span>sync p95 {syncP95().toFixed(2)} ms</span>
+      <span>frame p95 {frameP95().toFixed(1)} ms</span>
       <span>{props.stats().longTasks} long tasks</span>
-      <span>{props.visibleCount().toLocaleString()} posts / {props.rowCount()} rows</span>
+      <span>{props.retainedCount().toLocaleString()} posts / {props.rowCount()} rows</span>
     </output>
   );
 };
