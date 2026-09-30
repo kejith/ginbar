@@ -7,6 +7,7 @@ export const MIN_THUMBNAIL_PX = 176;
 export const MAX_COLUMNS = 10;
 
 /** @typedef {{ id: number, kind: "image" | "video", width: number, height: number, score: number, tags: string[] }} FakePost */
+/** @typedef {{ start: number, end: number }} IndexRange */
 
 /** @returns {FakePost[]} */
 export function makeFakePosts(count = POST_COUNT) {
@@ -44,14 +45,50 @@ export function rowStartIndex(rowIndex, columns) {
   return rowIndex * columns;
 }
 
-/** @template T @param {T[]} items @param {number} columns @returns {T[][]} */
-export function groupRows(items, columns) {
+/** @param {IndexRange} range @param {number} columns */
+export function rowRangeForIndexRange(range, columns) {
   if (!Number.isInteger(columns) || columns < 1) throw new RangeError("columns must be >= 1");
-  const rows = [];
-  for (let index = 0; index < items.length; index += columns) {
-    rows.push(items.slice(index, index + columns));
+  if (!Number.isInteger(range.start) || !Number.isInteger(range.end) || range.start < 0 || range.end < range.start) {
+    throw new RangeError("invalid index range");
   }
-  return rows;
+  if (range.start === range.end) return { start: 0, end: 0 };
+  return {
+    start: Math.floor(range.start / columns),
+    end: Math.ceil(range.end / columns),
+  };
+}
+
+/** @param {number} postIndex @param {number} postCount @param {number} [windowSize] @returns {IndexRange} */
+export function rangeAroundIndex(postIndex, postCount, windowSize = INITIAL_POSTS) {
+  if (!Number.isInteger(postCount) || postCount < 0) throw new RangeError("postCount must be >= 0");
+  if (postCount === 0) return { start: 0, end: 0 };
+  if (!Number.isInteger(postIndex) || postIndex < 0 || postIndex >= postCount) throw new RangeError("postIndex out of range");
+  if (!Number.isInteger(windowSize) || windowSize < 1) throw new RangeError("windowSize must be >= 1");
+
+  const size = Math.min(windowSize, postCount);
+  let start = Math.max(0, postIndex - Math.floor(size / 2));
+  let end = Math.min(postCount, start + size);
+  start = Math.max(0, end - size);
+  return { start, end };
+}
+
+/** @param {IndexRange} range @param {number} postIndex @param {number} postCount @param {number} [chunk] @returns {IndexRange} */
+export function extendRangeToIndex(range, postIndex, postCount, chunk = LOAD_CHUNK) {
+  if (!Number.isInteger(postCount) || postCount < 0) throw new RangeError("postCount must be >= 0");
+  if (!Number.isInteger(postIndex) || postIndex < 0 || postIndex >= postCount) throw new RangeError("postIndex out of range");
+  if (!Number.isInteger(chunk) || chunk < 1) throw new RangeError("chunk must be >= 1");
+  if (postIndex >= range.start && postIndex < range.end) return range;
+  if (postIndex < range.start) {
+    return { start: Math.max(0, Math.min(postIndex, range.start - chunk)), end: range.end };
+  }
+  return { start: range.start, end: Math.min(postCount, Math.max(postIndex + 1, range.end + chunk)) };
+}
+
+/** @param {IndexRange} range @param {number} postCount @param {-1 | 1} direction @param {number} [chunk] @returns {IndexRange} */
+export function extendRange(range, postCount, direction, chunk = LOAD_CHUNK) {
+  if (direction !== -1 && direction !== 1) throw new RangeError("direction must be -1 or 1");
+  if (direction === -1) return { start: Math.max(0, range.start - chunk), end: range.end };
+  return { start: range.start, end: Math.min(postCount, range.end + chunk) };
 }
 
 /** @param {string} pathname */
@@ -73,12 +110,4 @@ export function nextPostIndex(currentIndex, direction, postCount) {
   if (!Number.isInteger(currentIndex) || !Number.isInteger(postCount) || postCount < 1) return -1;
   if (direction !== -1 && direction !== 1) throw new RangeError("direction must be -1 or 1");
   return Math.max(0, Math.min(postCount - 1, currentIndex + direction));
-}
-
-/** @param {number} postIndex @param {number} currentVisibleCount @param {number} [chunk] */
-export function requiredVisibleCount(postIndex, currentVisibleCount, chunk = LOAD_CHUNK) {
-  if (postIndex < 0) return currentVisibleCount;
-  const minimum = postIndex + 1;
-  if (minimum <= currentVisibleCount) return currentVisibleCount;
-  return Math.ceil(minimum / chunk) * chunk;
 }
