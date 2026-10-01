@@ -6,7 +6,7 @@ if [[ -z "${DATABASE_URL:-}" ]]; then
   exit 2
 fi
 
-for command in git tar curl ps awk sed stat date; do
+for command in git tar curl ps awk sed stat date grep seq ss; do
   command -v "$command" >/dev/null 2>&1 || { echo "missing required command: $command" >&2; exit 2; }
 done
 
@@ -90,6 +90,17 @@ if [[ ! "$current_db" =~ ^ginbar_m2_bench([_].*)?$ ]]; then
   echo "refusing to use database '$current_db'; expected name ginbar_m2_bench or ginbar_m2_bench_*" >&2
   exit 2
 fi
+
+pg_sample_mode="client"
+if [[ -n "${GINBAR_BENCH_PG_CONTAINER:-}" ]]; then
+  command -v docker >/dev/null 2>&1 || { echo "GINBAR_BENCH_PG_CONTAINER requires Docker" >&2; exit 2; }
+  docker inspect "$GINBAR_BENCH_PG_CONTAINER" >/dev/null 2>&1 || {
+    echo "benchmark PostgreSQL container '$GINBAR_BENCH_PG_CONTAINER' is not available" >&2
+    exit 2
+  }
+  pg_sample_mode="container"
+fi
+echo "pg_sample_mode=$pg_sample_mode" >> "$results_dir/environment.txt"
 
 git -C "$repo_root" archive HEAD src/backend/v2 | tar -x -C "$work_dir"
 module_dir="$work_dir/src/backend/v2"
@@ -219,34 +230,79 @@ psql_exec "$DATABASE_URL" -v ON_ERROR_STOP=1 -P pager=off -c \
   "select relname, indexrelname, idx_scan, pg_size_pretty(pg_relation_size(indexrelid)) as index_size from pg_stat_user_indexes order by relname, indexrelname;" \
   > "$results_dir/index-stats-before.txt"
 
-listen_addr="127.0.0.1:${GINBAR_BENCH_PORT:-18080}"
+port_in_use() {
+  local port="$1"
+  ss -H -ltn | awk '{print $4}' | grep -Eq ":${port}$"
+}
+
+bench_port="${GINBAR_BENCH_PORT:-}"
+if [[ -n "$bench_port" ]]; then
+  if [[ ! "$bench_port" =~ ^[0-9]+$ ]] || (( bench_port < 1024 || bench_port > 65535 )); then
+    echo "GINBAR_BENCH_PORT must be an integer between 1024 and 65535" >&2
+    exit 2
+  fi
+  if port_in_use "$bench_port"; then
+    echo "requested benchmark API port $bench_port is already in use" >&2
+    exit 2
+  fi
+else
+  for candidate in $(seq 18080 18179); do
+    if ! port_in_use "$candidate"; then
+      bench_port="$candidate"
+      break
+    fi
+  done
+  [[ -n "$bench_port" ]] || { echo "no free benchmark API port found in 18080-18179" >&2; exit 2; }
+fi
+
+listen_addr="127.0.0.1:${bench_port}"
 base_url="http://$listen_addr"
+echo "api_port=$bench_port" >> "$results_dir/environment.txt"
+
 DATABASE_URL="$DATABASE_URL" DB_MAX_CONNS="${DB_MAX_CONNS:-8}" LISTEN_ADDR="$listen_addr" \
   "$bin_dir/ginbar-api" > "$results_dir/api.log" 2>&1 &
 api_pid=$!
 echo "api_pid=$api_pid" >> "$results_dir/environment.txt"
 
+api_ready=0
 for _ in {1..60}; do
-  if curl -fsS "$base_url/healthz" >/dev/null 2>&1; then
-    break
-  fi
   if ! kill -0 "$api_pid" 2>/dev/null; then
     echo "API exited before becoming healthy" >&2
+    tail -40 "$results_dir/api.log" >&2 || true
     exit 1
+  fi
+  if curl -fsS "$base_url/healthz" >/dev/null 2>&1; then
+    api_ready=1
+    break
   fi
   sleep 0.25
 done
+if (( api_ready != 1 )); then
+  echo "API did not become healthy before timeout" >&2
+  exit 1
+fi
+kill -0 "$api_pid" 2>/dev/null || { echo "API exited immediately after health check" >&2; exit 1; }
+
 curl -fsS "$base_url/healthz" > "$results_dir/smoke-health.json"
 curl -fsS "$base_url/api/v2/feed?limit=60" > "$results_dir/smoke-feed.json"
 curl -fsS "$base_url/api/v2/feed?before=50000&limit=60&q=tag-42%20score:%3E%3D100" > "$results_dir/smoke-search.json"
 curl -fsS "$base_url/api/v2/posts/50000/around?radius=30" > "$results_dir/smoke-around.json"
 
+pg_connection_counts() {
+  local sql
+  sql="select count(*) filter (where pid <> pg_backend_pid()), count(*) filter (where pid <> pg_backend_pid() and state = 'active') from pg_stat_activity where datname = current_database();"
+  if [[ "$pg_sample_mode" == "container" ]]; then
+    docker exec "$GINBAR_BENCH_PG_CONTAINER" psql -U postgres -d "$current_db" -AtF' ' -c "$sql"
+  else
+    psql_exec "$DATABASE_URL" -AtF' ' -c "$sql"
+  fi
+}
+
 sample_loop() {
   printf 'timestamp\tapi_cpu_pct\tapi_rss_kb\tpg_total_connections\tpg_active_connections\tload1\tload5\tload15\n'
   while kill -0 "$api_pid" 2>/dev/null; do
     read -r api_cpu api_rss < <(ps -p "$api_pid" -o %cpu=,rss= | awk 'NR==1 {print $1, $2}')
-    read -r pg_total pg_active < <(psql_exec "$DATABASE_URL" -AtF' ' -c \
-      "select count(*), count(*) filter (where state = 'active') from pg_stat_activity where datname = current_database();")
+    read -r pg_total pg_active < <(pg_connection_counts)
     read -r load1 load5 load15 _ < /proc/loadavg
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
       "$(date -u +%FT%T.%3NZ)" "${api_cpu:-0}" "${api_rss:-0}" \
