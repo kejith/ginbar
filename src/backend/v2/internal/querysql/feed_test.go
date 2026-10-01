@@ -46,7 +46,7 @@ func TestBuildFeedIsCursorBasedFilteredAndParameterized(t *testing.T) {
 	}
 }
 
-func TestBuildAroundKeepsSelectedPostOutsideContextFilters(t *testing.T) {
+func TestBuildAroundKeepsSelectedPostOutsideSearchButInsideVisibility(t *testing.T) {
 	sql, args := BuildAround(feed.AroundQuery{
 		PostID:  5000,
 		Radius:  30,
@@ -71,11 +71,17 @@ func TestBuildAroundKeepsSelectedPostOutsideContextFilters(t *testing.T) {
 	if !strings.Contains(selectedSQL, "p.id = $1") {
 		t.Fatalf("selected branch does not target the canonical post: %s", selectedSQL)
 	}
-	if strings.Contains(selectedSQL, "AND p.content_filter IN (") || strings.Contains(selectedSQL, "pt.tag_id") || strings.Contains(selectedSQL, "AND p.score") {
-		t.Fatalf("selected post must not be hidden by surrounding-feed filters/search: %s", selectedSQL)
+	if !strings.Contains(selectedSQL, "AND p.content_filter IN ($3)") {
+		t.Fatalf("selected post must remain constrained by allowed visibility: %s", selectedSQL)
+	}
+	if strings.Contains(selectedSQL, "pt.tag_id") || strings.Contains(selectedSQL, "AND p.score") {
+		t.Fatalf("selected post must not be hidden by surrounding search predicates: %s", selectedSQL)
+	}
+	if strings.Count(sql, "AND p.content_filter IN ($3)") != 3 {
+		t.Fatalf("allowed visibility must apply to newer, selected, and older branches: %s", sql)
 	}
 	if strings.Count(sql, "pt.tag_id = (") != 2 || strings.Count(sql, "AND p.score >= $5") != 2 {
-		t.Fatalf("context filters/search should apply to newer and older branches only: %s", sql)
+		t.Fatalf("search predicates should apply to newer and older branches only: %s", sql)
 	}
 	if strings.Contains(sql, ") window") || !strings.Contains(sql, ") combined_posts") {
 		t.Fatalf("invalid around-post derived-table alias: %s", sql)
