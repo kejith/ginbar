@@ -124,7 +124,7 @@ func (l *lexer) next() (token, error) {
 		if c == '\\' {
 			return token{}, fmt.Errorf("search position %d: backslash is not allowed in an unquoted tag", l.pos)
 		}
-		if isSpace(c) || c == '-' || c == ':' || c == '>' || c == '<' || c == '=' || c == '"' {
+		if isSpace(c) || c == ':' || c == '>' || c == '<' || c == '=' || c == '"' {
 			break
 		}
 		l.pos++
