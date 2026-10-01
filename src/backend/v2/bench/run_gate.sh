@@ -18,10 +18,11 @@ timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 results_dir="${GINBAR_BENCH_RESULTS_DIR:-/tmp/ginbar-m2-gate-${timestamp}-${run_label}}"
 work_dir="$(mktemp -d /tmp/ginbar-m2-work.XXXXXX)"
 go_cache_dir="$(mktemp -d /tmp/ginbar-m2-gocache.XXXXXX)"
+bin_dir="$work_dir/bin"
 api_pid=""
 sampler_pid=""
 
-mkdir -p "$results_dir"
+mkdir -p "$results_dir" "$bin_dir"
 
 psql_mode=""
 if command -v psql >/dev/null 2>&1; then
@@ -133,6 +134,26 @@ go_exec() {
   fi
 }
 
+go_build() {
+  local output_name="$1"
+  shift
+  if [[ "$go_mode" == "host" ]]; then
+    (cd "$module_dir" && GOWORK=off go build -trimpath -o "$bin_dir/$output_name" "$@")
+  else
+    docker run --rm --network host \
+      --user "$(id -u):$(id -g)" \
+      -e HOME=/tmp \
+      -e GOWORK=off \
+      -e GOMODCACHE=/go-cache/mod \
+      -e GOCACHE=/go-cache/build \
+      -v "$module_dir:/src" \
+      -v "$go_cache_dir:/go-cache" \
+      -v "$bin_dir:/out" \
+      -w /src \
+      golang:1.25 go build -trimpath -o "/out/$output_name" "$@"
+  fi
+}
+
 set +e
 go_exec mod tidy > "$results_dir/go-mod-tidy.log" 2>&1
 tidy_status=$?
@@ -149,9 +170,12 @@ if (( tidy_status != 0 || test_status != 0 )); then
   exit 1
 fi
 
-go_exec build -trimpath -o "$work_dir/ginbar-api" ./cmd/api > "$results_dir/go-build-api.log" 2>&1
-go_exec build -trimpath -o "$work_dir/httpbench" ./bench/httpbench.go > "$results_dir/go-build-httpbench.log" 2>&1
-stat -c 'api_binary_bytes=%s' "$work_dir/ginbar-api" >> "$results_dir/environment.txt"
+go_build ginbar-api ./cmd/api > "$results_dir/go-build-api.log" 2>&1
+go_build httpbench ./bench/httpbench.go > "$results_dir/go-build-httpbench.log" 2>&1
+[[ -x "$bin_dir/ginbar-api" ]] || { echo "API binary missing after build" >&2; exit 1; }
+[[ -x "$bin_dir/httpbench" ]] || { echo "HTTP benchmark binary missing after build" >&2; exit 1; }
+stat -c 'api_binary_bytes=%s' "$bin_dir/ginbar-api" >> "$results_dir/environment.txt"
+stat -c 'httpbench_binary_bytes=%s' "$bin_dir/httpbench" >> "$results_dir/environment.txt"
 
 if [[ "${GINBAR_BENCH_SKIP_DB_PREP:-0}" != "1" ]]; then
   schema_start_ns="$(date +%s%N)"
@@ -180,7 +204,7 @@ psql_exec "$DATABASE_URL" -v ON_ERROR_STOP=1 -P pager=off -c \
 listen_addr="127.0.0.1:${GINBAR_BENCH_PORT:-18080}"
 base_url="http://$listen_addr"
 DATABASE_URL="$DATABASE_URL" DB_MAX_CONNS="${DB_MAX_CONNS:-8}" LISTEN_ADDR="$listen_addr" \
-  "$work_dir/ginbar-api" > "$results_dir/api.log" 2>&1 &
+  "$bin_dir/ginbar-api" > "$results_dir/api.log" 2>&1 &
 api_pid=$!
 echo "api_pid=$api_pid" >> "$results_dir/environment.txt"
 
@@ -230,7 +254,7 @@ while IFS=$'\t' read -r case_name url; do
   for concurrency in $concurrencies; do
     output="$results_dir/http-${case_name}-c${concurrency}.json"
     set +e
-    "$work_dir/httpbench" \
+    "$bin_dir/httpbench" \
       -url "$url" \
       -concurrency "$concurrency" \
       -requests "$requests" \
