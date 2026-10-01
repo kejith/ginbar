@@ -254,13 +254,13 @@ sampler_pid=$!
 
 requests="${GINBAR_BENCH_REQUESTS:-2000}"
 concurrencies="${GINBAR_BENCH_CONCURRENCIES:-1 4 8 16 32}"
-cat > "$results_dir/cases.tsv" <<CASES
-feed-first\t$base_url/api/v2/feed?limit=60
-feed-cursor\t$base_url/api/v2/feed?before=50000&limit=60
-search-tag-score\t$base_url/api/v2/feed?before=50000&limit=60&q=tag-42%20score:%3E%3D100
-search-tag-exclude-score\t$base_url/api/v2/feed?before=50000&limit=60&q=tag-42%20-tag-77%20score:%3E%3D100
-around-50000\t$base_url/api/v2/posts/50000/around?radius=30
-CASES
+{
+  printf 'feed-first\t%s\n' "$base_url/api/v2/feed?limit=60"
+  printf 'feed-cursor\t%s\n' "$base_url/api/v2/feed?before=50000&limit=60"
+  printf 'search-tag-score\t%s\n' "$base_url/api/v2/feed?before=50000&limit=60&q=tag-42%20score:%3E%3D100"
+  printf 'search-tag-exclude-score\t%s\n' "$base_url/api/v2/feed?before=50000&limit=60&q=tag-42%20-tag-77%20score:%3E%3D100"
+  printf 'around-50000\t%s\n' "$base_url/api/v2/posts/50000/around?radius=30"
+} > "$results_dir/cases.tsv"
 
 : > "$results_dir/http-status.tsv"
 while IFS=$'\t' read -r case_name url; do
