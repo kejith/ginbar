@@ -1,10 +1,10 @@
 # Ginbar v2 State / Handoff
 
 Last updated: 2026-10-01
-Phase: M1 complete; M2 may begin from current `v2`
+Phase: M2 core schema/API first slice implemented; target-server PostgreSQL benchmark gate outstanding
 Integration branch: `v2`
+Active implementation branch: `astra/m2-core-schema-api`
 Completed M1 branch: `astra/m1-scroll-anchor`
-Hardware/client results branch: `astra/m1-hardware-results`
 Legacy branch: `master` (read-only for rewrite work)
 
 ## Read this first
@@ -14,104 +14,171 @@ This file is the minimal resume point for humans and Astra. Read it before `PLAN
 ## Branch status
 
 - `master` remains untouched by rewrite work.
-- M1 started from `v2` at `38c515afd2862cb6a3b6a6c677c9b34fa210b662`.
-- `astra/m1-board-prototype` produced the initial validated board prototype at `da0885f724d662333af45dc307c1d501135da266`.
-- `astra/m1-scroll-anchor` contains the completed M1 implementation, prepend-anchor fix, M1 decision docs, and committed npm lockfile.
-- The validated lockfile commit is `82de7b2f90735281b00d7c23ccc3d02e714389de`.
-- This completed M1 history is a clean fast-forward descendant of `v2`; no competing `v2` commits were present at integration time.
+- M1 is complete and integrated into `v2` at `32e154c4541fcdd2c24c1c05ed278e2dbddef960`.
+- `astra/m2-core-schema-api` was created directly from that exact `v2` head.
+- The M2 branch is currently a clean descendant of `v2`; do not merge it until the real Go/PostgreSQL/server gate below passes.
+- M2 commits so far:
+  - `7c3b6b2ac1599b5cb1b04e9a73722197011c9805` — search/feed/domain/HTTP service contracts
+  - `caee8b57455be9ea460594896d6e828fa3b1d2db` — PostgreSQL schema, query compiler/store, API executable, benchmark fixtures
+  - `b5f69dee11048d9ff7a3f9bde15926f125200b9c` — M2 docs/runbook and workspace switch
 
-## M1 completion
+## M1 decision retained
 
-M1 is complete and the frontend framework gate is passed.
+- SolidJS is accepted for the v2 frontend.
+- Keep incremental retention + CSS containment; do not add virtualization without later evidence.
+- Frontend/browser timings belong to the client machine running the browser.
+- Target-server benchmarking is authoritative only for backend/server-side implementation.
 
-Validated behavior:
+## M2 architecture in this slice
 
-- 10,000 deterministic fake posts ordered by ID descending
-- responsive 100%-width equal-square grid
-- deterministic absolute row mapping
-- exactly one inline full-width expanded post below the selected thumbnail row
-- same-row replacement and cross-row relocation
-- canonical `/post/:id`, direct links, Back/Forward
-- Arrow keys and J/K navigation; Escape close
-- intrinsic media sizing
-- bidirectional incremental loading
-- bounded deep-link reconstruction
-- stable absolute row identity
-- targeted Solid selection reactivity using `createSelector`
-- row-level containment and `content-visibility`
-- explicit prepend viewport anchoring
-- benchmark/invariant API via `window.__ginbarM1`
-- no virtualization
+M2 is a clean v2 backend module at `src/backend/v2`. The legacy `src/backend` / `wallium` implementation is reference-only and is not extended.
 
-Durable M1 architecture/results summary: `docs/v2/M1.md`.
-Detailed first profiling results remain on `astra/m1-hardware-results` in `docs/v2/M1_HARDWARE_RESULTS.md` and `.json`.
+The root Go workspace now points only at `src/backend/v2`; the stale legacy workspace sum was removed.
 
-## M1 validation evidence
+Current backend choices:
 
-Initial client/browser profiling established:
+- Go 1.25 minimum
+- direct `pgx/v5` PostgreSQL interface, currently pinned to 5.11.0
+- standard-library `net/http`; no application web framework
+- PostgreSQL authoritative for application state and durable media jobs
+- no Redis dependency yet; add it only for a measured ephemeral responsibility
+- initial PostgreSQL pool cap: 8 connections
+- 3-second application/request context for current feed DB work
+- cursor pagination by post ID; no OFFSET
 
-- production JS 26,539 B raw / 10,122 B gzip
-- production CSS 3,293 B raw / 1,402 B gzip
-- selection sync p95 roughly 0.4-0.5 ms from 320 through 10,000 retained posts
-- about 32.5k DOM nodes at 10,000 posts on 1440x900 and about 40k at 390x844
-- direct routes, bounded deep links, same/cross-row selection, history, keyboard navigation, and full traversal passed
+## Fresh schema foundation
 
-That run found one reproducible correctness issue: prepending newer rows from a centered deep link caused a large viewport jump.
+`src/backend/v2/internal/schema/migrations/001_core.sql` defines fresh v2 tables for:
 
-The corrected `astra/m1-scroll-anchor` implementation was then validated locally:
+- `users`
+- `user_roles`
+- `user_credentials`
+- `user_identities`
+- `invitations`
+- `posts`
+- `media`
+- `tags`
+- `post_tags`
+- nested `comments`
+- `post_votes`
+- `comment_votes`
+- durable `media_jobs`
 
-- `npm install` passed
-- `npm run validate` passed: all 8 tests, real TypeScript checking, production Vite build
-- deterministic `window.__ginbarM1.prepend()` preserved the selected row with 0 px residual movement at both 1440x900 and 390x844
-- wheel scrolling extended the newer logical range from 4,520 to 3,240 and the older range from 5,480 to 5,800 with invariants passing
-- representative 10,000-post desktop profile: same-row sync p95 0.3 ms, cross-row sync p95 0.4 ms, cross-row frame p95 17.1 ms, 32,532 DOM nodes, zero Long Tasks during the matrix
+Important modeling decisions:
 
-The exact dependency graph is now committed in `src/frontend/package-lock.json`. Against that committed lockfile:
+- immutable numeric bigint IDs are relational identity
+- username is never a foreign key
+- credentials and external identities are separate from users
+- invitation policy is separate from credential/identity design
+- post content filter and release state are explicit
+- media processing state is explicit
+- tag removal preserves moderator/user audit metadata
+- media jobs are durable PostgreSQL rows with availability/attempt/lease fields
 
-```bash
-npm ci
-npm run validate
-```
+Indexes are intentionally limited to the initial real query shapes. Do not add speculative indexes before the server plans are captured.
 
-passed successfully, including all 8 tests, typecheck, and production build.
+## Core API/query slice
 
-## M1 decisions
+Implemented endpoints:
 
-### SolidJS
+- `GET /healthz`
+- `GET /api/v2/feed?before=<post-id>&limit=<n>&q=<search>`
+- `GET /api/v2/posts/<id>/around?radius=<n>&q=<search>`
 
-Accepted for v2.
+The feed path:
 
-Selection cost remained effectively flat through 10,000 retained posts in measured client runs, the corrected board remained below 0.5 ms sync p95 for same/cross-row selection, and no Solid-specific architectural bottleneck appeared.
+- orders by post ID descending
+- uses `p.id < cursor`
+- requests `limit + 1` to derive the next cursor
+- returns only explicitly released/non-deleted posts with ready media
+- defaults current unauthenticated skeleton visibility to `sfw`
+- has a hard page cap of 120
 
-### Retention / virtualization
+Around-post reconstruction uses two bounded ID scans rather than OFFSET: newer IDs ascending up to the radius, older/current IDs descending up to radius + 1, then combines them in descending board order.
 
-Keep incremental retention + CSS containment. Do not add virtualization now.
+All SQL values are parameterized. Search score operator text is selected only from a closed typed enum.
 
-The 10,000-post retained DOM is large, but it was not demonstrated as the M1 interaction bottleneck. If real product workloads later show memory or scroll pressure, evaluate bounded retention before full virtualization.
+## Search parser
 
-## Benchmark execution rule
+A real lexer/parser/AST is implemented; query strings are not split ad hoc.
 
-Frontend and backend performance evidence are intentionally separated:
+Current grammar supports:
 
-- frontend/browser performance belongs to the client machine executing JavaScript/layout/paint;
-- a remote server serving frontend assets does not make browser timings server-hardware timings;
-- future target-server benchmarks are authoritative for backend/server-side implementation only: Go API, PostgreSQL, Redis, Rust worker, nginx/static serving, concurrency, and server contention as applicable.
+- included tags: `cat landscape`
+- excluded tags: `-anime`
+- quoted tag names
+- one score predicate such as `score:>=100` or `score:<-10`
 
-## M2 scope
+It normalizes/deduplicates tags, limits query complexity, and rejects malformed predicates. SQL compilation remains separate from parsing.
 
-M2 is the fresh v2 schema + core Go API milestone:
+## Tests/checks completed in the Astra environment
 
-- fresh migrations/schema
-- users/roles/invitations/credentials
-- posts/media metadata/filters/release state
-- tags and tag-search AST
-- cursor feed and around-post/deep-link endpoints
-- comments/votes foundations
-- durable media-job table/state machine
-- strict API contracts and error model
+The available execution environment has Go 1.23.2 and no PostgreSQL server, while this v2 module intentionally requires Go 1.25 because of the chosen current pgx release.
 
-M2 gate: benchmark representative feed/search/post endpoints and inspect important PostgreSQL query plans with `EXPLAIN (ANALYZE, BUFFERS)`.
+Completed checks:
+
+- pure package tests pass for `search`, `feed`, `httpapi`, `querysql`, and `schema` using a temporary local-only Go directive downgrade with the workspace disabled;
+- tests cover parser behavior/errors, feed cursor/page contract, filter normalization, around-post selected-post semantics, HTTP error/deadline behavior, SQL parameterization/no-OFFSET shape, around-query bounds, and embedded migration presence;
+- complete module source including `cmd/api` and the PostgreSQL store typechecked/tested against a temporary local-only pgx API stub;
+- no stub and no temporary Go-version change is committed;
+- source was gofmt'd before commit.
+
+Not validated here and therefore not claimed:
+
+- real pgx compilation against Go 1.25+
+- actual PostgreSQL migration execution
+- SQL planner behavior
+- PostgreSQL scan/runtime behavior
+- target-server API latency/concurrency
+
+## Server benchmark fixtures
+
+`src/backend/v2/bench/seed.sql` creates a disposable benchmark set of:
+
+- 1,000 users
+- 100,000 released posts
+- 100,000 media rows
+- 100 tags
+- roughly three active tags per post
+
+`src/backend/v2/bench/explain.sql` captures `EXPLAIN (ANALYZE, BUFFERS)` for:
+
+- first feed page
+- old-cursor feed page
+- required tag + score
+- required + excluded tag
+- around-post reconstruction
+
+Detailed procedure: `docs/v2/M2_RUN.md`.
+
+## Performance risks to answer with evidence
+
+1. Does `posts_feed_released_idx` give a bounded backward scan for normal and old-cursor pages?
+2. Does required-tag search scan too much of the feed because of the initial correlated `EXISTS` shape?
+3. Does excluded-tag filtering create meaningful extra work?
+4. Does the two-sided around-post query remain bounded around old IDs?
+5. Is an 8-connection pool sufficient on the shared i7-7700 host, or does measured contention justify another value?
+6. Is PostgreSQL/query work dominant, or is API encoding/Go overhead material?
+
+If tag search is weak, improve relational/query shape before adding cache complexity. Do not introduce Redis merely to hide an unmeasured SQL plan.
+
+## M2 gate outstanding
+
+On the target server, in an isolated M2 worktree and disposable database:
+
+- use real Go 1.25+
+- run `go mod tidy` and commit the resulting `go.sum` only after successful dependency-backed validation
+- run `go test ./...`
+- apply `001_core.sql`
+- run the 100k-post seed
+- capture all `EXPLAIN (ANALYZE, BUFFERS)` plans
+- smoke test feed/search/around endpoints
+- benchmark representative HTTP shapes at concurrency 1 / 4 / 8 and enough additional load to expose pool saturation if present
+- record p50/p95/p99, requests/sec, errors, CPU, and PostgreSQL connection behavior
+- make query/index changes only from those measurements, with before/after evidence
+
+Do not merge M2 into `v2` until this gate is reviewed.
 
 ## Single best next task
 
-Create a short-lived M2 branch from the current `v2` head and design/implement the smallest coherent foundation for the fresh PostgreSQL schema plus thin Go API skeleton. Start with immutable numeric identities, users/credentials/invitations/roles, posts/media state, and the ID-descending cursor-feed query shape; add migrations and tests before expanding into search/comments/votes/media jobs. Benchmark the first real feed endpoint/query on the target server once it exists.
+Run `docs/v2/M2_RUN.md` on the remote target server against `astra/m2-core-schema-api`: validate with real Go/pgx, apply and seed the disposable PostgreSQL schema, collect the five query plans and API concurrency measurements, then use those results to tune only demonstrated query/index bottlenecks before deciding whether this first M2 slice can integrate into `v2`.
