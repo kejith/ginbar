@@ -1,9 +1,11 @@
 # Ginbar v2 State / Handoff
 
-Last updated: 2026-09-30
-Phase: M1 implementation ready for target-hardware validation; M1 gate not yet passed
+Last updated: 2026-10-01
+Phase: M1 prepend scroll-anchor fix implemented; local client/browser validation still required before gate review
 Integration branch: `v2`
-Active implementation branch: `astra/m1-board-prototype`
+Base M1 implementation branch: `astra/m1-board-prototype`
+Active fix branch: `astra/m1-scroll-anchor`
+Hardware/client results branch: `astra/m1-hardware-results`
 Legacy branch: `master` (read-only for rewrite work)
 
 ## Read this first
@@ -12,93 +14,77 @@ This file is the minimal resume point for humans and Astra. Read it before `PLAN
 
 ## Branch status
 
-- `v2` remains the rewrite integration root at base commit `38c515afd2862cb6a3b6a6c677c9b34fa210b662` for this branch.
-- `master` and `v2` were not modified by M1 implementation work.
-- `astra/m1-board-prototype` is ahead of `v2` and contains the complete current M1 prototype plus docs/runbook.
-- Important commits in this session:
-  - `446f87cd021fe0aa95bca90f8691af0ceada662e` — stable-row/selective-reactivity board rewrite
-  - `a746646400972b77ed565553a4e68dcebcc20af0` — containment/intrinsic-row CSS cleanup
-  - `732236c6c46bc83554cf6f59205f295b6d5afab3` — one-command frontend validation
-  - `56b5cba524fb35b058a3b33289e75ce3292b3eb0` — target-hardware M1 runbook
-  - `594e5003952d9c32a0e9c46ee006a2a17ed3fc5e` — updated M1 architecture/benchmark notes
+- `v2` remains the rewrite integration root and was not modified.
+- `master` remains untouched by rewrite work.
+- `astra/m1-board-prototype` remains at `da0885f724d662333af45dc307c1d501135da266` and is the base for this fix.
+- `astra/m1-scroll-anchor` was created directly from that exact commit.
+- `astra/m1-hardware-results` remains documentation/results-only and contains the first profiling run plus the benchmark execution rule.
 
-## M1 implementation status
+## First profiling result
 
-The active frontend is a minimal SolidJS + TypeScript + Vite prototype using plain CSS and native browser APIs.
+The 2026-10-01 profiling run validated the existing M1 prototype without changing application source:
 
-Implemented:
+- real `npm install`, `npm run validate`, tests, typecheck, and production build passed;
+- production JS: 26,539 B raw / 10,122 B gzip;
+- production CSS: 3,293 B raw / 1,402 B gzip;
+- client-browser selection sync p95 stayed roughly 0.4-0.5 ms from 320 through 10,000 retained posts;
+- 10,000 retained posts produced about 32.5k DOM nodes at 1440x900 and about 40k at 390x844;
+- direct routes, bounded deep links, same/cross-row selection, Back/Forward, Arrow keys, J/K, Escape, and full 10,000-post traversal passed;
+- reproducible blocker: prepending newer posts from a centered deep link such as `/post/5000` moved the viewport far away from the previously visible content.
 
-- 10,000 deterministic fake posts ordered by ID descending
-- responsive 100%-width equal-square thumbnail rows
-- deterministic absolute post-index -> row mapping
-- exactly one inline full-width expanded post beneath the selected row
-- same-row selection swaps expanded content in place; cross-row selection relocates the expanded row
-- canonical `/post/:id`, direct-load reconstruction, History API Back/Forward synchronization
-- Arrow keys and J/K navigation; Escape closes the expanded post
-- intrinsic image sizing and viewport-bounded video sizing
-- bidirectional incremental loading using top/bottom `IntersectionObserver` sentinels
-- bounded direct-link windows around old posts instead of retaining every newer post to reach the selected ID
-- row-level `content-visibility`, containment, and measured intrinsic-size placeholders
-- benchmark/invariant API via `window.__ginbarM1`
-- no virtualization
+Detailed first-run results are on `astra/m1-hardware-results` in `docs/v2/M1_HARDWARE_RESULTS.md` and `.json`.
 
-Durable architecture/benchmark detail: `docs/v2/M1.md`.
-Target-hardware procedure: `docs/v2/M1_RUN.md`.
+## Benchmark execution rule
 
-## Performance-oriented decisions already implemented
+Frontend and backend performance evidence are intentionally separated:
 
-- Rows are keyed by stable absolute numeric row indexes. Retention growth/prepend should add rows without rebuilding existing rows.
-- Selection membership uses Solid `createSelector`; retained thumbnails/rows should not all react to every selected-ID change.
-- Far history/route jumps recenter a bounded window rather than constructing a huge contiguous prefix.
-- Direct links reconstruct roughly one 320-post window around the selected item, then extend in either direction on demand.
-- No router, global store, virtualizer, UI kit, animation framework, or runtime CSS-in-JS was added.
-- Sticky-header backdrop blur was removed to avoid needless scroll repaint work in the benchmark.
-- Virtualization remains deliberately absent until retained-DOM profiling proves it is needed.
+- frontend/browser benchmarks belong to the client machine executing JavaScript/layout/paint;
+- the remote target server serving frontend assets does not make browser timings target-server timings;
+- future target-server performance benchmarks are authoritative only for backend/server-side implementation such as Go API, PostgreSQL, Redis, Rust worker, nginx/static-serving overhead, concurrency, and server-side contention;
+- do not block frontend framework decisions on absence of a browser running on the server; record client/browser hardware explicitly.
 
-## Checks completed in this environment
+## Scroll-anchor fix implemented on `astra/m1-scroll-anchor`
 
-- `node --test src/board-model.test.js`: 8/8 passing.
-- Pure tests cover deterministic data, responsive columns, row mapping, index-range -> row-range mapping, bounded deep-link windows, bidirectional range extension, strict `/post/:id` parsing, and navigation boundary clamping.
-- Source-level TypeScript check passes with local Solid declaration stubs using TypeScript 5.8.3.
-- Local runtime used for those checks: Node v22.16.0.
-- Committed content blobs exactly match the locally checked files:
-  - `App.tsx`: `3378d081fe3b0d928bd9ef48699b3256c0f93dfa`
-  - `board-model.js`: `f20130d4741a75759512b0d95b4f67b86dabe1a1`
-  - `board-model.test.js`: `3a8d66654e2349cb48a2d7de573f96e008c0a04a`
-  - `styles.css`: `d185eda4e4093aea54cb798fe270d60385c72fbe`
-- External npm access is unavailable here: `npm ping --registry=https://registry.npmjs.org --fetch-timeout=3000 --fetch-retries=0` fails with `EAI_AGAIN getaddrinfo`.
-- Therefore real dependency installation, real Solid/Vite declaration checking, production build, and real Solid runtime profiling were not possible here.
+The prepend path now uses explicit viewport anchoring instead of relying on browser native anchoring:
 
-## Existing lower-bound measurement
+1. capture the row currently under the viewport immediately below the sticky header before a top-edge range extension;
+2. fall back to the selected row if no visible row can be sampled;
+3. prepend the next 320-post chunk using the existing stable absolute row keys;
+4. on the next animation frame, measure movement of that same DOM row;
+5. scroll by exactly the measured delta before paint;
+6. set `overflow-anchor: none` on the board so native browser anchoring does not compete with the explicit correction;
+7. coalesce overlapping prepend requests until the two-frame correction/probe completes.
 
-A framework-free headless-Chromium DOM harness using the same row/containment concept measured forced-layout relocation cost. This excludes Solid runtime/compiler work and is not the framework-gate result.
+The benchmark API now exposes `await window.__ginbarM1.prepend()` and returns `beforeTop`, `shiftedTop`, `afterTop`, the applied correction, and before/after logical ranges. This provides a deterministic regression probe for the previously timing-sensitive sentinel behavior.
 
-| Viewport | Retained thumbnails | Same-row p95 | Cross-row p95 |
-| --- | ---: | ---: | ---: |
-| 1440x900 | 320 | 0.2 ms | 0.3 ms |
-| 1440x900 | 5,000 | 0.8 ms | 1.1 ms |
-| 390x844 | 320 | 0.2 ms | 0.4 ms |
-| 390x844 | 5,000 | 1.7 ms | 1.9 ms |
+## Current branch commits
 
-Interpretation: row layout/containment alone is not an obvious M1-scale bottleneck. Do not use these numbers to accept Solid or to justify indefinite DOM retention.
+- `bf7b82a7a4407d219692c85669986b5a01c5ab61` — explicit viewport-anchor compensation and benchmark probe
+- `d72ac8a3fc9ea325078a246fa836403b2d65b34b` — disable competing native board scroll anchoring
+- `fe0ac4a258532d1a35fae6636bbeb00d44ff9169` — document anchor design and rerun procedure
 
-## M1 gate still outstanding
+## Checks completed in this session
 
-Run `docs/v2/M1_RUN.md` on the target hardware and record:
+- The exact committed `App.tsx` blob is `c3bdf9527210a69e3d48441a4222bb192a931114` and matches the locally checked source byte-for-byte.
+- TypeScript 5.8.3 source checking passed using local Solid declaration stubs; no source-level type errors were found.
+- A framework-free Chromium forced-layout harness with native anchoring disabled inserted 10,000 px above the visible anchor; applying `shiftedTop - beforeTop` via `scrollBy` restored the same row to its original viewport position with 0 px residual error.
+- `board-model.js` and its existing 8/8 tests were not changed by this fix.
+- External npm access remains unavailable in the Astra execution environment, so the real dependency-backed Solid/Vite build of this new branch must be rerun locally.
 
-- fresh `package-lock.json` plus real `npm run validate` result
-- production bundle sizes
-- 1440x900 and 390x844 timing/profile matrix at 320 / 2,000 / 5,000 / 10,000 retained posts
-- row mount/unmount behavior during monotonic retention growth
-- Long Tasks, scripting/layout/paint traces, DOM count, and heap growth
-- direct `/post/10000`, `/post/5000`, `/post/1` correctness
-- Back/Forward and Arrow/J/K correctness
-- long scrolling from `/` and bidirectional extension from `/post/5000`
-- Solid framework decision
-- retention-cap/virtualization decision based on measurements only
+## M1 gate status
 
-Do not start M2 or merge this branch into `v2` until the M1 gate is reviewed.
+M1 is not yet passed. The implementation-side blocker has a fix, but it needs client/browser confirmation through the real Solid build.
+
+Required before gate review:
+
+- run `npm run validate` on `astra/m1-scroll-anchor` with real dependencies;
+- at both 1440x900 and 390x844, open `/post/5000` and run `await window.__ginbarM1.prepend()`; `afterTop - beforeTop` should remain near zero and invariants must pass;
+- rerun wheel-driven bidirectional scrolling around `/post/5000` to exercise the real top-sentinel path;
+- rerun a representative 10,000-post selection/scroll profile to ensure no new Long Tasks or selection regression;
+- then review Solid acceptance and retention/virtualization based on the corrected client-browser evidence.
+
+Do not begin M2 or merge into `v2` until this M1 gate review is complete.
 
 ## Single best next task
 
-On the actual target hardware, follow `docs/v2/M1_RUN.md` exactly: install dependencies, generate the lockfile, run `npm run validate`, inspect the production bundle, then capture the desktop/mobile retention matrix and representative Performance traces. Use that evidence to accept/reject Solid and decide whether bounded retention or virtualization is needed.
+On the local client/browser environment with real dependencies, validate `astra/m1-scroll-anchor`, run the deterministic `/post/5000` `window.__ginbarM1.prepend()` probe at desktop and mobile-class viewports, then repeat bidirectional wheel scrolling and one representative 10,000-post profile. If anchoring remains stable without a performance regression, use that evidence to make the M1 Solid and retention decisions.
