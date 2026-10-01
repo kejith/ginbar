@@ -1,7 +1,7 @@
 # Ginbar v2 State / Handoff
 
 Last updated: 2026-10-01
-Phase: M2 core schema/API implemented; first server validation passed Go/pgx tests but benchmark harness failed before PostgreSQL execution; fixed rerun outstanding
+Phase: M2 core schema/API implemented; Go/pgx validation and Docker builds pass; PostgreSQL benchmark gate still outstanding after two harness-only failures
 Integration branch: `v2`
 Active implementation branch: `astra/m2-core-schema-api`
 Completed M1 branch: `astra/m1-scroll-anchor`
@@ -16,9 +16,7 @@ This file is the resume point. Read it before `PLAN.md`. Do not rely on chat his
 - `master` remains untouched by rewrite work.
 - M1 is complete and integrated into `v2` at `32e154c4541fcdd2c24c1c05ed278e2dbddef960`.
 - `astra/m2-core-schema-api` is a clean descendant of that `v2` head; do not merge until the M2 server gate passes.
-- M2 implementation commits include the clean service/search/API slice, fresh PostgreSQL schema/store/query compiler, benchmark fixtures, deterministic HTTP load generator, execution-only gate runner, and runbook.
-- First benchmark target was `0b1727ffa1638d43b8800170d005b119f591cc67`.
-- After that run, the validated Go module graph was committed and the container-build output defect in `bench/run_gate.sh` was fixed.
+- The M2 branch contains the clean service/search/API slice, fresh PostgreSQL schema/store/query compiler, deterministic benchmark fixtures/load generator, committed real Go module graph, and execution-only target-server gate.
 
 ## M1 decisions retained
 
@@ -34,7 +32,7 @@ The clean v2 backend lives at `src/backend/v2`. Legacy `src/backend` / Wallium c
 Current choices:
 
 - Go 1.25;
-- direct `pgx/v5` PostgreSQL interface, pgx 5.11.0;
+- direct `pgx/v5`, pgx 5.11.0;
 - standard `net/http`, no web framework;
 - PostgreSQL authoritative for application state and durable media jobs;
 - no Redis dependency until a measured ephemeral use exists;
@@ -42,7 +40,7 @@ Current choices:
 - 3-second current feed DB/request deadline;
 - post-ID cursor pagination only, no OFFSET.
 
-Fresh schema covers users, roles, credentials, external identities, invitations, posts, media, tags, tag assignments/removal audit, nested comments, post/comment votes, and durable media jobs.
+Fresh schema covers users, roles, credentials, external identities, invitations, posts, media, tags/tag audit, nested comments, post/comment votes, and durable media jobs.
 
 Identity uses immutable numeric IDs; usernames are never foreign keys. Invitation policy is separate from credentials/identity. Processing/release/filter/job state is explicit.
 
@@ -54,51 +52,63 @@ Endpoints:
 - `GET /api/v2/feed?before=<id>&limit=<n>&q=<search>`
 - `GET /api/v2/posts/<id>/around?radius=<n>&q=<search>`
 
-Feed queries:
-
-- order by post ID descending;
-- use `p.id < cursor`;
-- fetch `limit + 1` for cursor derivation;
-- return released/non-deleted posts with ready media;
-- current skeleton defaults to SFW visibility;
-- hard page cap 120.
+Feed queries order by ID descending, use `p.id < cursor`, fetch `limit + 1`, return released/non-deleted posts with ready media, default the current skeleton to SFW visibility, and cap pages at 120.
 
 Around-post reconstruction uses bounded scans on both sides of the selected ID, not OFFSET.
 
 Search uses a real lexer/parser/AST supporting included tags, excluded tags, quoted tags, and one score predicate such as `score:>=100`. SQL values are parameterized; score operator text comes only from a closed typed enum.
 
-## First real server validation
+## Real target-server validation established
 
-Execution-only agent tested exact commit `0b1727ffa1638d43b8800170d005b119f591cc67` on the target i7-7700 server using Docker Go 1.25.14 and a dedicated PostgreSQL 17.11 container isolated from Wallium.
+The execution-only agent has now run the M2 branch twice on the target i7-7700 server using Docker Go 1.25.14 and a dedicated PostgreSQL 17.11 container isolated from Wallium.
 
-Confirmed:
+Confirmed across the runs:
 
-- `go mod tidy` succeeded;
-- real `go test ./...` with pgx succeeded for every package;
-- generated `go.sum` contained 26 lines, SHA-256 `a5e7a8db07eba28dbde48bf9a54c4e9084a5a95ded581c0ff44c08b74e3dfe69`;
-- tidy added indirect requirements for pgpassfile, pgservicefile, puddle/v2, `x/sync`, and `x/text`;
-- the benchmark checkout stayed clean;
-- production Wallium/master was untouched and Wallium stayed running.
+- `go mod tidy` succeeds;
+- real `go test ./...` with pgx succeeds for every package;
+- committed `go.mod` and `go.sum` are byte-identical to the Go 1.25.14 tidy output;
+- generated `go.sum` is 26 lines, SHA-256 `a5e7a8db07eba28dbde48bf9a54c4e9084a5a95ded581c0ff44c08b74e3dfe69`;
+- API Docker build succeeds; measured binary size on the second run: 14,955,020 bytes;
+- stdlib HTTP benchmark Docker build succeeds; measured binary size: 8,576,020 bytes;
+- benchmark worktrees remained clean;
+- deployed Wallium/master was untouched; Wallium remained running;
+- disposable PostgreSQL containers/volumes were removed after each failed run.
 
-The exact tidied `go.mod` and server-generated `go.sum` are now committed. The committed `go.sum` Git blob is `3f716dd12523b6194234f0bb27a6cf980de0846a`, matching the uploaded server artifact byte-for-byte.
+## Harness failures and fixes
 
-## Harness failure and fix
+### Attempt 1
 
-The first run produced no PostgreSQL plans or HTTP measurements because the gate stopped immediately after successful builds.
+Tested `0b1727ffa1638d43b8800170d005b119f591cc67`.
 
-Cause: in Docker Go mode, `go build -o "$work_dir/..."` referenced a host path that was not bind-mounted into the ephemeral Go container. Builds returned success but the binaries disappeared with the container; the subsequent host `stat` failed.
+Failure: Docker `go build -o <host-temp-path>` wrote binaries only inside the ephemeral Go container, so host `stat` failed before schema work.
 
-This was a benchmark-harness defect, not backend performance/correctness evidence.
+Fix: build through a bind-mounted `/out` directory and verify both executables before database preparation.
 
-`bench/run_gate.sh` now:
+### Attempt 2
 
-- creates a dedicated host `bin` directory under its temporary work area;
-- bind-mounts that directory as `/out` for Docker builds;
-- writes API/httpbench binaries through `/out`;
-- explicitly verifies both executables exist before schema/seed work;
-- records both binary sizes.
+Tested `7cec3af902de08ef6ea5ad224b4e5a5e09695a8c`.
 
-The original failed result bundle is preserved externally as `/tmp/ginbar-m2-gate-20261001T201343Z-shared` on the target server and was also returned to the primary session.
+The build-output fix worked: both binaries were present and measured. The run then stopped before SQL execution with:
+
+`psql: error: /tmp/ginbar-m2-work.../src/backend/v2/internal/schema/migrations/001_core.sql: No such file or directory`
+
+The migration was present on the host temporary archive; Go tests embedding the migrations passed. Root cause: when host `psql` is absent, `psql_exec` launches a disposable PostgreSQL client container. Passing `-f <host-path>` gave that container a host-only path that was not mounted.
+
+Fix now committed:
+
+- Docker `psql` runs with stdin attached (`docker run -i`);
+- schema, seed, and EXPLAIN files are streamed through stdin instead of passed with host `-f` paths;
+- runner explicitly verifies all three SQL files exist after the Git archive step;
+- runner performs a `select 1` stdin probe through the selected psql mode before Go builds;
+- benchmark case TSV is generated with `printf` to guarantee real tab separators;
+- `M2_RUN.md` now waits for a successful query against `ginbar_m2_bench`, not merely `pg_isready`, avoiding PostgreSQL init false positives.
+
+Both failed runs are harness-only evidence; no PostgreSQL query/runtime or API performance conclusion can be drawn yet.
+
+Preserved target-server result directories reported by the agent:
+
+- `/tmp/ginbar-m2-gate-20261001T201343Z-shared`
+- `/tmp/ginbar-m2-gate-20261001T210956Z-shared`
 
 ## Prepared server gate
 
@@ -116,7 +126,7 @@ It captures `EXPLAIN (ANALYZE, BUFFERS)` for:
 
 HTTP cases run at concurrency 1 / 4 / 8 / 16 / 32 and collect p50/p95/p99/max, requests/sec, errors, API CPU/RSS, system load, PostgreSQL connection counts, relation/index sizes, and DB counters.
 
-A quiet-host comparison may stop only Wallium backend/worker when safe and must restore them. Pool 16 is measured only if the pool-8 evidence shows saturation with CPU headroom.
+A quiet-host comparison may stop only Wallium backend/worker when clearly safe and must restore them. Pool 16 is measured only if pool-8 evidence shows saturation with CPU headroom.
 
 ## Performance questions still unanswered
 
@@ -134,8 +144,8 @@ Do not add Redis or speculative indexes before these measurements.
 
 M2 is not ready to merge into `v2`.
 
-Real Go/pgx compilation and tests are now validated. PostgreSQL migration execution, query plans, endpoint latency/concurrency, and server resource behavior remain outstanding because the first run stopped at the repaired harness boundary.
+Real Go/pgx compilation, tests, dependency reproducibility, and Docker builds are validated. PostgreSQL migration/seed execution, query plans, endpoint latency/concurrency, and server resource behavior remain outstanding.
 
 ## Single best next task
 
-Rerun `docs/v2/M2_RUN.md` on the target server from the current `origin/astra/m2-core-schema-api` head using the execution-only local agent. Return information only: module-file drift check, schema/seed result, all five query plans, complete HTTP matrix, resource/connection observations, and optional Wallium quiet-host comparison. Use that evidence here to decide any query/index changes before M2 integration.
+Rerun `docs/v2/M2_RUN.md` from the current `origin/astra/m2-core-schema-api` head using the execution-only local agent. Return information only: clean module drift check, schema/seed result, all five query plans, complete HTTP matrix, resource/connection observations, and optional safe Wallium quiet-host comparison. Use that evidence here to make any query/index decision before M2 integration.
