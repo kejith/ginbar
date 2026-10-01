@@ -56,6 +56,22 @@ func TestFeedContract(t *testing.T) {
 	}
 }
 
+func TestFeedAcceptsHyphenatedTagSmokeQuery(t *testing.T) {
+	store := &apiStore{}
+	req := httptest.NewRequest(http.MethodGet, "/api/v2/feed?before=50000&limit=60&q=tag-42%20score:%3E%3D100", nil)
+	res := httptest.NewRecorder()
+	New(store).Handler().ServeHTTP(res, req)
+	if res.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+	if got := store.query.Search.IncludeTags; len(got) != 1 || got[0] != "tag-42" {
+		t.Fatalf("unexpected include tags: %#v", got)
+	}
+	if store.query.Search.Score == nil || store.query.Search.Score.Value != 100 {
+		t.Fatalf("unexpected score predicate: %#v", store.query.Search.Score)
+	}
+}
+
 func TestFeedRejectsMalformedSearch(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v2/feed?q=score:100", nil)
 	res := httptest.NewRecorder()
