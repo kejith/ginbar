@@ -4,44 +4,46 @@ This gate runs on the remote target server. Backend/PostgreSQL measurements exec
 
 The runner is execution-only: it archives the exact checked-out commit into `/tmp`, validates/tests/builds there, uses only a disposable PostgreSQL database, starts the API on loopback, and writes raw evidence under `/tmp`. It must not modify the checked-out repository.
 
-## Previous execution evidence
+## Current evidence
 
-Two execution-only attempts have already established useful preconditions:
+Target-server runs already establish:
 
-- Docker Go 1.25.14 + real pgx dependency resolution succeeds;
-- `go mod tidy` and `go test ./...` succeed;
-- committed `go.mod` / `go.sum` now match the real Go 1.25 tidy result byte-for-byte;
-- API and HTTP benchmark binaries build successfully in Docker when written through the `/out` bind mount.
+- Docker Go 1.25.14 + real pgx validation works;
+- `go mod tidy` and `go test ./...` pass;
+- committed `go.mod` / `go.sum` match real tidy output;
+- schema and 100k-post seed execute successfully on PostgreSQL 17.11;
+- around-post SQL now executes correctly;
+- bounded per-post media lookup removes the old-cursor full-media scan: same-run EXPLAIN improved about 18.447 ms -> 0.357 ms;
+- the first included-tag rewrite did not improve the planner: required-tag queries still scanned about 158,680 `post_tags` rows and took about 69-71 ms;
+- the HTTP matrix has not yet completed because the prior runner used an already-occupied API port.
 
-The first attempt stopped because Docker builds wrote to an unmounted host path. The second attempt proved that fix, then stopped before SQL execution because Dockerized `psql` received a host-only `-f /tmp/...` path. The runner now streams schema/seed/EXPLAIN SQL over stdin and performs a psql-stdin preflight before expensive work.
+The current query resolves included tag names to tag IDs before scanning `post_tags`, allowing PostgreSQL to consider the existing partial `(tag_id, post_id DESC)` index directly. No new index has been added.
 
-These were harness failures, not backend performance evidence.
+The runner now also chooses a free loopback API port and verifies its own API process is alive before accepting health.
 
 ## 1. Safety / checkout
 
-Use an isolated detached worktree of the current `origin/astra/m2-core-schema-api`. Do not switch or modify deployed `main`, legacy `master`, `v2`, or a production checkout.
+Use an isolated detached worktree of the exact `origin/astra/m2-core-schema-api` commit requested by the primary engineering session.
 
-Do not edit, tune, commit, merge, or push anything during the run. If a prepared step fails, preserve the output and report it.
+Do not switch or modify deployed `main`, legacy `master`, `v2`, or production checkouts. Do not edit, tune, commit, merge, or push anything during the run.
 
 Verify:
 
 ```bash
-git fetch origin
+git fetch origin +refs/heads/astra/m2-core-schema-api:refs/remotes/origin/astra/m2-core-schema-api
 git rev-parse origin/astra/m2-core-schema-api
 git status --short --branch
 git rev-parse HEAD
 bash -n src/backend/v2/bench/run_gate.sh
 ```
 
-The detached worktree must be at the exact commit requested by the primary engineering session.
-
-The runner accepts host Go 1.25+ or uses existing Docker with `golang:1.25`. If host `psql` is absent, it uses `postgres:17-alpine` as a disposable client. It installs no system packages.
+The detached worktree must be clean and at the exact requested SHA.
 
 ## 2. Dedicated disposable PostgreSQL 17
 
-Do not use Wallium PostgreSQL or production data.
+Never use Wallium PostgreSQL or production data.
 
-Choose an unused loopback port (55432 below) and start a disposable database:
+Use an unused loopback port, with 55432 preferred:
 
 ```bash
 export BENCH_PG_CONTAINER="ginbar-m2-bench-pg-$(date +%s)"
@@ -65,82 +67,58 @@ done
 export DATABASE_URL="postgres://postgres:${BENCH_PG_PASSWORD}@127.0.0.1:55432/ginbar_m2_bench?sslmode=disable"
 ```
 
-Use another unused loopback port if 55432 is occupied. Do not print credentials in the returned report.
+If 55432 is occupied, choose another unused loopback port and adjust `DATABASE_URL`. Do not print credentials in returned evidence.
 
-The runner independently verifies the connected database name begins with `ginbar_m2_bench` and verifies SQL can be streamed through the selected `psql` mode before Go validation/build work.
-
-The full run applies `001_core.sql`, seeds 1,000 users / 100,000 posts / 100,000 media rows / approximately three tags per post, analyzes hot tables, and captures query plans before HTTP load testing.
+The runner independently checks the database name and SQL stdin path before expensive work.
 
 ## 3. Full shared-host run
 
 Keep Wallium in its normal running state.
 
+Pass the disposable PostgreSQL container name so per-second connection sampling uses `docker exec` into that existing container rather than creating a fresh client container on every sample:
+
 ```bash
 GINBAR_BENCH_LABEL=shared \
+GINBAR_BENCH_PG_CONTAINER="$BENCH_PG_CONTAINER" \
 DATABASE_URL="$DATABASE_URL" \
 bash src/backend/v2/bench/run_gate.sh
 ```
+
+The runner selects a free loopback API port from 18080-18179 unless `GINBAR_BENCH_PORT` is explicitly supplied. An explicitly supplied occupied port is an error.
 
 Default HTTP matrix:
 
-- cases: first feed page, old cursor, tag+score, tag+excluded-tag+score, around-post;
-- concurrency: 1 / 4 / 8 / 16 / 32;
-- 2,000 measured requests per case/concurrency after warmup;
-- API PostgreSQL pool: 8 connections.
-
-The runner captures exact Git SHA/status, environment, `go mod tidy`, `go test ./...`, module files after tidy, binary sizes, schema/seed timings, five `EXPLAIN (ANALYZE, BUFFERS)` plans, table/index sizes, smoke responses, HTTP latency/throughput/errors, API CPU/RSS, system load, PostgreSQL connection counts, and database counters.
-
-After the run, compare `go.mod.after` and `generated-go.sum` with the committed module files. They should be byte-identical. Report any difference; do not commit it.
-
-## 4. Optional quiet-host comparison
-
-Only if Wallium backend/API and media worker can be stopped safely without persistent configuration changes:
-
-1. record their exact running state;
-2. stop only those application workloads;
-3. leave the dedicated benchmark PostgreSQL running;
-4. rerun against the existing seeded DB:
-
-```bash
-GINBAR_BENCH_LABEL=quiet \
-GINBAR_BENCH_SKIP_DB_PREP=1 \
-DATABASE_URL="$DATABASE_URL" \
-bash src/backend/v2/bench/run_gate.sh
-```
-
-5. restore Wallium exactly as it was and verify health immediately.
-
-If stopping Wallium is ambiguous or unsafe, skip this comparison.
-
-## 5. Conditional pool-size probe
-
-Do not tune during the run.
-
-Only if the 8-connection data shows a clear latency cliff at concurrency 16/32, PostgreSQL active connections reach the pool limit, and CPU still has substantial headroom, collect one additional 16-connection measurement:
-
-```bash
-GINBAR_BENCH_LABEL=quiet-pool16 \
-GINBAR_BENCH_SKIP_DB_PREP=1 \
-DB_MAX_CONNS=16 \
-DATABASE_URL="$DATABASE_URL" \
-bash src/backend/v2/bench/run_gate.sh
-```
-
-This is measurement only. Do not change defaults or source.
-
-## 6. Query-plan evidence
-
-For each shape in `explain.txt` report planning/execution time, important nodes/indexes, actual rows/loops, shared buffer hits/reads, rows removed by filters, and any large sequential scan:
-
 - first feed page;
-- old cursor (`id < 50000`);
+- old cursor;
 - required tag + score;
-- required + excluded tag;
-- around post 50000.
+- required + excluded tag + score;
+- around-post reconstruction;
+- concurrency 1 / 4 / 8 / 16 / 32;
+- 2,000 measured requests per cell after warmup;
+- PostgreSQL pool cap 8.
 
-Return complete plan text for the two slowest shapes. Do not create indexes or rewrite queries.
+The runner captures exact Git status/SHA, environment, real Go validation/builds, schema/seed timings, five tuned `EXPLAIN (ANALYZE, BUFFERS)` plans, same-run baseline/tuned plans, relation/index stats, smoke responses, HTTP latency/throughput/errors, API CPU/RSS, system load, PostgreSQL connection counts, and DB counters.
 
-## 7. HTTP/resource evidence
+After the run verify `go.mod.after` and `generated-go.sum` are byte-identical to committed files.
+
+## 4. Query-plan evidence
+
+From `explain.txt`, report for all five tuned shapes:
+
+- planning/execution time;
+- important nodes and indexes;
+- rows/loops;
+- shared buffer hits/reads;
+- rows removed by filters;
+- unexpectedly large scans.
+
+Pay special attention to the two included-tag shapes. Confirm whether `post_tags_tag_post_active_idx` is actually used and whether the previous roughly 158,680-row assignment scan collapses.
+
+Return full plan text for the two slowest tuned shapes.
+
+From `explain-compare.txt`, report numerical baseline-vs-tuned deltas for first feed, old cursor, required-tag+score, and required+excluded+score.
+
+## 5. HTTP/resource evidence
 
 For every case at concurrency 1 / 4 / 8 / 16 / 32 return:
 
@@ -148,11 +126,60 @@ For every case at concurrency 1 / 4 / 8 / 16 / 32 return:
 - requests/sec;
 - successes/errors/status failures.
 
-Also report peak API CPU/RSS, peak PostgreSQL total/active connections, system load range, any 5xx/timeouts, shared-vs-quiet deltas if available, and pool-16 delta only if triggered.
+Also report:
 
-## 8. Cleanup
+- peak API CPU and RSS;
+- peak PostgreSQL total/active connections from `resource-samples.tsv`;
+- load1 range;
+- any timeout or HTTP 5xx;
+- whether the pool repeatedly reaches 8 active connections.
 
-After measurements and after Wallium is restored:
+The connection sampler excludes its own PostgreSQL session from the counts.
+
+## 6. Optional quiet-host comparison
+
+Only if Wallium backend and worker can be stopped safely and reversibly without persistent configuration changes. Do not stop Wallium merely to complete M2.
+
+If performed, keep the seeded disposable PostgreSQL container running and use:
+
+```bash
+GINBAR_BENCH_LABEL=quiet \
+GINBAR_BENCH_SKIP_DB_PREP=1 \
+GINBAR_BENCH_PG_CONTAINER="$BENCH_PG_CONTAINER" \
+DATABASE_URL="$DATABASE_URL" \
+bash src/backend/v2/bench/run_gate.sh
+```
+
+Restore Wallium immediately and verify its prior state. Never stop Wallium PostgreSQL/Redis for this comparison.
+
+## 7. Conditional pool-16 probe
+
+Run only if all are true:
+
+1. at least two substantive endpoints show a clear p95 cliff at concurrency 16/32 versus 8;
+2. PostgreSQL active connections repeatedly reach about 8;
+3. CPU still has substantial headroom.
+
+If triggered:
+
+```bash
+GINBAR_BENCH_LABEL=pool16 \
+GINBAR_BENCH_SKIP_DB_PREP=1 \
+GINBAR_BENCH_PG_CONTAINER="$BENCH_PG_CONTAINER" \
+DB_MAX_CONNS=16 \
+DATABASE_URL="$DATABASE_URL" \
+bash src/backend/v2/bench/run_gate.sh
+```
+
+This is measurement only. Do not change application defaults.
+
+## 8. Failure rule
+
+If a prepared stage fails, stop dependent work and return the exact failure plus all evidence already generated. Do not edit source, SQL, scripts, indexes, or configuration to bypass it.
+
+## 9. Cleanup
+
+After measurements and after Wallium is confirmed running:
 
 ```bash
 docker stop "$BENCH_PG_CONTAINER"
@@ -160,6 +187,6 @@ docker volume rm "$BENCH_PG_VOLUME"
 unset DATABASE_URL BENCH_PG_PASSWORD BENCH_PG_CONTAINER BENCH_PG_VOLUME
 ```
 
-Keep `/tmp/ginbar-m2-gate-*` result directories for follow-up. Verify production checkouts were not modified and the benchmark worktree remains clean.
+Keep `/tmp/ginbar-m2-gate-*` result directories for follow-up. Verify production checkouts were untouched and the benchmark worktree remains clean.
 
-Do not modify `docs/v2/STATE.md`. Return evidence to the primary engineering session; that session owns architecture, fixes, commits, and durable state.
+Do not modify `docs/v2/STATE.md` during execution. Return evidence to the primary engineering session; architecture, fixes, commits, and durable state are decided there.
