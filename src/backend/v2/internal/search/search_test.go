@@ -20,6 +20,21 @@ func TestParseTagsAndScore(t *testing.T) {
 	}
 }
 
+func TestParseHyphenatedTags(t *testing.T) {
+	got, err := Parse(`tag-42 -other-tag score:>=100`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Query{
+		IncludeTags: []string{"tag-42"},
+		ExcludeTags: []string{"other-tag"},
+		Score:       &ScorePredicate{Op: ScoreGTE, Value: 100},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %#v want %#v", got, want)
+	}
+}
+
 func TestParseQuotedTagAndDeduplicates(t *testing.T) {
 	got, err := Parse(`"Long Tag" LONG\ TAG`)
 	if err == nil {
