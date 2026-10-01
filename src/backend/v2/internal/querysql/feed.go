@@ -52,28 +52,32 @@ WHERE p.release_state = 1 AND p.deleted_at IS NULL`)
 
 func BuildAround(q feed.AroundQuery) (string, []any) {
 	args := []any{q.PostID, q.Radius}
-	var filters strings.Builder
-	appendFilterSQL(&filters, &args, q.Filters)
-	appendSearchSQL(&filters, &args, q.Search)
-	filterSQL := filters.String()
+	var visibility strings.Builder
+	appendFilterSQL(&visibility, &args, q.Filters)
+	visibilitySQL := visibility.String()
+
+	var context strings.Builder
+	context.WriteString(visibilitySQL)
+	appendSearchSQL(&context, &args, q.Search)
+	contextSQL := context.String()
 
 	sql := `WITH newer AS (
     SELECT ` + postProjection + `
     FROM posts p` + readyMediaJoin + `
     WHERE p.release_state = 1 AND p.deleted_at IS NULL
-      AND p.id > $1` + filterSQL + `
+      AND p.id > $1` + contextSQL + `
     ORDER BY p.id ASC
     LIMIT $2
 ), selected AS (
     SELECT ` + postProjection + `
     FROM posts p` + readyMediaJoin + `
     WHERE p.release_state = 1 AND p.deleted_at IS NULL
-      AND p.id = $1
+      AND p.id = $1` + visibilitySQL + `
 ), older AS (
     SELECT ` + postProjection + `
     FROM posts p` + readyMediaJoin + `
     WHERE p.release_state = 1 AND p.deleted_at IS NULL
-      AND p.id < $1` + filterSQL + `
+      AND p.id < $1` + contextSQL + `
     ORDER BY p.id DESC
     LIMIT $2
 )
