@@ -11,16 +11,16 @@ import (
 
 const postProjection = `
 p.id,
-p.author_user_id,
-p.content_filter,
-p.score,
-p.created_at,
-m.kind,
-m.storage_key,
-m.mime_type,
-m.width,
-m.height,
-m.duration_ms`
+	p.author_user_id,
+	p.content_filter,
+	p.score,
+	p.created_at,
+	m.kind,
+	m.storage_key,
+	m.mime_type,
+	m.width,
+	m.height,
+	m.duration_ms`
 
 const readyMediaJoin = `
 JOIN LATERAL (
@@ -51,7 +51,7 @@ WHERE p.release_state = 1 AND p.deleted_at IS NULL`)
 }
 
 func BuildAround(q feed.AroundQuery) (string, []any) {
-	args := []any{q.PostID, q.Radius, q.Radius + 1}
+	args := []any{q.PostID, q.Radius}
 	var filters strings.Builder
 	appendFilterSQL(&filters, &args, q.Filters)
 	appendSearchSQL(&filters, &args, q.Search)
@@ -64,16 +64,23 @@ func BuildAround(q feed.AroundQuery) (string, []any) {
       AND p.id > $1` + filterSQL + `
     ORDER BY p.id ASC
     LIMIT $2
+), selected AS (
+    SELECT ` + postProjection + `
+    FROM posts p` + readyMediaJoin + `
+    WHERE p.release_state = 1 AND p.deleted_at IS NULL
+      AND p.id = $1
 ), older AS (
     SELECT ` + postProjection + `
     FROM posts p` + readyMediaJoin + `
     WHERE p.release_state = 1 AND p.deleted_at IS NULL
-      AND p.id <= $1` + filterSQL + `
+      AND p.id < $1` + filterSQL + `
     ORDER BY p.id DESC
-    LIMIT $3
+    LIMIT $2
 )
 SELECT * FROM (
     SELECT * FROM newer
+    UNION ALL
+    SELECT * FROM selected
     UNION ALL
     SELECT * FROM older
 ) combined_posts
