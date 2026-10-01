@@ -1,7 +1,7 @@
 # Ginbar v2 State / Handoff
 
 Last updated: 2026-10-01
-Phase: M1 profiling completed; gate remains open due browser-host mismatch and scroll-anchor issue
+Phase: M1 profiling completed; gate remains open due prepend scroll-anchor correctness issue
 Integration branch: `v2`
 Active implementation branch: `astra/m1-board-prototype`
 Legacy branch: `master` (read-only for rewrite work)
@@ -14,13 +14,8 @@ This file is the minimal resume point for humans and Astra. Read it before `PLAN
 
 - `v2` remains the rewrite integration root at base commit `38c515afd2862cb6a3b6a6c677c9b34fa210b662` for this branch.
 - `master` and `v2` were not modified by M1 implementation work.
-- `astra/m1-board-prototype` is ahead of `v2` and contains the complete current M1 prototype plus docs/runbook.
-- Important commits in this session:
-  - `446f87cd021fe0aa95bca90f8691af0ceada662e` — stable-row/selective-reactivity board rewrite
-  - `a746646400972b77ed565553a4e68dcebcc20af0` — containment/intrinsic-row CSS cleanup
-  - `732236c6c46bc83554cf6f59205f295b6d5afab3` — one-command frontend validation
-  - `56b5cba524fb35b058a3b33289e75ce3292b3eb0` — target-hardware M1 runbook
-  - `594e5003952d9c32a0e9c46ee006a2a17ed3fc5e` — updated M1 architecture/benchmark notes
+- `astra/m1-board-prototype` contains the current M1 implementation.
+- `astra/m1-hardware-results` is documentation/results-only and must remain free of application source changes.
 
 ## M1 implementation status
 
@@ -43,7 +38,8 @@ Implemented:
 - no virtualization
 
 Durable architecture/benchmark detail: `docs/v2/M1.md`.
-Target-hardware procedure: `docs/v2/M1_RUN.md`.
+Profiling procedure: `docs/v2/M1_RUN.md`.
+Profiling results: `docs/v2/M1_HARDWARE_RESULTS.md` and `docs/v2/M1_HARDWARE_RESULTS.json`.
 
 ## Performance-oriented decisions already implemented
 
@@ -55,50 +51,40 @@ Target-hardware procedure: `docs/v2/M1_RUN.md`.
 - Sticky-header backdrop blur was removed to avoid needless scroll repaint work in the benchmark.
 - Virtualization remains deliberately absent until retained-DOM profiling proves it is needed.
 
-## Pre-hardware checks completed in the original local environment
+## M1 profiling results (2026-10-01)
 
-- `node --test src/board-model.test.js`: 8/8 passing.
-- Pure tests cover deterministic data, responsive columns, row mapping, index-range -> row-range mapping, bounded deep-link windows, bidirectional range extension, strict `/post/:id` parsing, and navigation boundary clamping.
-- Source-level TypeScript check passes with local Solid declaration stubs using TypeScript 5.8.3.
-- Local runtime used for those checks: Node v22.16.0.
-- Committed content blobs exactly match the locally checked files:
-  - `App.tsx`: `3378d081fe3b0d928bd9ef48699b3256c0f93dfa`
-  - `board-model.js`: `f20130d4741a75759512b0d95b4f67b86dabe1a1`
-  - `board-model.test.js`: `3a8d66654e2349cb48a2d7de573f96e008c0a04a`
-  - `styles.css`: `d185eda4e4093aea54cb798fe270d60385c72fbe`
-- External npm access is unavailable here: `npm ping --registry=https://registry.npmjs.org --fetch-timeout=3000 --fetch-retries=0` fails with `EAI_AGAIN getaddrinfo`.
-- Therefore real dependency installation, real Solid/Vite declaration checking, production build, and real Solid runtime profiling were not possible here.
+Target tested: `astra/m1-board-prototype` at `da0885f724d662333af45dc307c1d501135da266`.
 
-## Existing lower-bound measurement
+- Real `npm install`, `npm run validate`, standalone tests/typecheck/build, and production bundle sizing all passed.
+- Production bundle: JS 26,539 B raw / 10,122 B gzip; CSS 3,293 B raw / 1,402 B gzip.
+- Browser profiling ran on the local Windows i5-14600KF client using Chromium/Electron while the remote i7-7700 server served the production frontend.
+- Selection sync p95 stayed roughly 0.4-0.5 ms from 320 through 10,000 retained posts in that client/browser run.
+- At 10,000 retained posts the board held about 32.5k DOM nodes at 1440x900 and 40.0k at 390x844.
+- Direct routes, same/cross-row selection, Back/Forward, Arrow keys, J/K, Escape, bounded deep-link windows, and full 10,000-post traversal passed functional checks.
+- Reproducible defect: prepending newer rows from `/post/5000` causes a large viewport/scroll-position jump. This remains an M1 correctness blocker.
+- Wallium was restored after the run. No application source changed; `master`, `v2`, and `main` were not modified.
 
-A framework-free headless-Chromium DOM harness using the same row/containment concept measured forced-layout relocation cost. This excludes Solid runtime/compiler work and is not the framework-gate result.
+## Benchmark execution rule
 
-| Viewport | Retained thumbnails | Same-row p95 | Cross-row p95 |
-| --- | ---: | ---: | ---: |
-| 1440x900 | 320 | 0.2 ms | 0.3 ms |
-| 1440x900 | 5,000 | 0.8 ms | 1.1 ms |
-| 390x844 | 320 | 0.2 ms | 0.4 ms |
-| 390x844 | 5,000 | 1.7 ms | 1.9 ms |
+Frontend and backend performance evidence are intentionally separated:
 
-Interpretation: row layout/containment alone is not an obvious M1-scale bottleneck. Do not use these numbers to accept Solid or to justify indefinite DOM retention.
+- **Frontend/browser benchmarks run on the client machine that executes the browser.** Do not attribute JavaScript, layout, paint, DOM, heap, input, or scroll timings to the remote server merely because it served the assets.
+- **For future server benchmarks, only backend/server-side implementation may be assumed to execute on and be validated against the remote target hardware.** This includes Go API, PostgreSQL, Redis, Rust worker, nginx/static-serving overhead, server concurrency, and server-side resource contention as applicable.
+- The remote server may serve frontend assets for integration/correctness testing, but that does not make browser measurements server-hardware measurements.
+- Do not block frontend framework decisions on absence of a browser running on the server. Use explicit client/browser test hardware and record it with the results.
 
-## M1 hardware profiling update (2026-10-01)
+## M1 gate status
 
-- Target tested: `astra/m1-board-prototype` at `da0885f724d662333af45dc307c1d501135da266`; results-only branch: `astra/m1-hardware-results`.
-- Remote Node 22 install, `npm run validate`, standalone test/typecheck/build, production bundle sizing, desktop/mobile benchmark matrices, direct routes, history, keyboard navigation, and 10,000-post long scroll all completed. Detailed data and limitations are in `docs/v2/M1_HARDWARE_RESULTS.md` and `docs/v2/M1_HARDWARE_RESULTS.json`.
-- The browser ran on Windows i5-14600KF, not the remote i7-7700; therefore Solid's target-hardware gate is **not decided** despite low measured selection sync p95.
-- Prepending newer rows from `/post/5000` caused a large viewport/scroll-position jump at both viewports. This is documented and was not fixed during profiling.
-- At 10,000 posts the board retained about 32.5k desktop / 40k mobile-viewport DOM nodes. No retention-cap or virtualization decision is made from this run.
-- Wallium was restored and verified active. No application source changed; `master`, `v2`, and `main` were not modified.
+The previous browser-host mismatch is no longer considered an M1 blocker: frontend code executes on the client, and its benchmark hardware must be reported as client hardware rather than server hardware.
 
-## M1 gate still outstanding
+M1 remains open because:
 
-- Resolve the browser-host limitation before treating the selection and scroll timings as target-hardware evidence.
-- Investigate the reproducible prepend scroll-anchor jump in a separate implementation task, then rerun the M1 scroll and profile checks.
-- Review Solid acceptance and any retention/virtualization decision only after the target-relevant browser profile and scroll correctness are established.
+- the `/post/5000` prepend-anchor jump is a reproducible interaction correctness issue;
+- bidirectional scrolling must be rerun after that fix;
+- Solid acceptance and retention/virtualization decisions should be reviewed against the existing client-browser measurements plus the corrected scroll behavior.
 
-Do not start M2 or merge the M1 implementation branch into `v2` until the gate is reviewed.
+Do not start M2 or merge the M1 implementation branch into `v2` until the M1 gate is reviewed.
 
 ## Single best next task
 
-Reproduce the `/post/5000` prepend-anchor jump, address it in a separate M1 implementation task, and rerun the bidirectional scroll test before making a Solid or retention decision. Keep the hardware-result branch documentation-only.
+On a short-lived implementation branch from current `astra/m1-board-prototype`, reproduce and fix the `/post/5000` prepend-anchor jump with the smallest scroll-anchoring solution, then rerun the local client/browser bidirectional-scroll and selection checks. Do not use the server as evidence for frontend execution performance; reserve target-server benchmarking for backend work later.
