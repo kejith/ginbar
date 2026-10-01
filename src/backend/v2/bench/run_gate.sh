@@ -97,7 +97,8 @@ module_dir="$work_dir/src/backend/v2"
 for required_file in \
   "$module_dir/internal/schema/migrations/001_core.sql" \
   "$module_dir/bench/seed.sql" \
-  "$module_dir/bench/explain.sql"; do
+  "$module_dir/bench/explain.sql" \
+  "$module_dir/bench/explain_compare.sql"; do
   [[ -f "$required_file" ]] || { echo "required benchmark file missing after archive: $required_file" >&2; exit 1; }
 done
 
@@ -205,6 +206,10 @@ if [[ "${GINBAR_BENCH_SKIP_DB_PREP:-0}" != "1" ]]; then
   psql_exec "$DATABASE_URL" -v ON_ERROR_STOP=1 \
     > "$results_dir/explain.txt" 2> "$results_dir/explain.err" \
     < "$module_dir/bench/explain.sql"
+
+  psql_exec "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+    > "$results_dir/explain-compare.txt" 2> "$results_dir/explain-compare.err" \
+    < "$module_dir/bench/explain_compare.sql"
 fi
 
 psql_exec "$DATABASE_URL" -v ON_ERROR_STOP=1 -P pager=off -c \
