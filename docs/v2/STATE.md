@@ -1,7 +1,7 @@
 # Ginbar v2 State / Handoff
 
 Last updated: 2026-10-01
-Phase: M2 core schema/API implemented; target-server PostgreSQL evidence now partially captured; measured query-shape fixes implemented; before/after rerun outstanding
+Phase: M2 core schema/API implemented; real PostgreSQL plans captured; media-path fix validated; second tag-query shape and complete HTTP gate outstanding
 Integration branch: `v2`
 Active implementation branch: `astra/m2-core-schema-api`
 Completed M1 branch: `astra/m1-scroll-anchor`
@@ -15,131 +15,148 @@ This file is the resume point. Read it before `PLAN.md`. Do not rely on chat his
 
 - `master` remains untouched by rewrite work.
 - M1 is complete and integrated into `v2` at `32e154c4541fcdd2c24c1c05ed278e2dbddef960`.
-- `astra/m2-core-schema-api` is a clean descendant of that `v2` head; do not merge until the M2 gate passes.
-- The M2 branch contains the clean service/search/API slice, fresh PostgreSQL schema/store/query compiler, real Go 1.25 dependency graph, deterministic HTTP load generator, and execution-only server benchmark harness.
+- `astra/m2-core-schema-api` remains a clean descendant of that `v2` head; do not merge until the M2 gate passes.
+- M2 contains the clean Go API/domain/search slice, fresh PostgreSQL schema/store/query compiler, real Go 1.25 dependency graph, deterministic load generator, and target-server benchmark harness.
 
 ## M1 decisions retained
 
 - SolidJS + TypeScript + Vite accepted.
 - Keep incremental retention + CSS containment; no virtualization without evidence.
-- Browser/frontend measurements belong to the client running the browser.
-- Remote target-server measurements are authoritative for backend/server-side work.
+- Browser/frontend timings belong to the client machine.
+- Target-server measurements are authoritative for backend/server-side work.
 
 ## M2 architecture
 
-The clean v2 backend lives at `src/backend/v2`. Legacy `src/backend` / Wallium code is reference-only.
+Backend: `src/backend/v2`. Legacy Wallium backend is reference-only.
 
 Current choices:
 
-- Go 1.25;
-- direct `pgx/v5` 5.11.0;
-- standard `net/http`;
-- PostgreSQL authoritative for application state and durable media jobs;
-- no Redis dependency without a measured ephemeral use;
-- initial PostgreSQL pool cap 8;
-- current request/DB deadline 3 seconds;
-- post-ID cursor pagination only, no OFFSET.
+- Go 1.25, direct pgx/v5 5.11.0, standard `net/http`;
+- PostgreSQL authoritative for application and durable job state;
+- no Redis dependency until a measured ephemeral use exists;
+- initial pool cap 8, current request/DB deadline 3 seconds;
+- post-ID cursor pagination only, never OFFSET;
+- real lexer/parser/AST for included/excluded tags and score predicates;
+- immutable numeric relational IDs; usernames never foreign keys.
 
-Fresh schema covers users, roles, credentials, external identities, invitations, posts, media, tags/tag audit, nested comments, post/comment votes, and durable media jobs. Relational identity uses immutable numeric IDs; usernames are never foreign keys.
-
-## Core API/query slice
-
-Endpoints:
+Endpoints currently implemented:
 
 - `GET /healthz`
 - `GET /api/v2/feed?before=<id>&limit=<n>&q=<search>`
 - `GET /api/v2/posts/<id>/around?radius=<n>&q=<search>`
 
-Search uses a real lexer/parser/AST with included/excluded tags, quoted tags, and score predicates. SQL values are parameterized; score operators come from a closed typed enum.
+## Repeated target-server validation
 
-## Real target-server validation
+Target: Ubuntu 24.04 / i7-7700 4C/8T / 62 GiB RAM. Runs use Docker Go 1.25.14 and isolated PostgreSQL 17.11 on loopback, never Wallium data.
 
-Target server: Ubuntu 24.04 / i7-7700 4C/8T / 62 GiB RAM. Server runs used Docker Go 1.25.14 and isolated PostgreSQL 17.11 on loopback, separate from Wallium.
+Repeatedly confirmed:
 
-Repeatedly validated:
+- `go mod tidy` passes;
+- real `go test ./...` with pgx passes;
+- committed `go.mod` / `go.sum` match tidy output byte-for-byte;
+- API and stdlib HTTP benchmark binaries build successfully;
+- schema and deterministic 100k-post seed execute successfully;
+- benchmark worktrees stay clean;
+- Wallium remains running and production checkouts are untouched;
+- disposable benchmark DB resources are removed after runs.
 
-- `go mod tidy` succeeds;
-- `go test ./...` succeeds with real pgx;
-- committed `go.mod` and `go.sum` are byte-identical to Go 1.25.14 tidy output;
-- API Docker build succeeds: 14,955,020 bytes in the latest measured run;
-- HTTP benchmark build succeeds: 8,576,020 bytes;
-- benchmark worktrees remain clean;
-- Wallium/master is untouched and Wallium remains running;
-- disposable benchmark database containers/volumes are cleaned up.
+## Harness history
 
-## Benchmark harness history
+Earlier execution-only runs fixed three benchmark-only issues:
 
-Attempt 1 fixed Docker Go binary output persistence by building through a bind-mounted `/out` directory.
+1. Docker Go build output was not persisted to the host temporary directory; fixed with a bind-mounted `/out`.
+2. Dockerized `psql -f <host-path>` could not access archived SQL files; fixed by streaming SQL through stdin.
+3. Run 4 found the default API port 18080 already owned by `wise-old-bot-api-1`. The benchmark API failed to bind, but the runner accepted the unrelated listener's `/healthz` response before failing on `/api/v2/feed`.
 
-Attempt 2 fixed Dockerized `psql` host-path handling by streaming SQL through stdin; also added required-file checks, an stdin SQL probe, real-tab case generation, and requested-database readiness checks.
+Current harness response to issue 3:
 
-Attempt 3 tested `d0e7cd4cba8f3bab4684fe01d017c7d2c0e4d354` and reached real PostgreSQL execution.
+- auto-selects a free loopback port from 18080-18179 unless explicitly configured;
+- rejects an explicitly occupied port;
+- verifies the spawned API PID is alive before accepting health;
+- records the selected API port;
+- supports `GINBAR_BENCH_PG_CONTAINER` so per-second PostgreSQL connection sampling uses `docker exec` into the existing disposable DB container instead of launching a new client container every second;
+- excludes the sampler's own PostgreSQL session from connection counts.
 
-Attempt 3 results:
+The exact committed `run_gate.sh` content was syntax-checked locally with `bash -n` before commit; local Git blob hash matched committed blob `ea577bc8d6c64d2aaf9e34a4c93186c7daedc441`.
 
-- schema succeeded in 521 ms;
-- seed succeeded in 34,263 ms;
-- seed inserted 1,000 users, 100,000 posts, 100,000 media rows, 100 tags, and 300,000 post_tags;
-- four EXPLAIN plans completed;
-- fifth around-post plan failed before HTTP benchmarking because the derived-table alias `window` is a PostgreSQL keyword in this context.
+## Run 4 PostgreSQL evidence
 
-The same `window` alias existed in production `BuildAround`, so this exposed a real endpoint correctness bug, not merely a benchmark fixture issue.
+Run 4 tested `0d1887300d697dcbfaa75cd397655b1f137478cc` on the target server.
 
-Preserved server results include `/tmp/ginbar-m2-gate-20261001T212828Z-shared`.
+Database preparation:
 
-## Attempt 3 measured query evidence
+- schema: 381 ms;
+- seed: 33,771 ms;
+- 1,000 users;
+- 100,000 posts;
+- 100,000 media rows;
+- 100 tags;
+- 300,000 post_tags.
 
-Baseline shapes before the current tuning:
+Largest relations:
 
-- first feed page: 0.153 ms execution, 8 shared hits, 61 rows;
-- old cursor (`id < 50000`): 11.326 ms, 1,246 hits; merge join scanned about 50,077 media rows for 61 output rows;
-- required tag + score: 70.759 ms, 158,943 hits; `post_tags_pkey` produced about 158,680 rows and removed about 157,093 by join filter for 61 output rows;
-- required + excluded tag fixture: 3.851 ms, 7,130 hits, but that old fixture omitted the score predicate and is not directly comparable to the real HTTP search case.
+- `post_tags`: 40 MB;
+- `media`: 32 MB;
+- `posts`: 16 MB.
 
-These measurements justify query-shape work before adding cache complexity or speculative indexes.
+All five tuned plans completed:
 
-## Current measured-response changes
+- first feed: 0.201 ms, 187 shared hits;
+- old cursor: 0.208 ms, 189 hits;
+- required tag + score: 71.329 ms, 158,943 hits;
+- required + excluded tag + score: 69.353 ms, 159,675 hits;
+- around post 50000: 0.256 ms, 189 hits.
 
-Implemented after attempt 3:
+Same-database baseline/tuned evidence for the bounded media lookup:
 
-1. Around-post correctness:
-   - renamed derived-table alias from reserved `window` to `combined_posts` in production query and benchmark SQL.
+- old cursor: 18.447 ms / 1,246 hits -> 0.357 ms / 186 hits;
+- about 51.7x faster in that EXPLAIN pair;
+- old plan scanned about 50,077 media rows; tuned plan performed 61 `media_pkey` lookups;
+- first-page pair changed 0.286 -> 0.321 ms, a 0.035 ms increase; both remain sub-millisecond.
 
-2. Media join work:
-   - feed and around queries now use a bounded `JOIN LATERAL (... WHERE m.post_id = p.id ... LIMIT 1)` ready-media lookup.
-   - goal: avoid the old-cursor merge join scanning tens of thousands of unrelated media rows.
+Decision: keep the bounded per-post media lookup. It removes substantial cursor work with negligible measured first-page cost.
 
-3. Included-tag work:
-   - included tags now use a tag-led `p.id IN (SELECT pt.post_id ... JOIN tags ...)` shape.
-   - goal: let PostgreSQL use the existing partial `(tag_id, post_id DESC)` active-tag index instead of scanning `post_tags` in post-ID order.
+Around-post correctness is also validated: the reserved derived-table alias was fixed and the two-sided query completed in 0.256 ms.
 
-4. No new database index was added. Existing indexes must be measured with the better relational/query shape first.
+## Tag-query evidence and current response
 
-5. Benchmark fixtures now mirror the tuned production shapes and the required+excluded case includes `score >= 100`, matching the HTTP benchmark case.
+Run 4 rejected the first tag-led rewrite as ineffective.
 
-6. `bench/explain_compare.sql` captures baseline and tuned first-page, old-cursor, required-tag+score, and required+excluded+score plans in the same seeded database. `run_gate.sh` records it as `explain-compare.txt` for direct before/after evidence.
+Both required-tag plans still scanned about 158,680 `post_tags` rows for 61 results. The existing partial index:
 
-## Checks after query changes
+`post_tags_tag_post_active_idx (tag_id, post_id DESC) WHERE removed_at IS NULL`
 
-A local isolated Go 1.23.2 query-builder harness with production-equivalent feed/model/search types passed `go test ./...` for the changed `querysql` package and new shape assertions.
+showed zero scans in the pre-HTTP index statistics; PostgreSQL instead scanned `post_tags_pkey` in post-ID order and applied the tag join afterward.
 
-Real Go 1.25/pgx/PostgreSQL validation of the changed branch remains required; do not claim the measured improvements until the next target-server run.
+No new index is added yet.
 
-## M2 gate status
+Current query response:
 
-M2 is not ready to merge into `v2`.
+- resolve each included normalized tag name to its unique numeric `tags.id` in a scalar subquery first;
+- filter `post_tags.tag_id` directly with that resolved ID;
+- retain `removed_at IS NULL`, making the predicate compatible with the existing partial tag/post index;
+- keep the already-cheap excluded-tag per-post check unchanged.
 
-Still required:
+The exact changed `querysql/feed.go` blob passed an isolated local Go test; local Git blob hash matched committed blob `6b0fc5d301006297d682e05d63d02bde72006d27`.
 
-- real Go 1.25 tests on the current tuned head;
-- all five tuned `EXPLAIN (ANALYZE, BUFFERS)` plans;
-- same-run baseline-vs-tuned plan comparison;
+`bench/explain.sql` and `bench/explain_compare.sql` mirror the new production shape. The next server run must confirm whether PostgreSQL actually uses `post_tags_tag_post_active_idx` and collapses the prior ~158k-row scan before any schema/index change is considered.
+
+## HTTP gate status
+
+No valid HTTP matrix exists yet. Run 4 stopped at smoke testing because of the unrelated listener on port 18080; no API latency/resource conclusion should be drawn from that run.
+
+Still required on the current head:
+
+- real Go 1.25 tests/builds;
+- five current tuned plans;
+- same-run baseline/tuned plan comparison;
 - complete HTTP matrix at concurrency 1 / 4 / 8 / 16 / 32;
-- API CPU/RSS, server load, and PostgreSQL connection behavior;
+- API CPU/RSS and server load;
+- PostgreSQL total/active connection behavior;
 - pool-size decision only if measured saturation justifies it.
 
-Quiet-host Wallium comparison is optional and should be skipped unless stopping/restoring only backend/worker is clearly safe.
+Quiet-host Wallium comparison remains optional and should be skipped unless stopping/restoring only backend/worker is clearly safe.
 
 ## Single best next task
 
-Use the execution-only local agent to run `docs/v2/M2_RUN.md` from the current `origin/astra/m2-core-schema-api` head on the target server. Return the five tuned plans, `explain-compare.txt` before/after results, complete HTTP matrix, and resource/connection evidence. Do not modify code or indexes on the server. Use those measurements here to accept/reject the query-shape changes and decide whether any index change is actually needed before M2 integration.
+Use the execution-only local agent to run `docs/v2/M2_RUN.md` from the current exact `origin/astra/m2-core-schema-api` head. Pass `GINBAR_BENCH_PG_CONTAINER` as documented. Return the five current plans, `explain-compare.txt`, complete 5x5 HTTP matrix, resource/connection samples, and cleanup state. Do not modify code or indexes on the server. Use that evidence here to accept/reject the tag-ID query shape and decide whether M2 needs an index/schema change before integration.
