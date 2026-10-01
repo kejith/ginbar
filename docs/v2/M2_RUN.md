@@ -17,30 +17,49 @@ git status --short --branch
 git rev-parse HEAD
 ```
 
-The benchmark runner accepts host Go 1.25+ or, when host Go is older, uses an existing Docker installation with `golang:1.25`. It does not install system packages.
+The benchmark runner accepts host Go 1.25+ or, when host Go is older, uses an existing Docker installation with `golang:1.25`. It does not install system packages. If host `psql` is absent, it uses `postgres:17-alpine` as a disposable client through Docker.
 
-## 2. Disposable benchmark database
+## 2. Dedicated disposable PostgreSQL 17
 
-Create a fresh PostgreSQL database whose name is either:
+Do not use Wallium's PostgreSQL instance. Run a dedicated PostgreSQL 17 container bound only to loopback so the benchmark cannot touch production data and still executes on the target server hardware.
 
-```text
-ginbar_m2_bench
-ginbar_m2_bench_<suffix>
+Choose an unused loopback port (55432 below) and start the disposable database:
+
+```bash
+export BENCH_PG_CONTAINER="ginbar-m2-bench-pg-$(date +%s)"
+export BENCH_PG_VOLUME="${BENCH_PG_CONTAINER}-data"
+export BENCH_PG_PASSWORD="ginbar-bench-${RANDOM}-${RANDOM}-$(date +%s)"
+
+docker volume create "$BENCH_PG_VOLUME"
+docker run -d --rm \
+  --name "$BENCH_PG_CONTAINER" \
+  -e POSTGRES_PASSWORD="$BENCH_PG_PASSWORD" \
+  -e POSTGRES_DB=ginbar_m2_bench \
+  -p 127.0.0.1:55432:5432 \
+  -v "$BENCH_PG_VOLUME:/var/lib/postgresql/data" \
+  postgres:17-alpine
+
+until docker exec "$BENCH_PG_CONTAINER" pg_isready -U postgres -d ginbar_m2_bench >/dev/null 2>&1; do
+  sleep 0.5
+done
+
+export DATABASE_URL="postgres://postgres:${BENCH_PG_PASSWORD}@127.0.0.1:55432/ginbar_m2_bench?sslmode=disable"
 ```
 
-Never point the runner at production or Wallium data. The runner refuses any other database name.
+Do not print `BENCH_PG_PASSWORD` or `DATABASE_URL` in the returned report.
 
-Set `DATABASE_URL` for that disposable database without printing credentials into chat/log summaries.
+The gate runner also verifies that the connected database name begins with `ginbar_m2_bench`; it refuses any other database.
 
 The full run applies `001_core.sql`, seeds 1,000 users / 100,000 posts / 100,000 media rows / approximately three tags per post, analyzes the hot tables, and captures query plans before HTTP load testing.
 
 ## 3. Full shared-host run
 
-With the server in its normal state (including Wallium running), execute from the isolated Ginbar worktree root:
+With the server in its normal state, including Wallium backend/worker running, execute from the isolated Ginbar worktree root:
 
 ```bash
-export DATABASE_URL='<disposable ginbar_m2_bench URL>'
-GINBAR_BENCH_LABEL=shared bash src/backend/v2/bench/run_gate.sh
+GINBAR_BENCH_LABEL=shared \
+DATABASE_URL="$DATABASE_URL" \
+bash src/backend/v2/bench/run_gate.sh
 ```
 
 Default HTTP matrix:
@@ -68,12 +87,13 @@ At completion it prints the results directory, normally `/tmp/ginbar-m2-gate-...
 
 ## 4. Optional quiet-host comparison
 
-If and only if Wallium can be stopped safely without persistent configuration changes:
+If and only if the Wallium application workload can be stopped safely and reversibly:
 
-1. record exactly how Wallium is currently running;
-2. stop only Wallium application/backend workload, not PostgreSQL or unrelated services needed by the benchmark;
-3. verify the disposable benchmark database is still reachable;
-4. rerun only validation/build + HTTP load against the existing seeded benchmark database:
+1. record the exact Wallium backend and worker container/service names and their running state;
+2. stop only Wallium backend and media worker workload; leave Wallium PostgreSQL/Redis running unless there is a specific reason to stop them;
+3. do not change persistent Compose/system configuration;
+4. verify the dedicated benchmark PostgreSQL container is still healthy;
+5. rerun only validation/build + HTTP load against the existing seeded benchmark database:
 
 ```bash
 GINBAR_BENCH_LABEL=quiet \
@@ -82,7 +102,7 @@ DATABASE_URL="$DATABASE_URL" \
 bash src/backend/v2/bench/run_gate.sh
 ```
 
-5. restore Wallium exactly as it was and verify it is healthy before ending.
+6. restore the exact Wallium backend/worker state and verify they are healthy before doing anything else.
 
 If stopping Wallium is ambiguous or unsafe, do not stop it; report that the quiet comparison was skipped.
 
@@ -90,7 +110,7 @@ If stopping Wallium is ambiguous or unsafe, do not stop it; report that the quie
 
 Do not tune the implementation during the run.
 
-Only if the 8-connection run shows a clear latency cliff at concurrency 16/32 while server/PostgreSQL CPU still has substantial headroom, collect one additional measurement with a 16-connection pool. This is a measurement, not a configuration decision:
+Only if the 8-connection run shows a clear latency cliff at concurrency 16/32 while server/PostgreSQL CPU still has substantial headroom, collect one additional measurement with a 16-connection pool. This is measurement only, not a configuration decision:
 
 ```bash
 GINBAR_BENCH_LABEL=quiet-pool16 \
@@ -104,7 +124,7 @@ Do not test arbitrary pool sizes or change source code.
 
 ## 6. Query-plan evidence to extract
 
-From `explain.txt`, report for each of these shapes:
+From the shared run's `explain.txt`, report for each shape:
 
 - first feed page
 - old cursor (`id < 50000`)
@@ -141,7 +161,19 @@ Also report:
 - shared-host versus quiet-host delta if the quiet run was possible
 - pool-16 delta only if the conditional probe was triggered
 
-## 8. Review rule
+## 8. Cleanup
+
+After all measurements and after Wallium has been restored, remove only the disposable benchmark PostgreSQL resources:
+
+```bash
+docker stop "$BENCH_PG_CONTAINER"
+docker volume rm "$BENCH_PG_VOLUME"
+unset DATABASE_URL BENCH_PG_PASSWORD BENCH_PG_CONTAINER BENCH_PG_VOLUME
+```
+
+Keep the `/tmp/ginbar-m2-gate-*` result directories long enough to extract/report the evidence. They contain no intended production secrets, but still inspect/redact before sharing if an unexpected error message includes connection information.
+
+## 9. Review rule
 
 Optimization order after evidence returns:
 
