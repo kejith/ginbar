@@ -34,7 +34,7 @@ button { font: inherit; }
   --columns: 1;
   --row-size: 220px;
   width: 100%;
-  overflow-anchor: auto;
+  overflow-anchor: none;
 }
 
 .board-row {
