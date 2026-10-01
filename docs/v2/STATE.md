@@ -1,7 +1,7 @@
 # Ginbar v2 State / Handoff
 
-Last updated: 2026-10-01
-Phase: M2 core schema/API implemented; media and tag query plans validated; search smoke parser bug fixed; complete HTTP gate outstanding
+Last updated: 2026-10-02
+Phase: M2 core schema/API implemented; feed/search plans validated; direct-link around reconstruction fixed; complete HTTP/resource gate outstanding
 Integration branch: `v2`
 Active implementation branch: `astra/m2-core-schema-api`
 Completed M1 branch: `astra/m1-scroll-anchor`
@@ -15,15 +15,8 @@ This file is the resume point. Read it before `PLAN.md`. Do not rely on chat his
 
 - `master` remains untouched by rewrite work.
 - M1 is complete and integrated into `v2` at `32e154c4541fcdd2c24c1c05ed278e2dbddef960`.
-- `astra/m2-core-schema-api` remains a clean descendant of that `v2` head; do not merge until the M2 HTTP/resource gate passes.
+- `astra/m2-core-schema-api` is a clean descendant of that `v2` head; do not merge until the M2 HTTP/resource gate passes.
 - M2 contains the clean Go API/domain/search slice, fresh PostgreSQL schema/store/query compiler, real Go 1.25 dependency graph, deterministic load generator, and execution-only target-server benchmark harness.
-
-## M1 decisions retained
-
-- SolidJS + TypeScript + Vite accepted.
-- Keep incremental retention + CSS containment; no virtualization without evidence.
-- Browser/frontend timings belong to the client machine.
-- Target-server measurements are authoritative for backend/server-side work.
 
 ## M2 architecture
 
@@ -60,93 +53,120 @@ Repeatedly confirmed:
 - Wallium remains running and production checkouts are untouched;
 - disposable benchmark DB resources are removed after runs.
 
-## Harness history
+Harness now also:
 
-Benchmark-only failures already fixed:
-
-1. Docker Go output now persists through bind-mounted `/out`.
-2. Dockerized `psql` receives schema/seed/EXPLAIN SQL through stdin rather than host-only file paths.
-3. Benchmark API auto-selects a free loopback port, rejects an occupied explicit port, and verifies its own PID before accepting health.
-4. `GINBAR_BENCH_PG_CONTAINER` enables low-overhead connection sampling through `docker exec` in the existing disposable database container.
+- persists Docker Go output through bind-mounted `/out`;
+- streams SQL into Dockerized `psql` over stdin;
+- auto-selects a free loopback API port and verifies its own API PID;
+- uses `GINBAR_BENCH_PG_CONTAINER` for low-overhead connection sampling from the existing disposable DB container.
 
 ## Validated query decisions
 
 ### Bounded media lookup — accepted
 
-Production feed/around queries use a bounded lateral ready-media lookup by `media.post_id`.
+Feed/around use bounded lateral ready-media lookup by `media.post_id`.
 
-Run 4 same-database evidence:
+Same-database evidence:
 
-- old cursor baseline: 18.447 ms / 1,246 hits / about 50,077 media rows scanned;
-- bounded lookup: 0.357 ms / 186 hits / 61 `media_pkey` lookups;
-- about 51.7x faster in that pair;
-- first-feed difference was only 0.035 ms and both forms were sub-millisecond.
+- old cursor baseline scanned about 50,077 media rows;
+- tuned shape performs 61 `media_pkey` lookups;
+- Run 5 comparison: 9.568 -> 0.156 ms, about 61x faster;
+- Run 6 old-cursor plan: 0.200 ms / 189 hits.
 
-Run 5 retained the result: old cursor EXPLAIN was 0.316 ms with 61 bounded media lookups.
-
-Decision: keep the bounded media lookup.
-
-### Around-post correctness — accepted
-
-The reserved derived-table alias `window` was replaced with `combined_posts`. Run 5 around-post reconstruction completed in 0.413 ms for 61 rows with bounded scans on both sides.
+Keep this shape.
 
 ### Resolved tag-ID include filter — accepted
 
-The first tag rewrite did not change PostgreSQL's plan. The current shape first resolves `tags.normalized_name` to immutable `tags.id`, then filters `post_tags.tag_id` with `removed_at IS NULL`.
+Included tag names resolve to immutable `tags.id`, then constrain `post_tags.tag_id` with `removed_at IS NULL`.
 
-Run 5 tested `a3ea24b28591f14219ecbc0aa812e468b831dba3` and proved the existing partial index is sufficient; no new index is currently justified.
+Existing partial index is sufficient:
 
-Current plans:
+`post_tags_tag_post_active_idx (tag_id, post_id DESC) WHERE removed_at IS NULL`
 
-- required tag + score: 4.390 ms, 1,825 shared hits;
-- required + excluded tag + score: 2.905 ms, 2,557 shared hits;
-- both inclusion paths use `post_tags_tag_post_active_idx`;
-- included assignment scan is 1,587 rows instead of about 158,680;
-- excluded-tag work remains bounded per candidate post.
+Run 5 same-database baseline -> tuned:
 
-Same-run baseline -> tuned:
+- required tag + score: 71.240 -> 1.563 ms;
+- required + excluded + score: 70.068 -> 1.899 ms;
+- included assignment scan: about 158,680 -> 1,587 rows.
 
-- required tag + score: 71.240 -> 1.563 ms, about 45.6x faster;
-- required + excluded tag + score: 70.068 -> 1.899 ms, about 36.9x faster;
-- old cursor: 9.568 -> 0.156 ms, about 61.3x faster;
-- first feed: 0.174 -> 0.148 ms.
+Run 6 retained the plan:
 
-Decision: keep the resolved tag-ID shape and existing indexes. Do not add another search index without new evidence.
+- required tag + score: 2.916 ms / 1,825 hits;
+- required + excluded + score: 1.879 ms / 2,557 hits;
+- both use `post_tags_tag_post_active_idx` and scan 1,587 included assignments.
 
-## Run 5 HTTP smoke failure and fix
+Keep this shape. Do not add another search index without new evidence.
 
-Run 5 successfully avoided occupied port 18080 and selected 18081. `pg_sample_mode=container` was correctly recorded.
+### Hyphenated search tags — fixed and validated
 
-Health and unfiltered feed smoke requests passed. The exact search smoke:
+Run 5 exposed HTTP 400 for `q=tag-42 score:>=100` because the lexer treated internal `-` as exclusion syntax.
 
-`q=tag-42 score:>=100`
+The lexer now keeps internal hyphens inside unquoted tag words while preserving `-tag` exclusion and negative scores.
 
-returned HTTP 400 before the load matrix.
+Run 6 real Go 1.25 tests passed and the exact search smoke returned HTTP success with valid feed JSON.
 
-Root cause is in the search lexer, not PostgreSQL: unquoted word scanning treated every internal `-` as the start of exclusion syntax, so `tag-42` was tokenized incorrectly. The lexer now treats `-` as structural when `next()` begins on it (`-tag` exclusion or negative score), while hyphens encountered inside an unquoted word remain part of that tag.
+## Run 6 direct-link failure
 
-Added regressions:
+Run 6 tested `50ec3a7ccb8fee6e81819299f5332fa4e0eca3ac`.
 
-- parser accepts `tag-42 -other-tag score:>=100`;
-- existing `-anime` exclusion remains valid;
-- existing `score:<-10` remains valid;
-- HTTP handler test covers the exact failed benchmark URL and verifies parsed tag `tag-42` + score 100.
+Validation:
 
-Local isolated checks after the fix:
+- Go 1.25.14 tests passed;
+- schema: 355 ms;
+- seed: 33,611 ms;
+- free API port selection worked (`18081`);
+- `pg_sample_mode=container` recorded;
+- health, unfiltered feed, and hyphenated-tag search smoke checks passed.
 
-- search parser tests pass under local Go 1.23.2;
-- isolated HTTP handler test for the exact smoke URL returns 200 and parses the expected search AST.
+The fourth smoke request:
 
-Real Go 1.25 + PostgreSQL rerun of the current head is still required before the M2 gate can close.
+`GET /api/v2/posts/50000/around?radius=30`
+
+returned 404 before the HTTP matrix.
+
+Root cause:
+
+- deterministic seed post 50000 has `content_filter=2` (NSFW);
+- the around endpoint defaults surrounding context to SFW;
+- old SQL put the selected post inside the filtered `older` branch (`p.id <= $1 AND content_filter=0`);
+- SQL returned 61 surrounding SFW rows but omitted post 50000;
+- feed service requires the selected ID to be present and therefore correctly returned `ErrPostNotFound` / HTTP 404.
+
+This is a real canonical direct-link reconstruction bug, not a benchmark issue.
+
+## Current around-post fix
+
+`BuildAround` now has three bounded branches:
+
+1. `newer`: IDs above selected, context filters/search applied, limit radius;
+2. `selected`: exact selected ID, release/deletion/media-readiness constraints only;
+3. `older`: IDs below selected, context filters/search applied, limit radius.
+
+The selected post is therefore not hidden by feed/search context, while genuinely unreleased/deleted/no-ready-media posts still remain unavailable and result in 404.
+
+For radius 30 the response remains bounded to at most 61 posts: 30 newer + selected + 30 older.
+
+The benchmark around EXPLAIN fixture mirrors this exact shape and intentionally continues using post 50000, so the smoke test exercises an NSFW canonical selected post surrounded by default-SFW context.
+
+Regression tests assert:
+
+- strict `>` / `<` side bounds;
+- only the two context branches receive content/search predicates;
+- the selected branch targets `$1` without context filter/search clauses;
+- all three branches use bounded media lookup;
+- no OFFSET is introduced.
+
+An isolated local Go 1.23.2 query-builder test passed after this change. Real Go 1.25 + PostgreSQL validation of the current head remains required.
 
 ## M2 gate status
 
 M2 is not ready to merge into `v2` yet.
 
-Query-plan work is now satisfactory on the 100k deterministic dataset. The remaining gate is API/load behavior on the target server:
+Query-plan work is satisfactory on the deterministic 100k dataset. Remaining gate:
 
-- real Go 1.25 tests/build on the current search-fix head;
+- real Go 1.25 tests/build on the current around-fix head;
 - successful health/feed/search/around smoke checks;
+- around EXPLAIN confirms the three-branch bounded shape;
 - complete 5x5 HTTP matrix at concurrency 1 / 4 / 8 / 16 / 32;
 - API CPU/RSS and server load;
 - PostgreSQL total/active connection behavior;
@@ -154,8 +174,8 @@ Query-plan work is now satisfactory on the 100k deterministic dataset. The remai
 
 Pool 16 must not be tested unless p95 degrades at higher concurrency, active connections repeatedly reach 8, and CPU still has headroom.
 
-Quiet-host Wallium comparison remains optional and should be skipped unless stopping/restoring only backend/worker is clearly safe.
+Quiet-host Wallium comparison is optional and should be skipped unless stopping/restoring only backend/worker is clearly safe.
 
 ## Single best next task
 
-Use the execution-only local agent to rerun `docs/v2/M2_RUN.md` from the current exact `origin/astra/m2-core-schema-api` head. Pass `GINBAR_BENCH_PG_CONTAINER`. Return successful smoke results, all five plans, complete 5x5 HTTP matrix, resource/connection samples, and cleanup state. Do not modify code or indexes on the server. If the full gate passes, use the measurements here to make the pool decision and determine whether M2 can integrate into `v2`.
+Use the execution-only local agent to rerun `docs/v2/M2_RUN.md` from the current exact `origin/astra/m2-core-schema-api` head with `GINBAR_BENCH_PG_CONTAINER`. Confirm all four smoke checks, return all five plans, complete the 5x5 HTTP matrix, and return CPU/RSS/load/PostgreSQL connection samples. Do not modify code or indexes on the server. If the full gate passes, decide here whether pool 8 is sufficient and whether M2 can integrate into `v2`.
