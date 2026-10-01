@@ -35,8 +35,11 @@ func TestBuildFeedIsCursorBasedFilteredAndParameterized(t *testing.T) {
 	if !strings.Contains(sql, "JOIN LATERAL") || !strings.Contains(sql, "m.post_id = p.id") || !strings.Contains(sql, "LIMIT 1") {
 		t.Fatalf("missing bounded media lookup: %s", sql)
 	}
-	if !strings.Contains(sql, "p.id IN (") || !strings.Contains(sql, "t.normalized_name = $4") {
-		t.Fatalf("missing tag-led include filter: %s", sql)
+	if !strings.Contains(sql, "p.id IN (") || !strings.Contains(sql, "pt.tag_id = (") || !strings.Contains(sql, "t.normalized_name = $4") {
+		t.Fatalf("missing tag-id resolved include filter: %s", sql)
+	}
+	if strings.Contains(sql, "JOIN tags t ON t.id = pt.tag_id\n    WHERE pt.removed_at IS NULL\n      AND t.normalized_name = $4") {
+		t.Fatalf("include filter still joins tags inside the post-tag scan: %s", sql)
 	}
 	if got, want := len(args), 7; got != want {
 		t.Fatalf("args=%d want %d (%#v)", got, want, args)
