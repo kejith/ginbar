@@ -102,7 +102,7 @@ WHERE p.release_state = 1
 ORDER BY p.id DESC
 LIMIT 61;
 
-\echo '--- around post 50000 ---'
+\echo '--- around post 49999 ---'
 EXPLAIN (ANALYZE, BUFFERS)
 WITH newer AS (
     SELECT p.id, p.author_user_id, p.content_filter, p.score, p.created_at,
@@ -116,7 +116,7 @@ WITH newer AS (
     ) m ON true
     WHERE p.release_state = 1
       AND p.deleted_at IS NULL
-      AND p.id > 50000
+      AND p.id > 49999
       AND p.content_filter IN (0)
     ORDER BY p.id ASC
     LIMIT 30
@@ -132,7 +132,8 @@ WITH newer AS (
     ) m ON true
     WHERE p.release_state = 1
       AND p.deleted_at IS NULL
-      AND p.id = 50000
+      AND p.id = 49999
+      AND p.content_filter IN (0)
 ), older AS (
     SELECT p.id, p.author_user_id, p.content_filter, p.score, p.created_at,
            m.kind, m.storage_key, m.mime_type, m.width, m.height, m.duration_ms
@@ -145,7 +146,7 @@ WITH newer AS (
     ) m ON true
     WHERE p.release_state = 1
       AND p.deleted_at IS NULL
-      AND p.id < 50000
+      AND p.id < 49999
       AND p.content_filter IN (0)
     ORDER BY p.id DESC
     LIMIT 30
