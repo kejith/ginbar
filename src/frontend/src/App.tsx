@@ -39,6 +39,20 @@ interface IndexRange {
   end: number;
 }
 
+interface ViewportAnchor {
+  element: HTMLElement;
+  top: number;
+}
+
+interface PrependAnchorProbe {
+  beforeRange: IndexRange;
+  afterRange: IndexRange;
+  beforeTop: number | null;
+  shiftedTop: number | null;
+  afterTop: number | null;
+  correctionPx: number;
+}
+
 type HistoryMode = "push" | "replace" | "none";
 type LoadMode = "extend" | "center";
 type BenchmarkPattern = "same-row" | "cross-row";
@@ -97,6 +111,7 @@ declare global {
     __ginbarM1?: {
       select(id: number): void;
       retain(count: number): Promise<BenchmarkSnapshot>;
+      prepend(): Promise<PrependAnchorProbe>;
       run(pattern: BenchmarkPattern, iterations?: number): Promise<BenchmarkSummary>;
       runMatrix(iterations?: number): Promise<MatrixResult[]>;
       snapshot(): BenchmarkSnapshot;
@@ -145,6 +160,7 @@ const App: Component = () => {
   let bottomSentinelElement!: HTMLDivElement;
   let rowMounts = 0;
   let rowUnmounts = 0;
+  let prependPromise: Promise<PrependAnchorProbe> | null = null;
 
   const [columns, setColumns] = createSignal(1);
   const [loadedRange, setLoadedRange] = createSignal<IndexRange>({ start: 0, end: INITIAL_POSTS });
@@ -197,6 +213,73 @@ const App: Component = () => {
         resolve(timing);
       });
     });
+
+  const captureViewportAnchor = (): ViewportAnchor | null => {
+    const topbarBottom = document.querySelector<HTMLElement>(".topbar")?.getBoundingClientRect().bottom ?? 0;
+    const maxX = Math.max(0, window.innerWidth - 1);
+    const maxY = Math.max(0, window.innerHeight - 1);
+    const x = Math.min(maxX, Math.max(0, window.innerWidth / 2));
+    const y = Math.min(maxY, Math.max(0, topbarBottom + 1));
+    const hitRow = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-row-index]") ?? null;
+
+    const id = selectedId();
+    const selectedRow = id === null
+      ? null
+      : boardElement
+          .querySelector<HTMLElement>(`[data-post-id="${id}"]`)
+          ?.closest<HTMLElement>("[data-row-index]") ?? null;
+    const element = hitRow ?? selectedRow;
+    return element ? { element, top: element.getBoundingClientRect().top } : null;
+  };
+
+  const prependLoadedRange = (): Promise<PrependAnchorProbe> => {
+    if (prependPromise) return prependPromise;
+
+    const beforeRange = { ...loadedRange() };
+    const afterRange = extendRange(beforeRange, posts.length, -1, LOAD_CHUNK);
+    const anchor = captureViewportAnchor();
+    const beforeTop = anchor?.top ?? null;
+
+    if (afterRange.start === beforeRange.start) {
+      return Promise.resolve({
+        beforeRange,
+        afterRange,
+        beforeTop,
+        shiftedTop: beforeTop,
+        afterTop: beforeTop,
+        correctionPx: 0,
+      });
+    }
+
+    setLoadedRange(afterRange);
+    prependPromise = new Promise<PrependAnchorProbe>((resolve) => {
+      requestAnimationFrame(() => {
+        let shiftedTop: number | null = null;
+        let correctionPx = 0;
+        if (anchor?.element.isConnected) {
+          shiftedTop = anchor.element.getBoundingClientRect().top;
+          correctionPx = shiftedTop - anchor.top;
+          if (Math.abs(correctionPx) > 0.5) window.scrollBy(0, correctionPx);
+        }
+
+        requestAnimationFrame(() => {
+          const afterTop = anchor?.element.isConnected ? anchor.element.getBoundingClientRect().top : null;
+          const result = {
+            beforeRange,
+            afterRange,
+            beforeTop,
+            shiftedTop,
+            afterTop,
+            correctionPx,
+          };
+          prependPromise = null;
+          resolve(result);
+        });
+      });
+    });
+
+    return prependPromise;
+  };
 
   const ensureIndexLoaded = (index: number, mode: LoadMode) => {
     if (mode === "center") {
@@ -404,7 +487,7 @@ const App: Component = () => {
         for (const entry of entries) {
           if (!entry.isIntersecting) continue;
           if (entry.target === topSentinelElement) {
-            setLoadedRange((range) => extendRange(range, posts.length, -1, LOAD_CHUNK));
+            void prependLoadedRange();
           } else if (entry.target === bottomSentinelElement) {
             setLoadedRange((range) => extendRange(range, posts.length, 1, LOAD_CHUNK));
           }
@@ -437,6 +520,7 @@ const App: Component = () => {
         selectPost(id, "push", true, "extend", benchmarkEnabled, benchmarkEnabled);
       },
       retain: retainForBenchmark,
+      prepend: prependLoadedRange,
       run: runBenchmark,
       runMatrix,
       snapshot,
