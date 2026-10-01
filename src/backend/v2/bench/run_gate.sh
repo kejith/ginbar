@@ -6,10 +6,9 @@ if [[ -z "${DATABASE_URL:-}" ]]; then
   exit 2
 fi
 
-for command in git tar psql curl ps awk sed stat; do
+for command in git tar curl ps awk sed stat date; do
   command -v "$command" >/dev/null 2>&1 || { echo "missing required command: $command" >&2; exit 2; }
 done
-[[ -x /usr/bin/time ]] || { echo "missing required command: /usr/bin/time" >&2; exit 2; }
 
 repo_root="$(git rev-parse --show-toplevel)"
 branch="$(git -C "$repo_root" branch --show-current || true)"
@@ -23,6 +22,24 @@ api_pid=""
 sampler_pid=""
 
 mkdir -p "$results_dir"
+
+psql_mode=""
+if command -v psql >/dev/null 2>&1; then
+  psql_mode="host"
+elif command -v docker >/dev/null 2>&1; then
+  psql_mode="docker"
+else
+  echo "PostgreSQL client is unavailable and Docker is not installed" >&2
+  exit 2
+fi
+
+psql_exec() {
+  if [[ "$psql_mode" == "host" ]]; then
+    psql "$@"
+  else
+    docker run --rm --network host postgres:17-alpine psql "$@"
+  fi
+}
 
 cleanup() {
   local status=$?
@@ -53,9 +70,10 @@ trap cleanup EXIT INT TERM
   echo "repository=$repo_root"
   echo "kernel=$(uname -srmo)"
   echo "uptime=$(uptime)"
-  echo "postgres_client=$(psql --version)"
-  echo "database=$(psql "$DATABASE_URL" -Atqc 'select current_database()')"
-  echo "postgres_server=$(psql "$DATABASE_URL" -Atqc 'show server_version')"
+  echo "psql_mode=$psql_mode"
+  echo "postgres_client=$(psql_exec --version)"
+  echo "database=$(psql_exec "$DATABASE_URL" -Atqc 'select current_database()')"
+  echo "postgres_server=$(psql_exec "$DATABASE_URL" -Atqc 'show server_version')"
   echo "db_max_conns=${DB_MAX_CONNS:-8}"
   echo "requests_per_case=${GINBAR_BENCH_REQUESTS:-2000}"
   echo "concurrencies=${GINBAR_BENCH_CONCURRENCIES:-1 4 8 16 32}"
@@ -66,7 +84,7 @@ uname -a >> "$results_dir/environment.txt"
 { free -h || true; } > "$results_dir/memory.txt" 2>&1
 git -C "$repo_root" status --short --branch > "$results_dir/git-status.txt"
 
-current_db="$(psql "$DATABASE_URL" -Atqc 'select current_database()')"
+current_db="$(psql_exec "$DATABASE_URL" -Atqc 'select current_database()')"
 if [[ ! "$current_db" =~ ^ginbar_m2_bench([_].*)?$ ]]; then
   echo "refusing to use database '$current_db'; expected name ginbar_m2_bench or ginbar_m2_bench_*" >&2
   exit 2
@@ -136,24 +154,26 @@ go_exec build -trimpath -o "$work_dir/httpbench" ./bench/httpbench.go > "$result
 stat -c 'api_binary_bytes=%s' "$work_dir/ginbar-api" >> "$results_dir/environment.txt"
 
 if [[ "${GINBAR_BENCH_SKIP_DB_PREP:-0}" != "1" ]]; then
-  /usr/bin/time -f 'elapsed_seconds=%e user_seconds=%U system_seconds=%S max_rss_kb=%M' \
-    -o "$results_dir/schema.time" \
-    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$module_dir/internal/schema/migrations/001_core.sql" \
+  schema_start_ns="$(date +%s%N)"
+  psql_exec "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$module_dir/internal/schema/migrations/001_core.sql" \
     > "$results_dir/schema.log" 2> "$results_dir/schema.err"
+  schema_end_ns="$(date +%s%N)"
+  echo "elapsed_ms=$(((schema_end_ns - schema_start_ns) / 1000000))" > "$results_dir/schema.time"
 
-  /usr/bin/time -f 'elapsed_seconds=%e user_seconds=%U system_seconds=%S max_rss_kb=%M' \
-    -o "$results_dir/seed.time" \
-    psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$module_dir/bench/seed.sql" \
+  seed_start_ns="$(date +%s%N)"
+  psql_exec "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$module_dir/bench/seed.sql" \
     > "$results_dir/seed.log" 2> "$results_dir/seed.err"
+  seed_end_ns="$(date +%s%N)"
+  echo "elapsed_ms=$(((seed_end_ns - seed_start_ns) / 1000000))" > "$results_dir/seed.time"
 
-  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$module_dir/bench/explain.sql" \
+  psql_exec "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$module_dir/bench/explain.sql" \
     > "$results_dir/explain.txt" 2> "$results_dir/explain.err"
 fi
 
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -P pager=off -c \
+psql_exec "$DATABASE_URL" -v ON_ERROR_STOP=1 -P pager=off -c \
   "select relname, pg_size_pretty(pg_total_relation_size(relid)) as total_size, n_live_tup from pg_stat_user_tables order by pg_total_relation_size(relid) desc;" \
   > "$results_dir/table-sizes.txt"
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -P pager=off -c \
+psql_exec "$DATABASE_URL" -v ON_ERROR_STOP=1 -P pager=off -c \
   "select relname, indexrelname, idx_scan, pg_size_pretty(pg_relation_size(indexrelid)) as index_size from pg_stat_user_indexes order by relname, indexrelname;" \
   > "$results_dir/index-stats-before.txt"
 
@@ -183,7 +203,7 @@ sample_loop() {
   printf 'timestamp\tapi_cpu_pct\tapi_rss_kb\tpg_total_connections\tpg_active_connections\tload1\tload5\tload15\n'
   while kill -0 "$api_pid" 2>/dev/null; do
     read -r api_cpu api_rss < <(ps -p "$api_pid" -o %cpu=,rss= | awk 'NR==1 {print $1, $2}')
-    read -r pg_total pg_active < <(psql "$DATABASE_URL" -AtF' ' -c \
+    read -r pg_total pg_active < <(psql_exec "$DATABASE_URL" -AtF' ' -c \
       "select count(*), count(*) filter (where state = 'active') from pg_stat_activity where datname = current_database();")
     read -r load1 load5 load15 _ < /proc/loadavg
     printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
@@ -223,10 +243,10 @@ while IFS=$'\t' read -r case_name url; do
   done
 done < "$results_dir/cases.tsv"
 
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -P pager=off -c \
+psql_exec "$DATABASE_URL" -v ON_ERROR_STOP=1 -P pager=off -c \
   "select relname, indexrelname, idx_scan from pg_stat_user_indexes order by relname, indexrelname;" \
   > "$results_dir/index-stats-after.txt"
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -P pager=off -c \
+psql_exec "$DATABASE_URL" -v ON_ERROR_STOP=1 -P pager=off -c \
   "select datname, numbackends, xact_commit, xact_rollback, blks_read, blks_hit, tup_returned, tup_fetched from pg_stat_database where datname = current_database();" \
   > "$results_dir/pg-database-stats.txt"
 
