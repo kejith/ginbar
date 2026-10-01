@@ -47,7 +47,15 @@ func TestBuildFeedIsCursorBasedFilteredAndParameterized(t *testing.T) {
 }
 
 func TestBuildAroundKeepsSelectedPostOutsideContextFilters(t *testing.T) {
-	sql, args := BuildAround(feed.AroundQuery{PostID: 5000, Radius: 30, Filters: []model.ContentFilter{model.FilterSFW}})
+	sql, args := BuildAround(feed.AroundQuery{
+		PostID:  5000,
+		Radius:  30,
+		Filters: []model.ContentFilter{model.FilterSFW},
+		Search: search.Query{
+			IncludeTags: []string{"tag-42"},
+			Score:       &search.ScorePredicate{Op: search.ScoreGTE, Value: 100},
+		},
+	})
 	if !strings.Contains(sql, "p.id > $1") || !strings.Contains(sql, "p.id < $1") || strings.Contains(sql, "p.id <= $1") {
 		t.Fatalf("missing strict around-post bounds: %s", sql)
 	}
@@ -63,8 +71,11 @@ func TestBuildAroundKeepsSelectedPostOutsideContextFilters(t *testing.T) {
 	if !strings.Contains(selectedSQL, "p.id = $1") {
 		t.Fatalf("selected branch does not target the canonical post: %s", selectedSQL)
 	}
-	if strings.Contains(selectedSQL, "AND p.content_filter IN (") {
-		t.Fatalf("selected post must not be hidden by surrounding-feed filters: %s", selectedSQL)
+	if strings.Contains(selectedSQL, "AND p.content_filter IN (") || strings.Contains(selectedSQL, "pt.tag_id") || strings.Contains(selectedSQL, "AND p.score") {
+		t.Fatalf("selected post must not be hidden by surrounding-feed filters/search: %s", selectedSQL)
+	}
+	if strings.Count(sql, "pt.tag_id = (") != 2 || strings.Count(sql, "AND p.score >= $5") != 2 {
+		t.Fatalf("context filters/search should apply to newer and older branches only: %s", sql)
 	}
 	if strings.Contains(sql, ") window") || !strings.Contains(sql, ") combined_posts") {
 		t.Fatalf("invalid around-post derived-table alias: %s", sql)
@@ -72,7 +83,7 @@ func TestBuildAroundKeepsSelectedPostOutsideContextFilters(t *testing.T) {
 	if strings.Count(sql, "JOIN LATERAL") != 3 {
 		t.Fatalf("around query should bound media lookups for newer, selected, and older branches: %s", sql)
 	}
-	if got, want := len(args), 3; got != want {
+	if got, want := len(args), 5; got != want {
 		t.Fatalf("args=%d want %d (%#v)", got, want, args)
 	}
 }
