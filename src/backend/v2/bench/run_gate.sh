@@ -38,7 +38,7 @@ psql_exec() {
   if [[ "$psql_mode" == "host" ]]; then
     psql "$@"
   else
-    docker run --rm --network host postgres:17-alpine psql "$@"
+    docker run --rm -i --network host postgres:17-alpine psql "$@"
   fi
 }
 
@@ -93,6 +93,16 @@ fi
 
 git -C "$repo_root" archive HEAD src/backend/v2 | tar -x -C "$work_dir"
 module_dir="$work_dir/src/backend/v2"
+
+for required_file in \
+  "$module_dir/internal/schema/migrations/001_core.sql" \
+  "$module_dir/bench/seed.sql" \
+  "$module_dir/bench/explain.sql"; do
+  [[ -f "$required_file" ]] || { echo "required benchmark file missing after archive: $required_file" >&2; exit 1; }
+done
+
+psql_stdin_probe="$(printf 'select 1;\n' | psql_exec "$DATABASE_URL" -Atq)"
+[[ "$psql_stdin_probe" == "1" ]] || { echo "psql stdin probe failed" >&2; exit 1; }
 
 version_at_least_125() {
   local raw major minor
@@ -179,19 +189,22 @@ stat -c 'httpbench_binary_bytes=%s' "$bin_dir/httpbench" >> "$results_dir/enviro
 
 if [[ "${GINBAR_BENCH_SKIP_DB_PREP:-0}" != "1" ]]; then
   schema_start_ns="$(date +%s%N)"
-  psql_exec "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$module_dir/internal/schema/migrations/001_core.sql" \
-    > "$results_dir/schema.log" 2> "$results_dir/schema.err"
+  psql_exec "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+    > "$results_dir/schema.log" 2> "$results_dir/schema.err" \
+    < "$module_dir/internal/schema/migrations/001_core.sql"
   schema_end_ns="$(date +%s%N)"
   echo "elapsed_ms=$(((schema_end_ns - schema_start_ns) / 1000000))" > "$results_dir/schema.time"
 
   seed_start_ns="$(date +%s%N)"
-  psql_exec "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$module_dir/bench/seed.sql" \
-    > "$results_dir/seed.log" 2> "$results_dir/seed.err"
+  psql_exec "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+    > "$results_dir/seed.log" 2> "$results_dir/seed.err" \
+    < "$module_dir/bench/seed.sql"
   seed_end_ns="$(date +%s%N)"
   echo "elapsed_ms=$(((seed_end_ns - seed_start_ns) / 1000000))" > "$results_dir/seed.time"
 
-  psql_exec "$DATABASE_URL" -v ON_ERROR_STOP=1 -f "$module_dir/bench/explain.sql" \
-    > "$results_dir/explain.txt" 2> "$results_dir/explain.err"
+  psql_exec "$DATABASE_URL" -v ON_ERROR_STOP=1 \
+    > "$results_dir/explain.txt" 2> "$results_dir/explain.err" \
+    < "$module_dir/bench/explain.sql"
 fi
 
 psql_exec "$DATABASE_URL" -v ON_ERROR_STOP=1 -P pager=off -c \
@@ -242,11 +255,11 @@ sampler_pid=$!
 requests="${GINBAR_BENCH_REQUESTS:-2000}"
 concurrencies="${GINBAR_BENCH_CONCURRENCIES:-1 4 8 16 32}"
 cat > "$results_dir/cases.tsv" <<CASES
-feed-first	$base_url/api/v2/feed?limit=60
-feed-cursor	$base_url/api/v2/feed?before=50000&limit=60
-search-tag-score	$base_url/api/v2/feed?before=50000&limit=60&q=tag-42%20score:%3E%3D100
-search-tag-exclude-score	$base_url/api/v2/feed?before=50000&limit=60&q=tag-42%20-tag-77%20score:%3E%3D100
-around-50000	$base_url/api/v2/posts/50000/around?radius=30
+feed-first\t$base_url/api/v2/feed?limit=60
+feed-cursor\t$base_url/api/v2/feed?before=50000&limit=60
+search-tag-score\t$base_url/api/v2/feed?before=50000&limit=60&q=tag-42%20score:%3E%3D100
+search-tag-exclude-score\t$base_url/api/v2/feed?before=50000&limit=60&q=tag-42%20-tag-77%20score:%3E%3D100
+around-50000\t$base_url/api/v2/posts/50000/around?radius=30
 CASES
 
 : > "$results_dir/http-status.tsv"
