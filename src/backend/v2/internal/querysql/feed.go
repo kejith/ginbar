@@ -22,14 +22,22 @@ m.width,
 m.height,
 m.duration_ms`
 
+const readyMediaJoin = `
+JOIN LATERAL (
+    SELECT m.kind, m.storage_key, m.mime_type, m.width, m.height, m.duration_ms
+    FROM media m
+    WHERE m.post_id = p.id AND m.processing_state = 1
+    LIMIT 1
+) m ON true`
+
 func BuildFeed(q feed.Query) (string, []any) {
 	args := make([]any, 0, 8+len(q.Search.IncludeTags)+len(q.Search.ExcludeTags))
 	var b strings.Builder
 	b.WriteString("SELECT ")
 	b.WriteString(postProjection)
+	b.WriteString("\nFROM posts p")
+	b.WriteString(readyMediaJoin)
 	b.WriteString(`
-FROM posts p
-JOIN media m ON m.post_id = p.id AND m.processing_state = 1
 WHERE p.release_state = 1 AND p.deleted_at IS NULL`)
 	appendFilterSQL(&b, &args, q.Filters)
 	if q.Before > 0 {
@@ -51,16 +59,14 @@ func BuildAround(q feed.AroundQuery) (string, []any) {
 
 	sql := `WITH newer AS (
     SELECT ` + postProjection + `
-    FROM posts p
-    JOIN media m ON m.post_id = p.id AND m.processing_state = 1
+    FROM posts p` + readyMediaJoin + `
     WHERE p.release_state = 1 AND p.deleted_at IS NULL
       AND p.id > $1` + filterSQL + `
     ORDER BY p.id ASC
     LIMIT $2
 ), older AS (
     SELECT ` + postProjection + `
-    FROM posts p
-    JOIN media m ON m.post_id = p.id AND m.processing_state = 1
+    FROM posts p` + readyMediaJoin + `
     WHERE p.release_state = 1 AND p.deleted_at IS NULL
       AND p.id <= $1` + filterSQL + `
     ORDER BY p.id DESC
@@ -70,7 +76,7 @@ SELECT * FROM (
     SELECT * FROM newer
     UNION ALL
     SELECT * FROM older
-) window
+) combined_posts
 ORDER BY id DESC`
 	return sql, args
 }
@@ -94,12 +100,11 @@ func appendSearchSQL(b *strings.Builder, args *[]any, query search.Query) {
 	for _, tag := range query.IncludeTags {
 		*args = append(*args, tag)
 		fmt.Fprintf(b, `
-AND EXISTS (
-    SELECT 1
+AND p.id IN (
+    SELECT pt.post_id
     FROM post_tags pt
     JOIN tags t ON t.id = pt.tag_id
-    WHERE pt.post_id = p.id
-      AND pt.removed_at IS NULL
+    WHERE pt.removed_at IS NULL
       AND t.normalized_name = $%d
 )`, len(*args))
 	}
