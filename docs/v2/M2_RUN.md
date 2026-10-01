@@ -1,107 +1,154 @@
 # M2 backend validation / benchmark runbook
 
-Run this on the remote target server. Unlike M1 browser profiling, these measurements execute in the backend/PostgreSQL environment and may be treated as target-server evidence.
+This gate runs on the remote target server. Backend/PostgreSQL measurements execute on the actual server and may be treated as target-server evidence.
 
-## 1. Checkout and toolchain
+The runner is intentionally execution-only: it archives the exact checked-out commit into `/tmp`, performs Go dependency resolution/tests/builds there, uses only a disposable PostgreSQL database, starts the API on loopback, and writes raw evidence under `/tmp`. It does not modify the checked-out repository.
 
-Use an isolated worktree based on `astra/m2-core-schema-api`. Do not switch or modify deployed `main`, legacy `master`, or the normal service checkout.
+## 1. Safety / checkout
 
-Verify Go 1.25+ is available. A containerized Go toolchain is fine; do not mutate system packages solely for the benchmark.
+Use an isolated worktree of `astra/m2-core-schema-api`. Do not switch or modify deployed `main`, legacy `master`, or a production checkout.
 
-From `src/backend/v2`:
+Do not edit, tune, commit, merge, or push anything during this run. If something fails, preserve the output and report it.
 
-```bash
-go mod tidy
-go test ./...
-```
-
-Commit `go.sum` only after the real dependency-backed test passes.
-
-## 2. Fresh benchmark database
-
-Use a disposable PostgreSQL database. Never run the benchmark seed against production data.
-
-Apply the schema:
+Verify before running:
 
 ```bash
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f internal/schema/migrations/001_core.sql
+git status --short --branch
+git rev-parse HEAD
 ```
 
-Seed representative data:
+The benchmark runner accepts host Go 1.25+ or, when host Go is older, uses an existing Docker installation with `golang:1.25`. It does not install system packages.
+
+## 2. Disposable benchmark database
+
+Create a fresh PostgreSQL database whose name is either:
+
+```text
+ginbar_m2_bench
+ginbar_m2_bench_<suffix>
+```
+
+Never point the runner at production or Wallium data. The runner refuses any other database name.
+
+Set `DATABASE_URL` for that disposable database without printing credentials into chat/log summaries.
+
+The full run applies `001_core.sql`, seeds 1,000 users / 100,000 posts / 100,000 media rows / approximately three tags per post, analyzes the hot tables, and captures query plans before HTTP load testing.
+
+## 3. Full shared-host run
+
+With the server in its normal state (including Wallium running), execute from the isolated Ginbar worktree root:
 
 ```bash
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f bench/seed.sql
+export DATABASE_URL='<disposable ginbar_m2_bench URL>'
+GINBAR_BENCH_LABEL=shared bash src/backend/v2/bench/run_gate.sh
 ```
 
-The seed creates 100,000 released posts with media and three tags per post, enough to exercise cursor and tag query plans without pretending this is final production cardinality.
+Default HTTP matrix:
 
-## 3. Query plans
+- cases: first feed page, old cursor, tag+score, tag+excluded-tag+score, around-post reconstruction
+- concurrency: 1 / 4 / 8 / 16 / 32
+- measured requests: 2,000 per case/concurrency after warmup
+- API PostgreSQL pool: 8 connections
 
-Run:
+The runner captures:
+
+- exact Git SHA and working-tree status
+- CPU/RAM/OS and PostgreSQL versions
+- real `go mod tidy` and `go test ./...` in a temporary archive
+- generated `go.sum` as evidence only (outside the repository)
+- schema/seed timings
+- full `EXPLAIN (ANALYZE, BUFFERS)` output for five query shapes
+- relation/index sizes and index scan counters
+- smoke endpoint responses
+- p50/p95/p99/max, requests/sec, status counts, and errors for each HTTP case
+- API RSS/CPU, system load, and PostgreSQL connection counts sampled during the matrix
+- PostgreSQL database counters after load
+
+At completion it prints the results directory, normally `/tmp/ginbar-m2-gate-...-shared`.
+
+## 4. Optional quiet-host comparison
+
+If and only if Wallium can be stopped safely without persistent configuration changes:
+
+1. record exactly how Wallium is currently running;
+2. stop only Wallium application/backend workload, not PostgreSQL or unrelated services needed by the benchmark;
+3. verify the disposable benchmark database is still reachable;
+4. rerun only validation/build + HTTP load against the existing seeded benchmark database:
 
 ```bash
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f bench/explain.sql
+GINBAR_BENCH_LABEL=quiet \
+GINBAR_BENCH_SKIP_DB_PREP=1 \
+DATABASE_URL="$DATABASE_URL" \
+bash src/backend/v2/bench/run_gate.sh
 ```
 
-Save the full output. For each shape record:
+5. restore Wallium exactly as it was and verify it is healthy before ending.
 
-- planning time
-- execution time
-- actual rows
-- buffers hit/read
-- scan/index type
-- rows removed by filter
-- whether work grows unexpectedly for an old cursor or rare tag
+If stopping Wallium is ambiguous or unsafe, do not stop it; report that the quiet comparison was skipped.
 
-Do not tune indexes until the plans are captured.
+## 5. Conditional pool-size probe
 
-## 4. API benchmark
+Do not tune the implementation during the run.
 
-Start the API against the disposable DB:
+Only if the 8-connection run shows a clear latency cliff at concurrency 16/32 while server/PostgreSQL CPU still has substantial headroom, collect one additional measurement with a 16-connection pool. This is a measurement, not a configuration decision:
 
 ```bash
-DATABASE_URL="$DATABASE_URL" DB_MAX_CONNS=8 LISTEN_ADDR=127.0.0.1:18080 go run ./cmd/api
+GINBAR_BENCH_LABEL=quiet-pool16 \
+GINBAR_BENCH_SKIP_DB_PREP=1 \
+DB_MAX_CONNS=16 \
+DATABASE_URL="$DATABASE_URL" \
+bash src/backend/v2/bench/run_gate.sh
 ```
 
-Smoke test:
+Do not test arbitrary pool sizes or change source code.
 
-```bash
-curl -fsS 'http://127.0.0.1:18080/healthz'
-curl -fsS 'http://127.0.0.1:18080/api/v2/feed?limit=60'
-curl -fsS 'http://127.0.0.1:18080/api/v2/feed?before=50000&limit=60&q=tag-42%20score:%3E%3D100'
-curl -fsS 'http://127.0.0.1:18080/api/v2/posts/50000/around?radius=30'
-```
+## 6. Query-plan evidence to extract
 
-Use an already-installed HTTP load generator if available. Do not install a large benchmarking stack just for this gate. Suggested cases:
+From `explain.txt`, report for each of these shapes:
 
-- feed first page, 60 posts
-- feed around cursor 50,000
-- one required tag
-- one required + one excluded tag + score predicate
-- around post 50,000, radius 30
+- first feed page
+- old cursor (`id < 50000`)
+- required tag + score
+- required + excluded tag
+- around post 50000
 
-Run low concurrency first (1, 4, 8), then enough concurrency to reveal whether the 8-connection PostgreSQL pool is saturated. Record latency p50/p95/p99, requests/sec, errors, CPU, and PostgreSQL connection count.
+For each capture:
 
-## 5. Review rule
+- planning time and execution time
+- top-level and important child plan nodes
+- index names used
+- actual rows / loops
+- shared buffer hits / reads
+- rows removed by filters
+- any sequential scan over a large relation
 
-Optimization order:
+Do not propose or create indexes during this execution task.
+
+## 7. HTTP evidence to return
+
+For each benchmark case and concurrency 1 / 4 / 8 / 16 / 32, return:
+
+- p50 / p95 / p99 / max milliseconds
+- requests/sec
+- success/error counts
+
+Also report:
+
+- peak observed API CPU and RSS
+- peak PostgreSQL total/active connections from `resource-samples.tsv`
+- system load range during the run
+- any 5xx/timeouts
+- shared-host versus quiet-host delta if the quiet run was possible
+- pool-16 delta only if the conditional probe was triggered
+
+## 8. Review rule
+
+Optimization order after evidence returns:
 
 1. eliminate scans/work/round trips;
 2. fix query/index/data layout;
 3. only then consider cache/precompute/concurrency changes.
 
-Do not introduce Redis for feed/search unless the PostgreSQL path is measured and a clear ephemeral caching benefit remains.
+Do not introduce Redis for feed/search merely to mask an unmeasured SQL shape.
 
-## 6. Handoff
-
-Update `docs/v2/STATE.md` with:
-
-- exact commit tested
-- Go/PostgreSQL versions
-- `go test ./...` result
-- schema/seed result
-- query-plan headline findings
-- API latency/concurrency results
-- any index/query changes with before/after evidence
-- unresolved issues
-- one best next task
+Do not modify `docs/v2/STATE.md` during the benchmark. Return the information to the primary engineering session; that session will decide changes and update durable state.
