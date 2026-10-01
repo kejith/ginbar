@@ -1,7 +1,7 @@
 # Ginbar v2 State / Handoff
 
-Last updated: 2026-09-30
-Phase: M1 implementation ready for target-hardware validation; M1 gate not yet passed
+Last updated: 2026-10-01
+Phase: M1 profiling completed; gate remains open due browser-host mismatch and scroll-anchor issue
 Integration branch: `v2`
 Active implementation branch: `astra/m1-board-prototype`
 Legacy branch: `master` (read-only for rewrite work)
@@ -55,7 +55,7 @@ Target-hardware procedure: `docs/v2/M1_RUN.md`.
 - Sticky-header backdrop blur was removed to avoid needless scroll repaint work in the benchmark.
 - Virtualization remains deliberately absent until retained-DOM profiling proves it is needed.
 
-## Checks completed in this environment
+## Pre-hardware checks completed in the original local environment
 
 - `node --test src/board-model.test.js`: 8/8 passing.
 - Pure tests cover deterministic data, responsive columns, row mapping, index-range -> row-range mapping, bounded deep-link windows, bidirectional range extension, strict `/post/:id` parsing, and navigation boundary clamping.
@@ -82,23 +82,23 @@ A framework-free headless-Chromium DOM harness using the same row/containment co
 
 Interpretation: row layout/containment alone is not an obvious M1-scale bottleneck. Do not use these numbers to accept Solid or to justify indefinite DOM retention.
 
+## M1 hardware profiling update (2026-10-01)
+
+- Target tested: `astra/m1-board-prototype` at `da0885f724d662333af45dc307c1d501135da266`; results-only branch: `astra/m1-hardware-results`.
+- Remote Node 22 install, `npm run validate`, standalone test/typecheck/build, production bundle sizing, desktop/mobile benchmark matrices, direct routes, history, keyboard navigation, and 10,000-post long scroll all completed. Detailed data and limitations are in `docs/v2/M1_HARDWARE_RESULTS.md` and `docs/v2/M1_HARDWARE_RESULTS.json`.
+- The browser ran on Windows i5-14600KF, not the remote i7-7700; therefore Solid's target-hardware gate is **not decided** despite low measured selection sync p95.
+- Prepending newer rows from `/post/5000` caused a large viewport/scroll-position jump at both viewports. This is documented and was not fixed during profiling.
+- At 10,000 posts the board retained about 32.5k desktop / 40k mobile-viewport DOM nodes. No retention-cap or virtualization decision is made from this run.
+- Wallium was restored and verified active. No application source changed; `master`, `v2`, and `main` were not modified.
+
 ## M1 gate still outstanding
 
-Run `docs/v2/M1_RUN.md` on the target hardware and record:
+- Resolve the browser-host limitation before treating the selection and scroll timings as target-hardware evidence.
+- Investigate the reproducible prepend scroll-anchor jump in a separate implementation task, then rerun the M1 scroll and profile checks.
+- Review Solid acceptance and any retention/virtualization decision only after the target-relevant browser profile and scroll correctness are established.
 
-- fresh `package-lock.json` plus real `npm run validate` result
-- production bundle sizes
-- 1440x900 and 390x844 timing/profile matrix at 320 / 2,000 / 5,000 / 10,000 retained posts
-- row mount/unmount behavior during monotonic retention growth
-- Long Tasks, scripting/layout/paint traces, DOM count, and heap growth
-- direct `/post/10000`, `/post/5000`, `/post/1` correctness
-- Back/Forward and Arrow/J/K correctness
-- long scrolling from `/` and bidirectional extension from `/post/5000`
-- Solid framework decision
-- retention-cap/virtualization decision based on measurements only
-
-Do not start M2 or merge this branch into `v2` until the M1 gate is reviewed.
+Do not start M2 or merge the M1 implementation branch into `v2` until the gate is reviewed.
 
 ## Single best next task
 
-On the actual target hardware, follow `docs/v2/M1_RUN.md` exactly: install dependencies, generate the lockfile, run `npm run validate`, inspect the production bundle, then capture the desktop/mobile retention matrix and representative Performance traces. Use that evidence to accept/reject Solid and decide whether bounded retention or virtualization is needed.
+Reproduce the `/post/5000` prepend-anchor jump, address it in a separate M1 implementation task, and rerun the bidirectional scroll test before making a Solid or retention decision. Keep the hardware-result branch documentation-only.

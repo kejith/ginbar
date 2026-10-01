@@ -1,0 +1,194 @@
+{
+  "metadata": {
+    "date": "2026-10-01",
+    "timezone": "CEST",
+    "targetBranch": "astra/m1-board-prototype",
+    "targetCommit": "da0885f724d662333af45dc307c1d501135da266",
+    "resultsBranch": "astra/m1-hardware-results",
+    "resultsBranchBase": "da0885f724d662333af45dc307c1d501135da266",
+    "sourceChanged": false
+  },
+  "environment": {
+    "remoteTarget": {
+      "os": "Ubuntu 24.04.3 LTS",
+      "kernel": "6.8.0-88-generic #89-Ubuntu SMP PREEMPT_DYNAMIC Sat Oct 11 01:02:46 UTC 2025",
+      "cpu": "Intel Core i7-7700 CPU @ 3.60GHz",
+      "cores": 4,
+      "threads": 8,
+      "maxMHz": 4200,
+      "memoryTotalGiB": 62,
+      "memoryAvailableGiBAtInspection": 44,
+      "node": "v22.23.3",
+      "npm": "10.9.9",
+      "runtime": "Docker node:22-alpine"
+    },
+    "browserHost": {
+      "os": "Windows version 10.0.26200 (Get-ComputerInfo product label: Windows 10 Home)",
+      "cpu": "Intel Core i5-14600KF",
+      "logicalProcessors": 20,
+      "memoryBytes": 34190061568,
+      "browser": "Code 1.138.0 / Electron 42.10.0 / Chromium 148.0.7778.280",
+      "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Code/1.138.0 Chrome/148.0.7778.280 Electron/42.10.0 Safari/537.36",
+      "note": "Browser-side work ran locally on Windows, not on the remote i7-7700. Mobile viewport is emulated."
+    }
+  },
+  "build": {
+    "commands": [
+      {"command": "npm install", "result": "passed", "packagesAdded": 75, "vulnerabilities": 0},
+      {"command": "npm run validate", "result": "passed", "testsPassed": 8, "testsFailed": 0, "typecheck": "passed", "build": "passed"},
+      {"command": "npm test", "result": "passed", "testsPassed": 8, "testsFailed": 0},
+      {"command": "npm run typecheck", "result": "passed"},
+      {"command": "npm run build", "result": "passed", "vite": "8.3.1"}
+    ],
+    "assets": [
+      {"path": "dist/index.html", "rawBytes": 461, "gzipBytes": 305},
+      {"path": "dist/assets/index-Cd8E1oQz.css", "rawBytes": 3293, "gzipBytes": 1402},
+      {"path": "dist/assets/index-54yHZlvq.js", "rawBytes": 26539, "gzipBytes": 10122},
+      {"path": "dist/assets/index-54yHZlvq.js.map", "rawBytes": 161467, "gzipBytes": null},
+      {"path": "dist/favicon.svg", "rawBytes": 238, "gzipBytes": null}
+    ]
+  },
+  "serving": {
+    "remoteBind": "127.0.0.1:41731",
+    "localForward": "127.0.0.1:41732",
+    "rootHttpStatus": 200,
+    "directPost23HttpStatus": 200,
+    "previewContainerRemoved": true,
+    "sshTunnelClosed": true
+  },
+  "wallium": {
+    "baseline": {
+      "state": "active",
+      "observedAt": "2026-10-01 07:24:43 CEST",
+      "uptime": "289 days, 16:31",
+      "loadAverage": [0.73, 0.73, 0.71],
+      "memoryUsedGiB": 18,
+      "memoryAvailableGiB": 44,
+      "backendCpuPercent": 0.02,
+      "backendMemoryMiB": 8.105,
+      "workerCpuPercent": 0,
+      "workerMemoryMiB": 259.1
+    },
+    "controlledRunLoadAverageAfterStop": [0.52, 0.65, 0.68],
+    "restored": true,
+    "restoredServices": ["backend", "worker", "postgres", "redis"],
+    "restoredBackendHealthy": true,
+    "restoredPostgresHealthy": true,
+    "restoredRedisHealthy": true
+  },
+  "baselineWithWallium": {
+    "viewport": [1440, 900],
+    "requestedIterations": 30,
+    "actualSnapshot": {
+      "columns": 8,
+      "logicalRange": {"start": 9360, "end": 10000},
+      "thumbnails": 640,
+      "domNodes": 2112,
+      "longTasks": 0,
+      "heapBytes": 9613035,
+      "note": "Viewport resize extended the direct-link window from 320 to 640 posts."
+    },
+    "sameRow": {
+      "sync": {"p50": 0.2, "p95": 0.3, "max": 0.4},
+      "frame": {"p50": 5.7, "p95": 36.3, "max": 75.1}
+    },
+    "crossRow": {
+      "sync": {"p50": 0.2, "p95": 0.3, "max": 0.3},
+      "frame": {"p50": 5.7, "p95": 5.8, "max": 5.9}
+    },
+    "invariants": {"ok": true, "errors": []}
+  },
+  "matrix": {
+    "desktop1440x900": [
+      {"requestedPosts": 320, "snapshot": {"columns": 8, "logicalRange": {"start": 0, "end": 320}, "renderedRows": 40, "thumbnails": 320, "domNodes": 1072, "rowMounts": 568, "rowUnmounts": 848, "longTasks": 0, "heapBytes": 6777017}, "sameRow": {"iterations": 120, "sync": {"p50": 0.3, "p95": 0.4, "max": 0.5}, "frame": {"p50": 16.7, "p95": 17.2, "max": 19.8}}, "crossRow": {"iterations": 120, "sync": {"p50": 0.3, "p95": 0.4, "max": 0.4}, "frame": {"p50": 16.7, "p95": 17.1, "max": 17.3}}, "invariants": {"ok": true, "errors": []}},
+      {"requestedPosts": 2000, "snapshot": {"columns": 8, "logicalRange": {"start": 0, "end": 2000}, "renderedRows": 250, "thumbnails": 2000, "domNodes": 6532, "rowMounts": 778, "rowUnmounts": 848, "longTasks": 0, "heapBytes": 10271988}, "sameRow": {"iterations": 120, "sync": {"p50": 0.3, "p95": 0.4, "max": 0.4}, "frame": {"p50": 16.7, "p95": 17.1, "max": 18.4}}, "crossRow": {"iterations": 120, "sync": {"p50": 0.3, "p95": 0.4, "max": 0.5}, "frame": {"p50": 16.7, "p95": 17.1, "max": 17.3}}, "invariants": {"ok": true, "errors": []}},
+      {"requestedPosts": 5000, "snapshot": {"columns": 8, "logicalRange": {"start": 0, "end": 5000}, "renderedRows": 625, "thumbnails": 5000, "domNodes": 16282, "rowMounts": 1153, "rowUnmounts": 848, "longTasks": 0, "heapBytes": 14678075}, "sameRow": {"iterations": 120, "sync": {"p50": 0.3, "p95": 0.4, "max": 0.5}, "frame": {"p50": 16.7, "p95": 17.1, "max": 21.7}}, "crossRow": {"iterations": 120, "sync": {"p50": 0.3, "p95": 0.4, "max": 0.5}, "frame": {"p50": 16.7, "p95": 17.2, "max": 17.2}}, "invariants": {"ok": true, "errors": []}},
+      {"requestedPosts": 10000, "snapshot": {"columns": 8, "logicalRange": {"start": 0, "end": 10000}, "renderedRows": 1250, "thumbnails": 10000, "domNodes": 32532, "rowMounts": 1778, "rowUnmounts": 848, "longTasks": 0, "heapBytes": 25974330}, "sameRow": {"iterations": 120, "sync": {"p50": 0.3, "p95": 0.5, "max": 0.5}, "frame": {"p50": 16.7, "p95": 17.2, "max": 17.3}}, "crossRow": {"iterations": 120, "sync": {"p50": 0.3, "p95": 0.5, "max": 0.6}, "frame": {"p50": 16.7, "p95": 17.2, "max": 17.2}}, "invariants": {"ok": true, "errors": []}}
+    ],
+    "mobile390x844": [
+      {"requestedPosts": 320, "snapshot": {"columns": 2, "logicalRange": {"start": 0, "end": 320}, "renderedRows": 160, "thumbnails": 320, "domNodes": 1312, "rowMounts": 5528, "rowUnmounts": 5688, "longTasks": 0, "heapBytes": 60673337}, "sameRow": {"iterations": 120, "sync": {"p50": 0.2, "p95": 0.4, "max": 0.4}, "frame": {"p50": 16.6, "p95": 17.1, "max": 32.3}}, "crossRow": {"iterations": 120, "sync": {"p50": 0.3, "p95": 0.4, "max": 0.5}, "frame": {"p50": 16.7, "p95": 17.2, "max": 17.3}}, "invariants": {"ok": true, "errors": []}},
+      {"requestedPosts": 2000, "snapshot": {"columns": 2, "logicalRange": {"start": 0, "end": 2000}, "renderedRows": 1000, "thumbnails": 2000, "domNodes": 8032, "rowMounts": 6368, "rowUnmounts": 5688, "longTasks": 0, "heapBytes": 38982107}, "sameRow": {"iterations": 120, "sync": {"p50": 0.3, "p95": 0.4, "max": 0.5}, "frame": {"p50": 16.7, "p95": 17.2, "max": 21.3}}, "crossRow": {"iterations": 120, "sync": {"p50": 0.3, "p95": 0.4, "max": 0.5}, "frame": {"p50": 16.7, "p95": 17.1, "max": 17.2}}, "invariants": {"ok": true, "errors": []}},
+      {"requestedPosts": 5000, "snapshot": {"columns": 2, "logicalRange": {"start": 0, "end": 5000}, "renderedRows": 2500, "thumbnails": 5000, "domNodes": 20032, "rowMounts": 7868, "rowUnmounts": 5688, "longTasks": 0, "heapBytes": 38219382}, "sameRow": {"iterations": 120, "sync": {"p50": 0.3, "p95": 0.4, "max": 0.5}, "frame": {"p50": 16.7, "p95": 17.1, "max": 24.3}}, "crossRow": {"iterations": 120, "sync": {"p50": 0.3, "p95": 0.5, "max": 0.6}, "frame": {"p50": 16.7, "p95": 17.2, "max": 33.4}}, "invariants": {"ok": true, "errors": []}},
+      {"requestedPosts": 10000, "snapshot": {"columns": 2, "logicalRange": {"start": 0, "end": 10000}, "renderedRows": 5000, "thumbnails": 10000, "domNodes": 40032, "rowMounts": 10368, "rowUnmounts": 5688, "longTasks": 1, "heapBytes": 73184456}, "sameRow": {"iterations": 120, "sync": {"p50": 0.3, "p95": 0.4, "max": 0.4}, "frame": {"p50": 16.7, "p95": 17.1, "max": 17.2}}, "crossRow": {"iterations": 120, "sync": {"p50": 0.4, "p95": 0.5, "max": 9.4}, "frame": {"p50": 18.9, "p95": 27.8, "max": 37.3}}, "invariants": {"ok": true, "errors": []}}
+    ]
+  },
+  "longScroll": {
+    "mobile390x844": [
+      {"threshold": 320, "actualPosts": 320, "domNodes": 1301, "rowMounts": 320, "rowUnmounts": 160, "longTasks": 1, "heapBytes": 28684321},
+      {"threshold": 2000, "actualPosts": 2240, "domNodes": 8981, "rowMounts": 1280, "rowUnmounts": 160, "longTasks": 1, "heapBytes": 12999632},
+      {"threshold": 5000, "actualPosts": 5120, "domNodes": 20501, "rowMounts": 2720, "rowUnmounts": 160, "longTasks": 2, "heapBytes": 21548376},
+      {"threshold": 10000, "actualPosts": 10000, "domNodes": 40021, "rowMounts": 5160, "rowUnmounts": 160, "longTasks": 2, "heapBytes": 38399228}
+    ],
+    "desktop1440x900": [
+      {"threshold": 320, "actualPosts": 320, "domNodes": 1061, "rowMounts": 320, "rowUnmounts": 280, "longTasks": 0, "heapBytes": 15000704},
+      {"threshold": 2000, "actualPosts": 2240, "domNodes": 7301, "rowMounts": 560, "rowUnmounts": 280, "longTasks": 2, "heapBytes": 18407216},
+      {"threshold": 5000, "actualPosts": 5120, "domNodes": 16661, "rowMounts": 920, "rowUnmounts": 280, "longTasks": 3, "heapBytes": 22962812},
+      {"threshold": 10000, "actualPosts": 10000, "domNodes": 32521, "rowMounts": 1530, "rowUnmounts": 280, "longTasks": 3, "heapBytes": 24997790}
+    ],
+    "invariants": {"ok": true, "errors": []},
+    "note": "Wheel-driven traversal used 16,000 px deltas on mobile and 8,000 px deltas on desktop."
+  },
+  "directRoutes": [
+    {"route": "/post/10000", "selectedThumbnail": "10000", "expandedPost": "10000", "logicalRange": {"start": 0, "end": 320}, "thumbnails": 320, "invariants": {"ok": true, "errors": []}},
+    {"route": "/post/5000", "selectedThumbnail": "5000", "expandedPost": "5000", "logicalRange": {"start": 4840, "end": 5480}, "thumbnails": 640, "invariants": {"ok": true, "errors": []}},
+    {"route": "/post/1", "selectedThumbnail": "1", "expandedPost": "1", "logicalRange": {"start": 9680, "end": 10000}, "thumbnails": 320, "invariants": {"ok": true, "errors": []}}
+  ],
+  "historyAndKeyboard": {
+    "sequence": ["direct /post/5000", "select 4999 same row", "select 5001 cross row", "Back to 4999", "Back to 5000", "Forward to 4999", "Forward to 5001", "ArrowRight to 5000", "ArrowLeft to 5001", "ArrowDown to 5000", "ArrowUp to 5001", "J to 5000", "K to 5001", "Escape to /"],
+    "allInvariantsPassed": true
+  },
+  "prependAnchorObservation": {
+    "oldRange": {"start": 4840, "end": 5480},
+    "newRange": {"start": 4520, "end": 5480},
+    "mobile390x844": {"scrollYBefore": 15113, "scrollYAfter": 459, "selectedTopBefore": 7.59, "selectedTopAfter": 44821.59},
+    "desktop1440x900": {"scrollYBefore": 1282, "scrollYAfter": 0, "selectedTopBefore": 2326.09, "selectedTopAfter": 10743.09},
+    "invariantsPassed": true,
+    "assessment": "Viewport anchoring jumps substantially when extending toward newer posts."
+  },
+  "devtoolsTraceSummaries": {
+    "desktop1440x900": {
+      "cases": ["320 same-row", "320 cross-row", "2000 cross-row", "5000 cross-row", "10000 cross-row"],
+      "iterationsPerCase": 120,
+      "traceEventCount": 71923,
+      "events": {
+        "RunTask": {"count": 29956, "totalDurationMs": 21041.616, "maxDurationMs": 50.11},
+        "FireAnimationFrame": {"count": 608, "totalDurationMs": 239.912, "maxDurationMs": 1.568},
+        "FunctionCall": {"count": 615, "totalDurationMs": 16.061, "maxDurationMs": 0.183},
+        "EventDispatch": {"count": 1846, "totalDurationMs": 2.933, "maxDurationMs": 0.015},
+        "UpdateLayoutTree": {"count": 1078, "totalDurationMs": 440.731, "maxDurationMs": 3.252},
+        "Layout": {"count": 1079, "totalDurationMs": 233.76, "maxDurationMs": 1.098},
+        "Paint": {"count": 2527, "totalDurationMs": 240.427, "maxDurationMs": 0.813},
+        "MinorGC": {"count": 9, "totalDurationMs": 10.996, "maxDurationMs": 2.236},
+        "MajorGC": {"count": 6, "totalDurationMs": 11.934, "maxDurationMs": 2.643}
+      },
+      "RunTaskOver50ms": 1
+    },
+    "mobile390x844": {
+      "cases": ["320 same-row", "320 cross-row", "2000 cross-row", "5000 cross-row", "10000 cross-row"],
+      "iterationsPerCase": 120,
+      "traceEventCount": 72540,
+      "events": {
+        "RunTask": {"count": 33769, "totalDurationMs": 24111.541, "maxDurationMs": 45.872},
+        "FireAnimationFrame": {"count": 608, "totalDurationMs": 243.015, "maxDurationMs": 6.91},
+        "FunctionCall": {"count": 615, "totalDurationMs": 14.284, "maxDurationMs": 0.103},
+        "EventDispatch": {"count": 5462, "totalDurationMs": 4.967, "maxDurationMs": 0.149},
+        "UpdateLayoutTree": {"count": 1078, "totalDurationMs": 584.01, "maxDurationMs": 5.758},
+        "Layout": {"count": 1079, "totalDurationMs": 559.158, "maxDurationMs": 2.709},
+        "Paint": {"count": 1915, "totalDurationMs": 271.599, "maxDurationMs": 1.48},
+        "MinorGC": {"count": 5, "totalDurationMs": 15.566, "maxDurationMs": 5.433},
+        "MajorGC": {"count": 3, "totalDurationMs": 17.639, "maxDurationMs": 9.134}
+      },
+      "RunTaskOver50ms": 0
+    },
+    "rawTraceFilesPersisted": false,
+    "rawTraceLimitation": "Integrated browser download event timed out; aggregate CDP event summaries were retained. Event durations can overlap."
+  },
+  "gateAssessment": {
+    "solidFramework": "undecided; selection scaling is promising only on the local Windows browser",
+    "retainedDom": "10,000 posts measured at about 32,500 desktop / 40,000 mobile-viewport DOM nodes; retention or virtualization decision deferred",
+    "scrolling": "not accepted due prepend anchoring jump and Long Tasks observed during traversal",
+    "m1ReadyForM2": false,
+    "applicationSourceModified": false
+  },
+  "screenshots": ["m1-desktop-10000.png", "m1-mobile-10000.png"]
+}
