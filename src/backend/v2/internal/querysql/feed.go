@@ -103,9 +103,12 @@ func appendSearchSQL(b *strings.Builder, args *[]any, query search.Query) {
 AND p.id IN (
     SELECT pt.post_id
     FROM post_tags pt
-    JOIN tags t ON t.id = pt.tag_id
     WHERE pt.removed_at IS NULL
-      AND t.normalized_name = $%d
+      AND pt.tag_id = (
+          SELECT t.id
+          FROM tags t
+          WHERE t.normalized_name = $%d
+      )
 )`, len(*args))
 	}
 	if len(query.ExcludeTags) > 0 {
