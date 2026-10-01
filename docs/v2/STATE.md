@@ -1,7 +1,7 @@
 # Ginbar v2 State / Handoff
 
 Last updated: 2026-10-01
-Phase: M2 core schema/API implemented; real PostgreSQL plans captured; media-path fix validated; second tag-query shape and complete HTTP gate outstanding
+Phase: M2 core schema/API implemented; media and tag query plans validated; search smoke parser bug fixed; complete HTTP gate outstanding
 Integration branch: `v2`
 Active implementation branch: `astra/m2-core-schema-api`
 Completed M1 branch: `astra/m1-scroll-anchor`
@@ -15,8 +15,8 @@ This file is the resume point. Read it before `PLAN.md`. Do not rely on chat his
 
 - `master` remains untouched by rewrite work.
 - M1 is complete and integrated into `v2` at `32e154c4541fcdd2c24c1c05ed278e2dbddef960`.
-- `astra/m2-core-schema-api` remains a clean descendant of that `v2` head; do not merge until the M2 gate passes.
-- M2 contains the clean Go API/domain/search slice, fresh PostgreSQL schema/store/query compiler, real Go 1.25 dependency graph, deterministic load generator, and target-server benchmark harness.
+- `astra/m2-core-schema-api` remains a clean descendant of that `v2` head; do not merge until the M2 HTTP/resource gate passes.
+- M2 contains the clean Go API/domain/search slice, fresh PostgreSQL schema/store/query compiler, real Go 1.25 dependency graph, deterministic load generator, and execution-only target-server benchmark harness.
 
 ## M1 decisions retained
 
@@ -39,7 +39,7 @@ Current choices:
 - real lexer/parser/AST for included/excluded tags and score predicates;
 - immutable numeric relational IDs; usernames never foreign keys.
 
-Endpoints currently implemented:
+Endpoints:
 
 - `GET /healthz`
 - `GET /api/v2/feed?before=<id>&limit=<n>&q=<search>`
@@ -62,101 +62,100 @@ Repeatedly confirmed:
 
 ## Harness history
 
-Earlier execution-only runs fixed three benchmark-only issues:
+Benchmark-only failures already fixed:
 
-1. Docker Go build output was not persisted to the host temporary directory; fixed with a bind-mounted `/out`.
-2. Dockerized `psql -f <host-path>` could not access archived SQL files; fixed by streaming SQL through stdin.
-3. Run 4 found the default API port 18080 already owned by `wise-old-bot-api-1`. The benchmark API failed to bind, but the runner accepted the unrelated listener's `/healthz` response before failing on `/api/v2/feed`.
+1. Docker Go output now persists through bind-mounted `/out`.
+2. Dockerized `psql` receives schema/seed/EXPLAIN SQL through stdin rather than host-only file paths.
+3. Benchmark API auto-selects a free loopback port, rejects an occupied explicit port, and verifies its own PID before accepting health.
+4. `GINBAR_BENCH_PG_CONTAINER` enables low-overhead connection sampling through `docker exec` in the existing disposable database container.
 
-Current harness response to issue 3:
+## Validated query decisions
 
-- auto-selects a free loopback port from 18080-18179 unless explicitly configured;
-- rejects an explicitly occupied port;
-- verifies the spawned API PID is alive before accepting health;
-- records the selected API port;
-- supports `GINBAR_BENCH_PG_CONTAINER` so per-second PostgreSQL connection sampling uses `docker exec` into the existing disposable DB container instead of launching a new client container every second;
-- excludes the sampler's own PostgreSQL session from connection counts.
+### Bounded media lookup — accepted
 
-The exact committed `run_gate.sh` content was syntax-checked locally with `bash -n` before commit; local Git blob hash matched committed blob `ea577bc8d6c64d2aaf9e34a4c93186c7daedc441`.
+Production feed/around queries use a bounded lateral ready-media lookup by `media.post_id`.
 
-## Run 4 PostgreSQL evidence
+Run 4 same-database evidence:
 
-Run 4 tested `0d1887300d697dcbfaa75cd397655b1f137478cc` on the target server.
+- old cursor baseline: 18.447 ms / 1,246 hits / about 50,077 media rows scanned;
+- bounded lookup: 0.357 ms / 186 hits / 61 `media_pkey` lookups;
+- about 51.7x faster in that pair;
+- first-feed difference was only 0.035 ms and both forms were sub-millisecond.
 
-Database preparation:
+Run 5 retained the result: old cursor EXPLAIN was 0.316 ms with 61 bounded media lookups.
 
-- schema: 381 ms;
-- seed: 33,771 ms;
-- 1,000 users;
-- 100,000 posts;
-- 100,000 media rows;
-- 100 tags;
-- 300,000 post_tags.
+Decision: keep the bounded media lookup.
 
-Largest relations:
+### Around-post correctness — accepted
 
-- `post_tags`: 40 MB;
-- `media`: 32 MB;
-- `posts`: 16 MB.
+The reserved derived-table alias `window` was replaced with `combined_posts`. Run 5 around-post reconstruction completed in 0.413 ms for 61 rows with bounded scans on both sides.
 
-All five tuned plans completed:
+### Resolved tag-ID include filter — accepted
 
-- first feed: 0.201 ms, 187 shared hits;
-- old cursor: 0.208 ms, 189 hits;
-- required tag + score: 71.329 ms, 158,943 hits;
-- required + excluded tag + score: 69.353 ms, 159,675 hits;
-- around post 50000: 0.256 ms, 189 hits.
+The first tag rewrite did not change PostgreSQL's plan. The current shape first resolves `tags.normalized_name` to immutable `tags.id`, then filters `post_tags.tag_id` with `removed_at IS NULL`.
 
-Same-database baseline/tuned evidence for the bounded media lookup:
+Run 5 tested `a3ea24b28591f14219ecbc0aa812e468b831dba3` and proved the existing partial index is sufficient; no new index is currently justified.
 
-- old cursor: 18.447 ms / 1,246 hits -> 0.357 ms / 186 hits;
-- about 51.7x faster in that EXPLAIN pair;
-- old plan scanned about 50,077 media rows; tuned plan performed 61 `media_pkey` lookups;
-- first-page pair changed 0.286 -> 0.321 ms, a 0.035 ms increase; both remain sub-millisecond.
+Current plans:
 
-Decision: keep the bounded per-post media lookup. It removes substantial cursor work with negligible measured first-page cost.
+- required tag + score: 4.390 ms, 1,825 shared hits;
+- required + excluded tag + score: 2.905 ms, 2,557 shared hits;
+- both inclusion paths use `post_tags_tag_post_active_idx`;
+- included assignment scan is 1,587 rows instead of about 158,680;
+- excluded-tag work remains bounded per candidate post.
 
-Around-post correctness is also validated: the reserved derived-table alias was fixed and the two-sided query completed in 0.256 ms.
+Same-run baseline -> tuned:
 
-## Tag-query evidence and current response
+- required tag + score: 71.240 -> 1.563 ms, about 45.6x faster;
+- required + excluded tag + score: 70.068 -> 1.899 ms, about 36.9x faster;
+- old cursor: 9.568 -> 0.156 ms, about 61.3x faster;
+- first feed: 0.174 -> 0.148 ms.
 
-Run 4 rejected the first tag-led rewrite as ineffective.
+Decision: keep the resolved tag-ID shape and existing indexes. Do not add another search index without new evidence.
 
-Both required-tag plans still scanned about 158,680 `post_tags` rows for 61 results. The existing partial index:
+## Run 5 HTTP smoke failure and fix
 
-`post_tags_tag_post_active_idx (tag_id, post_id DESC) WHERE removed_at IS NULL`
+Run 5 successfully avoided occupied port 18080 and selected 18081. `pg_sample_mode=container` was correctly recorded.
 
-showed zero scans in the pre-HTTP index statistics; PostgreSQL instead scanned `post_tags_pkey` in post-ID order and applied the tag join afterward.
+Health and unfiltered feed smoke requests passed. The exact search smoke:
 
-No new index is added yet.
+`q=tag-42 score:>=100`
 
-Current query response:
+returned HTTP 400 before the load matrix.
 
-- resolve each included normalized tag name to its unique numeric `tags.id` in a scalar subquery first;
-- filter `post_tags.tag_id` directly with that resolved ID;
-- retain `removed_at IS NULL`, making the predicate compatible with the existing partial tag/post index;
-- keep the already-cheap excluded-tag per-post check unchanged.
+Root cause is in the search lexer, not PostgreSQL: unquoted word scanning treated every internal `-` as the start of exclusion syntax, so `tag-42` was tokenized incorrectly. The lexer now treats `-` as structural when `next()` begins on it (`-tag` exclusion or negative score), while hyphens encountered inside an unquoted word remain part of that tag.
 
-The exact changed `querysql/feed.go` blob passed an isolated local Go test; local Git blob hash matched committed blob `6b0fc5d301006297d682e05d63d02bde72006d27`.
+Added regressions:
 
-`bench/explain.sql` and `bench/explain_compare.sql` mirror the new production shape. The next server run must confirm whether PostgreSQL actually uses `post_tags_tag_post_active_idx` and collapses the prior ~158k-row scan before any schema/index change is considered.
+- parser accepts `tag-42 -other-tag score:>=100`;
+- existing `-anime` exclusion remains valid;
+- existing `score:<-10` remains valid;
+- HTTP handler test covers the exact failed benchmark URL and verifies parsed tag `tag-42` + score 100.
 
-## HTTP gate status
+Local isolated checks after the fix:
 
-No valid HTTP matrix exists yet. Run 4 stopped at smoke testing because of the unrelated listener on port 18080; no API latency/resource conclusion should be drawn from that run.
+- search parser tests pass under local Go 1.23.2;
+- isolated HTTP handler test for the exact smoke URL returns 200 and parses the expected search AST.
 
-Still required on the current head:
+Real Go 1.25 + PostgreSQL rerun of the current head is still required before the M2 gate can close.
 
-- real Go 1.25 tests/builds;
-- five current tuned plans;
-- same-run baseline/tuned plan comparison;
-- complete HTTP matrix at concurrency 1 / 4 / 8 / 16 / 32;
+## M2 gate status
+
+M2 is not ready to merge into `v2` yet.
+
+Query-plan work is now satisfactory on the 100k deterministic dataset. The remaining gate is API/load behavior on the target server:
+
+- real Go 1.25 tests/build on the current search-fix head;
+- successful health/feed/search/around smoke checks;
+- complete 5x5 HTTP matrix at concurrency 1 / 4 / 8 / 16 / 32;
 - API CPU/RSS and server load;
 - PostgreSQL total/active connection behavior;
 - pool-size decision only if measured saturation justifies it.
+
+Pool 16 must not be tested unless p95 degrades at higher concurrency, active connections repeatedly reach 8, and CPU still has headroom.
 
 Quiet-host Wallium comparison remains optional and should be skipped unless stopping/restoring only backend/worker is clearly safe.
 
 ## Single best next task
 
-Use the execution-only local agent to run `docs/v2/M2_RUN.md` from the current exact `origin/astra/m2-core-schema-api` head. Pass `GINBAR_BENCH_PG_CONTAINER` as documented. Return the five current plans, `explain-compare.txt`, complete 5x5 HTTP matrix, resource/connection samples, and cleanup state. Do not modify code or indexes on the server. Use that evidence here to accept/reject the tag-ID query shape and decide whether M2 needs an index/schema change before integration.
+Use the execution-only local agent to rerun `docs/v2/M2_RUN.md` from the current exact `origin/astra/m2-core-schema-api` head. Pass `GINBAR_BENCH_PG_CONTAINER`. Return successful smoke results, all five plans, complete 5x5 HTTP matrix, resource/connection samples, and cleanup state. Do not modify code or indexes on the server. If the full gate passes, use the measurements here to make the pool decision and determine whether M2 can integrate into `v2`.
