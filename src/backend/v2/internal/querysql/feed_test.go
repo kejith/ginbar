@@ -46,21 +46,33 @@ func TestBuildFeedIsCursorBasedFilteredAndParameterized(t *testing.T) {
 	}
 }
 
-func TestBuildAroundUsesBoundedSides(t *testing.T) {
+func TestBuildAroundKeepsSelectedPostOutsideContextFilters(t *testing.T) {
 	sql, args := BuildAround(feed.AroundQuery{PostID: 5000, Radius: 30, Filters: []model.ContentFilter{model.FilterSFW}})
-	if !strings.Contains(sql, "p.id > $1") || !strings.Contains(sql, "p.id <= $1") {
-		t.Fatalf("missing around-post bounds: %s", sql)
+	if !strings.Contains(sql, "p.id > $1") || !strings.Contains(sql, "p.id < $1") || strings.Contains(sql, "p.id <= $1") {
+		t.Fatalf("missing strict around-post bounds: %s", sql)
 	}
-	if !strings.Contains(sql, "LIMIT $2") || !strings.Contains(sql, "LIMIT $3") {
-		t.Fatalf("missing bounded side limits: %s", sql)
+	if strings.Count(sql, "LIMIT $2") != 2 {
+		t.Fatalf("around query should bound both context sides by radius: %s", sql)
+	}
+	selectedStart := strings.Index(sql, ", selected AS (")
+	olderStart := strings.Index(sql, ", older AS (")
+	if selectedStart < 0 || olderStart <= selectedStart {
+		t.Fatalf("missing selected-post branch: %s", sql)
+	}
+	selectedSQL := sql[selectedStart:olderStart]
+	if !strings.Contains(selectedSQL, "p.id = $1") {
+		t.Fatalf("selected branch does not target the canonical post: %s", selectedSQL)
+	}
+	if strings.Contains(selectedSQL, "AND p.content_filter IN (") {
+		t.Fatalf("selected post must not be hidden by surrounding-feed filters: %s", selectedSQL)
 	}
 	if strings.Contains(sql, ") window") || !strings.Contains(sql, ") combined_posts") {
 		t.Fatalf("invalid around-post derived-table alias: %s", sql)
 	}
-	if strings.Count(sql, "JOIN LATERAL") != 2 {
-		t.Fatalf("around query should bound media lookups on both sides: %s", sql)
+	if strings.Count(sql, "JOIN LATERAL") != 3 {
+		t.Fatalf("around query should bound media lookups for newer, selected, and older branches: %s", sql)
 	}
-	if got, want := len(args), 4; got != want {
+	if got, want := len(args), 3; got != want {
 		t.Fatalf("args=%d want %d (%#v)", got, want, args)
 	}
 }
