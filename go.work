@@ -1,3 +1,3 @@
-go 1.23.11
+go 1.25.0
 
-use ./src/backend
+use ./src/backend/v2
