@@ -262,13 +262,17 @@ fn mutations_recheck_expiry_after_row_lock_wait() {
         return;
     };
 
-    let complete_job = db.insert_job(3);
+    let job_id = db.insert_job(3);
+
     let mut complete_client = db.connect();
     let complete_lease = claimed(
         JobStore::new(&mut complete_client)
             .claim_one("complete-owner", lease_ms(500))
             .expect("claim completion test job"),
     );
+    assert_eq!(complete_lease.id, job_id);
+    assert_eq!(complete_lease.attempt, 1);
+    assert_eq!(complete_lease.lease_generation, 1);
     let complete_pid: i32 = complete_client
         .query_one("SELECT pg_backend_pid()", &[])
         .expect("read completion backend pid")
@@ -277,7 +281,7 @@ fn mutations_recheck_expiry_after_row_lock_wait() {
     let mut tx = locker.transaction().expect("start completion lock");
     tx.query_one(
         "SELECT id FROM media_jobs WHERE id = $1 FOR UPDATE",
-        &[&complete_job],
+        &[&job_id],
     )
     .expect("lock completion row");
     let complete_handle = thread::spawn(move || {
@@ -285,17 +289,19 @@ fn mutations_recheck_expiry_after_row_lock_wait() {
             .complete(&complete_lease, "complete-owner")
             .expect("completion after lock wait")
     });
-    wait_for_blocked_backend_then_expiry(&mut db.owner, complete_pid, complete_job);
+    wait_for_blocked_backend_then_expiry(&mut db.owner, complete_pid, job_id);
     tx.rollback().expect("release completion lock");
     assert!(!complete_handle.join().expect("join completion thread"));
 
-    let renew_job = db.insert_job(3);
     let mut renew_client = db.connect();
     let renew_lease = claimed(
         JobStore::new(&mut renew_client)
             .claim_one("renew-owner", lease_ms(500))
-            .expect("claim renewal test job"),
+            .expect("reclaim renewal test job"),
     );
+    assert_eq!(renew_lease.id, job_id);
+    assert_eq!(renew_lease.attempt, 2);
+    assert_eq!(renew_lease.lease_generation, 2);
     let renew_pid: i32 = renew_client
         .query_one("SELECT pg_backend_pid()", &[])
         .expect("read renewal backend pid")
@@ -304,7 +310,7 @@ fn mutations_recheck_expiry_after_row_lock_wait() {
     let mut tx = locker.transaction().expect("start renewal lock");
     tx.query_one(
         "SELECT id FROM media_jobs WHERE id = $1 FOR UPDATE",
-        &[&renew_job],
+        &[&job_id],
     )
     .expect("lock renewal row");
     let renew_handle = thread::spawn(move || {
@@ -312,17 +318,19 @@ fn mutations_recheck_expiry_after_row_lock_wait() {
             .renew_lease(&renew_lease, "renew-owner", lease_ms(1_000))
             .expect("renewal after lock wait")
     });
-    wait_for_blocked_backend_then_expiry(&mut db.owner, renew_pid, renew_job);
+    wait_for_blocked_backend_then_expiry(&mut db.owner, renew_pid, job_id);
     tx.rollback().expect("release renewal lock");
     assert!(!renew_handle.join().expect("join renewal thread"));
 
-    let fail_job = db.insert_job(3);
     let mut fail_client = db.connect();
     let fail_lease = claimed(
         JobStore::new(&mut fail_client)
             .claim_one("fail-owner", lease_ms(500))
-            .expect("claim failure test job"),
+            .expect("reclaim failure test job"),
     );
+    assert_eq!(fail_lease.id, job_id);
+    assert_eq!(fail_lease.attempt, 3);
+    assert_eq!(fail_lease.lease_generation, 3);
     let fail_pid: i32 = fail_client
         .query_one("SELECT pg_backend_pid()", &[])
         .expect("read failure backend pid")
@@ -331,7 +339,7 @@ fn mutations_recheck_expiry_after_row_lock_wait() {
     let mut tx = locker.transaction().expect("start failure lock");
     tx.query_one(
         "SELECT id FROM media_jobs WHERE id = $1 FOR UPDATE",
-        &[&fail_job],
+        &[&job_id],
     )
     .expect("lock failure row");
     let fail_handle = thread::spawn(move || {
@@ -345,7 +353,7 @@ fn mutations_recheck_expiry_after_row_lock_wait() {
             )
             .expect("failure transition after lock wait")
     });
-    wait_for_blocked_backend_then_expiry(&mut db.owner, fail_pid, fail_job);
+    wait_for_blocked_backend_then_expiry(&mut db.owner, fail_pid, job_id);
     tx.rollback().expect("release failure lock");
     assert_eq!(
         fail_handle.join().expect("join failure thread"),
