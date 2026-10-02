@@ -2,7 +2,6 @@ use ginbar_worker_v2::config::Config;
 use ginbar_worker_v2::jobs::{ClaimOutcome, JobStore};
 use postgres::{Client, NoTls};
 use std::process::ExitCode;
-use std::time::Duration;
 
 fn main() -> ExitCode {
     match run() {
@@ -31,9 +30,8 @@ fn run() -> Result<(), String> {
     let config = Config::from_env()?;
     let mut client = Client::connect(&config.database_url, NoTls)
         .map_err(|error| format!("connect PostgreSQL: {error}"))?;
-    let lease_for = Duration::from_millis(config.lease_ms.get());
     let outcome = JobStore::new(&mut client)
-        .claim_one(&config.worker_id, lease_for)
+        .claim_one(&config.worker_id, config.lease_ms)
         .map_err(|error| format!("claim media job: {error}"))?;
 
     match outcome {
