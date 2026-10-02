@@ -1,11 +1,9 @@
 # Ginbar v2 State / Handoff
 
 Last updated: 2026-10-02
-Phase: M3 durable media-job boundary IMPLEMENTED ON BRANCH; validation gate pending
+Phase: M3 durable media-job boundary FIXED AFTER FAILED GATE; revalidation pending
 Integration branch: `v2`
 Active M3 branch: `astra/m3-media-job-boundary`
-Completed M2 branch: `astra/m2-core-schema-api`
-Completed M1 branch: `astra/m1-scroll-anchor`
 Legacy branch: `master` (read-only for rewrite work)
 
 ## Read this first
@@ -15,182 +13,116 @@ This file is the resume point. Read it before `PLAN.md`. Do not rely on chat his
 ## Branch status
 
 - `master` remains untouched by rewrite work.
-- `v2` remains at `c1c5f095d4a8cc342809381ec171df7ee99cb02d` at the start of M3 work.
-- M1 completed at `32e154c4541fcdd2c24c1c05ed278e2dbddef960`.
-- M2 passed its real Go/PostgreSQL/query/load/visibility gates and was fast-forwarded into `v2` at `ffbf529d88686aa123890893386aaf37dc1b3bb2` with no merge commit; follow-up state documentation brought `v2` to `c1c5f095d4a8cc342809381ec171df7ee99cb02d`.
-- M3 durable media-job boundary implementation is on `astra/m3-media-job-boundary` at `b33d9eaba864809afd250c55ac5d335a133cef76` before this state-file update.
-- Backend v2 lives under `src/backend/v2`; legacy Wallium backend is reference-only.
-- Worker v2 work lives under `src/worker/v2`; legacy `src/worker` code is reference-only unless explicitly reviewed for reuse.
-- `.local-agent-results/` is ignored by Git for local-agent evidence ZIPs.
+- `v2` remains at `c1c5f095d4a8cc342809381ec171df7ee99cb02d`.
+- M1 board benchmark is complete.
+- M2 fresh schema + core Go API is complete and integrated.
+- M3 durable media-job boundary was first gated at `c015fec556ed21b588d05c6c8371592addda7a49`; that gate failed on a lease-expiry lock-wait race plus fmt/Clippy issues.
+- Corrective implementation before this state update is `7483eec899f49531ed7c42d8dcd75f98419bc27a` on `astra/m3-media-job-boundary`.
+- Backend v2 lives under `src/backend/v2`; legacy backend is reference-only.
+- Worker v2 lives under `src/worker/v2`; legacy `src/worker` is reference-only unless explicitly reviewed for reuse.
+- `.local-agent-results/` is intended for local-agent evidence ZIPs and must remain ignored before future handoffs.
 
-## M2 architecture retained
+## Retained M2 architecture and decisions
 
-- Go 1.25, pgx/v5 5.11.0, standard `net/http`;
+Keep these unless new evidence contradicts them:
+
+- Go 1.25, pgx/v5, standard `net/http`;
 - PostgreSQL authoritative for app data and durable job state;
 - no Redis dependency without measured need;
 - PostgreSQL pool cap 8;
 - request/DB deadline 3 seconds;
-- cursor pagination by post ID, never OFFSET;
+- post-ID cursor pagination, never OFFSET;
+- bounded media lookup;
+- resolved immutable tag-ID search using existing indexes;
 - real search lexer/parser/AST;
 - immutable numeric relational IDs; usernames never foreign keys;
-- content filters are allowed-visibility constraints, not merely search context.
+- content visibility is an allowed-visibility constraint, not merely search context.
 
-Endpoints:
+Validated M2 target-host evidence included all 25 HTTP benchmark cells with 2,000 successes / zero errors per cell, peak API CPU about 51%, peak RSS about 20 MiB, and PostgreSQL reaching 8 active connections in only 1/52 samples. Pool 8 remains sufficient; do not test/increase to 16 without new saturation evidence.
 
-- `GET /healthz`
-- `GET /api/v2/feed?before=<id>&limit=<n>&q=<search>`
-- `GET /api/v2/posts/<id>/around?radius=<n>&q=<search>`
+Around/direct-link reconstruction remains three bounded branches: newer context with visibility + search, exact selected post with visibility/release/media checks but ignoring search predicates, and older context with visibility + search. Radius 30 returns at most 61 posts. Final visibility regression passed, including SFW canonical selection, search-independent selected-post retention, default NSFW hiding, bounded media lookups, and about 0.465 ms around-query execution.
 
-## Validated query decisions
+## M3 durable media-job boundary
 
-### Bounded media lookup — keep
+The first M3 slice establishes job ownership/recovery before codecs or media processing.
 
-Old cursor originally scanned about 50k media rows. Tuned shape performs one `media_pkey` lookup per returned candidate.
+Architecture retained:
 
-Run 5 same-run old cursor: 9.568 -> 0.156 ms. Run 7 old cursor remained 0.196 ms.
+- PostgreSQL is the only durable job authority;
+- existing `media_jobs` is extended rather than replaced;
+- `lease_generation` is the fencing token and increments on every successful claim/reclaim;
+- claim/reclaim is one atomic statement with `FOR UPDATE SKIP LOCKED`, at most one job, and short transaction scope;
+- expired jobs are reclaimed through the claim path;
+- final-attempt crashes terminalize on the next claim pass rather than creating attempt `max_attempts + 1`;
+- retryable failures return to pending with delayed `available_at`; non-retryable or exhausted failures are terminal;
+- non-running jobs clear lease ownership fields;
+- processing is at-least-once: future durable media side effects must use deterministic keys/upserts or equivalent atomic publication;
+- initial worker concurrency is one job at a time;
+- no production polling loop and no Redis wakeup dependency yet.
 
-### Resolved tag-ID include filter — keep
+Claim ordering remains readiness timestamp first, then priority and ID. `media_jobs_runnable_idx` matches that order. Priority is a tie-breaker among similarly ready work rather than strict global preemption.
 
-Resolve normalized tag to immutable `tags.id`, then constrain active `post_tags.tag_id`.
+## Initial M3 gate — FAILED, evidence retained
 
-Existing index:
+Raw evidence ZIP: `m3-media-job-boundary-20261002T222824Z.zip`.
 
-`post_tags_tag_post_active_idx (tag_id, post_id DESC) WHERE removed_at IS NULL`
+Exact tested SHA: `c015fec556ed21b588d05c6c8371592addda7a49`.
+Target environment: Go 1.25.14, Rust 1.99.0, PostgreSQL 17.11, Docker 28.5.1 on the target host.
 
-Run 5 same-run:
+Passed:
 
-- tag + score: 71.240 -> 1.563 ms;
-- tag + excluded + score: 70.068 -> 1.899 ms;
-- included assignment scan: about 158,680 -> 1,587 rows.
+- exact SHA/base and clean-worktree checks;
+- Go `go test ./...`;
+- Rust `cargo check --all-targets` and unit tests;
+- committed PostgreSQL integration tests;
+- supplemental SKIP LOCKED, single-owner, crash/reclaim, retry, max-attempt, stale-generation, wrong-owner/generation, renewal/completion, and non-retryable-failure checks;
+- `claim-once` real-expiry reclaim: same job moved from worker A attempt/generation 1/1 to worker B 2/2;
+- mixed 100k-job claim plan used `media_jobs_runnable_idx`, selected one candidate, and executed in 0.564 ms;
+- fresh 100k-job idle lookup: 3 shared hits, 0.222 ms;
+- target-host contention: c1 = 1,000/1,000, zero errors, 2.549 ms average, 392.30 TPS; c4 = 4,000/4,000, zero errors, 3.119 ms average, 1282.66 TPS;
+- cleanup/restoration and raw-evidence packaging.
 
-Run 7 retained the intended plans. No additional search index justified.
+Failed / important findings:
 
-### Hyphenated tags — fixed
+- renew/complete/fail used `lease_expires_at > now()`; PostgreSQL `now()` is fixed at transaction start, so a mutation could start before expiry, block on a row lock past expiry, and still succeed;
+- renewal reproduced success with an already-expired resulting deadline after the lock wait;
+- public `JobStore` lease durations accepted zero/sub-millisecond `Duration` values that truncated to zero and consumed an attempt/generation with an immediately expired lease;
+- `cargo fmt --check` failed on formatting differences;
+- Clippy `-D warnings` failed on unused `STATE_SUCCEEDED`;
+- immediately after mass queue churn, one idle claim lookup touched 51,562 shared buffers and took 16.416 ms; the immediate repeat was 3 hits / 0.224 ms and a fresh idle DB was 3 hits / 0.222 ms. Treat this as MVCC/index-cleanup sensitivity evidence, not as justification for a new index/query or Redis/polling design.
 
-Lexer accepts `tag-42` while retaining `-tag` exclusion and negative score values. Real Go 1.25 tests and target-server search smoke pass.
+## Corrective implementation
 
-## Around/direct-link semantics
+Corrective code before this state update: `7483eec899f49531ed7c42d8dcd75f98419bc27a` plus preceding call-site commit `5b4aab4e14253a8a06324f8ec2b6c1e9ce8d1352`.
 
-Around reconstruction has three bounded branches:
+Changes:
 
-1. newer context: allowed visibility + search, `id > selected`, limit radius;
-2. selected: allowed visibility + release/deletion/media checks, ignores search predicates;
-3. older context: allowed visibility + search, `id < selected`, limit radius.
+- renew/complete/fail now first acquire the exact owned row via a materialized `SELECT ... FOR UPDATE` CTE, then evaluate expiry with `clock_timestamp()`; a row-lock wait crossing expiry must therefore reject the transition;
+- claim timestamps and lease deadline use `clock_timestamp()` after the SKIP LOCKED candidate is acquired; the readiness predicate/order remains unchanged and indexable;
+- `JobStore::claim_one` and `renew_lease` now accept `NonZeroU64` lease milliseconds, making zero/sub-millisecond leases unrepresentable;
+- integration regression coverage deliberately blocks complete/renew/fail while each lease is still live, waits for actual expiry, releases the row lock, and requires rejection;
+- existing tests use the positive-millisecond lease API;
+- formatting from the failed gate was normalized;
+- `STATE_SUCCEEDED` is test-only to avoid the dead-code Clippy failure;
+- worker README documents post-lock expiry semantics and the positive-millisecond lease API.
 
-At radius 30 the result is at most 61 posts.
+Decision: keep the readiness-first claim query/index and no Redis dependency. Normal runnable/fresh-idle behavior is bounded and index-backed; the one churn-sensitive lookup should inform future polling/observability design, but no polling loop exists yet.
 
-This keeps an allowed canonical post visible regardless of surrounding search state without bypassing content visibility.
+## Validation status
 
-## Run 7 full shared-host gate — passed
+The corrective code has not been compiled or run in this ChatGPT runtime because Rust/PostgreSQL toolchains are unavailable here. Do not fast-forward into `v2` until the corrected exact branch SHA passes:
 
-Tested `1b74ae6e271c544847e7bbbc9e23c8a136007298` on Ubuntu 24.04 / i7-7700 4C/8T / 62 GiB RAM with Wallium running, Docker Go 1.25.14, PostgreSQL 17.11, and a fresh deterministic 100k-post DB.
-
-Validation:
-
-- `go mod tidy`: pass;
-- `go test ./...`: pass;
-- committed module files matched tidy output;
-- all five SQL plans bounded;
-- 25/25 HTTP cells at concurrency 1/4/8/16/32: 2,000 successes, zero errors;
-- peak API CPU 51%, RSS 20,372 KiB;
-- PostgreSQL reached 8 active connections in only 1/52 samples.
-
-Decision: pool 8 is sufficient. Do not test/increase to 16 without new saturation evidence.
-
-## Final visibility gate — passed
-
-Tested final M2 code at `d9fafdaabff39bbb30f598b8f719e49be474666a` using Docker Go 1.25.14 and PostgreSQL 17.11.
-
-Validation:
-
-- full Go test suite passed;
-- generated module files matched committed files;
-- schema 138 ms; deterministic seed 32,491 ms;
-- SFW post 49999: HTTP 200, selected exactly once, 61 SFW posts total;
-- `49999?q=tag-42`: selected remains present exactly once while search shapes context;
-- NSFW post 50000 under default SFW visibility: HTTP 404 `post_not_found`.
-
-Around EXPLAIN:
-
-- planning 1.981 ms; execution 0.465 ms; 195 shared hits;
-- strict `id > 49999`, exact `id = 49999`, strict `id < 49999`;
-- 30 + 1 + 30 bounded rows;
-- all media access uses bounded `media_pkey` lookup;
-- no substantial unexpected scan.
-
-Around-only HTTP regression, 2,000 successes / zero errors per cell:
-
-- c1 p95 2.277 ms / 557.8 rps;
-- c4 p95 2.628 ms / 1726.8 rps;
-- c8 p95 4.871 ms / 2448.5 rps;
-- c16 p95 8.443 ms / 2527.0 rps;
-- c32 p95 13.712 ms / 2718.6 rps.
-
-Versus Run 7, p95 changed -0.022 to +0.920 ms and throughput -2.4% to -8.2%, with zero failed requests and no severe monotonic regression. Peak API CPU 34.9%, RSS 19,388 KiB, PG active connections 7.
-
-Decision: visibility correction accepted; no additional M2 tuning justified.
-
-## M2 gate decision
-
-M2 PASSES AND IS INTEGRATED.
-
-Keep:
-
-- pool cap 8;
-- bounded media lookup;
-- resolved tag-ID search shape;
-- current indexes;
-- no Redis dependency.
-
-No further M2 benchmark is justified by current evidence.
-
-## M3 durable media-job boundary — implementation pending validation
-
-Implementation commit before this state update: `b33d9eaba864809afd250c55ac5d335a133cef76` on `astra/m3-media-job-boundary`.
-
-Implemented:
-
-- `002_media_job_leases.sql` extends existing `media_jobs` rather than replacing it;
-- explicit `lease_generation` fencing token increments on every successful claim/reclaim;
-- running-state checks require attempt number, worker identity, claim timestamp and lease expiry;
-- non-running states clear ownership/lease fields;
-- one partial expression index, `media_jobs_runnable_idx`, orders runnable rows by readiness timestamp, then priority and ID;
-- claim is one atomic PostgreSQL statement using `FOR UPDATE SKIP LOCKED` and returns at most one job;
-- expired leases are reclaimed by the same bounded claim path;
-- if the final allowed attempt dies, the next claim pass terminalizes it instead of starting attempt `max_attempts + 1`;
-- complete, fail and renew transitions require worker ID + lease generation + unexpired lease, so stale workers cannot commit after reclaim;
-- retryable failure returns to pending with caller-supplied backoff until the attempt limit; non-retryable failure is terminal;
-- `src/worker/v2` is a clean-slate Rust crate using direct PostgreSQL access, not the legacy worker implementation;
-- initial worker concurrency is exactly one claim at a time;
-- no production polling loop exists yet, avoiding idle database polling before processors exist;
-- `claim-once` is an explicit crash/recovery probe that claims one job and intentionally lets its lease expire;
-- README makes the idempotency rule explicit: leases prevent concurrent ownership but cannot make external media side effects exactly-once, so processors must use deterministic/upsert/atomic-publication semantics.
-
-Performance decision:
-
-- runnable ordering is readiness timestamp first, then priority and ID. This aligns the claim predicate/order with one partial expression index and avoids a strict priority-first design where future-scheduled high-priority rows can cause avoidable scans. Priority is a tie-breaker among similarly ready work, not strict global preemption.
-
-Tests added but not yet executed in an authoritative environment:
-
-- `FOR UPDATE SKIP LOCKED` skips a locked candidate;
-- expired lease reclaim increments attempt and fence generation;
-- stale completion is rejected after reclaim;
-- repeated crash at max attempts becomes terminal failure;
-- retryable failure requeues and then terminalizes at max attempts;
-- lease renewal/completion require current ownership;
-- bounded exponential retry-delay unit test.
-
-Validation status:
-
-- branch/base relationship was verified: implementation commit is exactly one commit ahead of `v2` base `c1c5f095d4a8cc342809381ec171df7ee99cb02d`;
-- this ChatGPT runtime has Go 1.23.2 but no `rustc`, `cargo`, or `psql`, and cannot reach GitHub from the shell;
-- therefore Rust compile/format/lint, real PostgreSQL integration tests, claim/reclaim crash tests, and `EXPLAIN (ANALYZE, BUFFERS)` are still required;
-- do not integrate this M3 slice into `v2` until that gate passes.
+- Go tests;
+- Rust fmt/check/clippy/unit tests;
+- PostgreSQL integration tests including the new row-lock-crosses-expiry regression;
+- crash/reclaim probes and existing fencing/retry semantics;
+- the same 100k-job runnable/fresh-idle plans;
+- c1/c4 contention comparison against the recorded baseline.
 
 ## Local-agent evidence workflow
 
-Before every future local-agent handoff, ensure `.local-agent-results/` remains gitignored. Require one ZIP containing exact SHA/status, commands, stdout/stderr, logs, JSON/TSV/CSV, plans, benchmarks, environment/versions, errors, cleanup/restoration evidence, and `findings.md`. If execution is remote, the agent must download/copy the ZIP into `.local-agent-results/` and report the exact local path. The user should upload the ZIP here with: `Analyze this results ZIP, update project state, decide what the evidence means, and plan/implement the next step.`
+Before every future local-agent handoff, ensure `.local-agent-results/` is ignored. Require one ZIP with exact SHA/status, commands, stdout/stderr, logs, JSON/TSV/CSV, query plans, benchmark results, environment/versions, failures, cleanup/restoration evidence, and `findings.md`. Remote runs must copy the final ZIP into `.local-agent-results/` and report the exact local path. Preserve raw remote evidence until the user confirms it is no longer needed.
 
 ## Single best next task
 
-Run the execution-only M3 durable-job validation gate against the exact branch SHA after this state-file commit: Go tests, Rust fmt/check/clippy/tests, disposable PostgreSQL 17 state-machine/crash-reclaim tests, and `EXPLAIN (ANALYZE, BUFFERS)` plus a small claim-contention benchmark. Return one raw-evidence ZIP; analyze it here and fix the branch if any gate fails before considering fast-forward integration into `v2`.
+Re-run the M3 execution-only gate against the exact branch SHA after this state-file commit, concentrating on the corrected lock-wait expiry regression and Rust fmt/Clippy while retaining the existing crash/reclaim/state-machine checks and the same 100k-job claim-plan + c1/c4 contention benchmark for regression comparison. Return one raw-evidence ZIP; if every gate passes, review and fast-forward the branch into `v2`.
