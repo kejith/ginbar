@@ -1,43 +1,68 @@
-# Ginbar v2 media worker boundary
+# Ginbar v2 media worker
 
-This crate is the first M3 slice. It implements durable PostgreSQL media-job ownership and fencing only. It does **not** process images or video yet.
+This crate now defines the M3 durable job and source-processing boundaries. It still does **not** contain production image/video codecs or a production polling loop.
 
-## State contract
+## Durable job ownership
 
-`media_jobs.state` keeps the M2 numeric values:
+`media_jobs` ownership remains PostgreSQL-authoritative. Claim/renew/fail/completion use worker identity plus lease generation fencing and strict post-lock expiry checks. Processing occurs outside database transactions and is at-least-once, so durable external effects must be idempotent.
 
-- `0`: pending;
-- `1`: running with an active lease;
-- `2`: succeeded;
-- `3`: failed.
+## Source consumption contract
 
-Each successful claim increments both `attempts` and `lease_generation`. `claimed_by` is the explicit worker identity. Completion, failure, and lease renewal require the same worker ID, lease generation, and an unexpired lease. A stale worker therefore cannot commit after another worker reclaims the job.
+A claimed kind-0 job first loads its authoritative `media_sources` row through the active lease. The worker then verifies the source before dispatch:
 
-Lifecycle mutations first lock the exact owned row and only then evaluate expiry against `clock_timestamp()`. A mutation that starts before expiry but waits on another row lock until after expiry is rejected.
+- the storage key must exactly match `sources/<2 lowercase hex>/<32 lowercase hex>` and the shard must match the ID prefix;
+- the configured media root and `sources` directory are canonicalized once;
+- on Unix, shard/file opens use directory-relative `openat` with `O_NOFOLLOW`; traversal and symlink components are not followed;
+- source size must match PostgreSQL and remain within the configured bound;
+- SHA-256 is recomputed over the full source;
+- the first 4 KiB gathered during that same pass is used only to route a supported signature family;
+- declared MIME is metadata only and is never trusted for dispatch;
+- the verified file handle is rewound and passed to the processor boundary, avoiding a path reopen.
 
-If the final allowed attempt dies, the next bounded claim pass converts the expired row to terminal failure instead of starting an attempt beyond `max_attempts`.
+Current signature routing recognizes JPEG, PNG, GIF, WebP, AVIF, common MP4-family brands and WebM. Signature routing is not a substitute for structural decode validation: future codecs must reject malformed/truncated media even if the initial signature is recognized.
 
-Lease acquisition and renewal accept a `NonZeroU64` millisecond duration. Zero and sub-millisecond lease durations are therefore not representable at the `JobStore` API boundary.
+Verification classifies failures as retryable I/O, terminal input/integrity errors, or cancellation. The caller supplies the cancellation check; source reads are bounded and cancellation is checked between read operations.
 
-## Retry and idempotency contract
+## Processor and output contract
 
-Retryable failures return the row to `pending` with a caller-supplied `available_at` delay until `max_attempts` is reached. Non-retryable failures become terminal immediately.
+Image and video processors are explicit traits. No codec implementation is selected in this slice.
 
-Processing is deliberately outside the claim transaction. A process can die after a durable side effect but before recording completion, so future processors must be idempotent. Durable media side effects must use deterministic keys/upserts or an equivalent atomic publication rule. A lease prevents concurrent ownership; it does not provide exactly-once external side effects.
+Before processing, the worker derives a recipe-versioned deterministic output plan from the post ID, verified source SHA-256 and media class. Recipe version 1 uses:
 
-No database transaction remains open while media processing runs. Claim/renew/complete/fail are each one short atomic SQL statement. If a process is cancelled after a claim commits but before it observes the result, the lease expires and another worker can reclaim the job.
+`media/v1/<image|video>/<source-hash-shard>/<post-id>-<source-sha256>`
 
-Claims order by runnable timestamp first, then priority and ID. This keeps the hot query aligned with one partial expression index and prevents future-scheduled high-priority rows from causing an unbounded readiness scan. Priority is therefore a tie-breaker among similarly ready work, not a strict global preemption rule.
+The key is extensionless; the authoritative output MIME lives in PostgreSQL. A future recipe/codec change that can alter durable bytes or semantics must bump the recipe version rather than overwrite another recipe under the same identity.
 
-## Concurrency and polling
+A processor must return metadata matching its plan: media class and storage key must match, dimensions and byte size must be positive, duration must be valid, and image duration must be zero.
 
-The initial worker concurrency target is one job at a time. This crate intentionally contains no production polling loop yet, so it cannot create idle polling load before real processing exists. Redis is not required.
+External output publication is intentionally not implemented yet. Future codecs must write the deterministic key atomically and idempotently (for example temp-file + fsync + no-surprise final publication) before calling the database publication boundary. A retry may recreate/verify the same deterministic output; it must not delete a potentially referenced output merely because commit outcome is ambiguous.
 
-The `claim-once` binary command is a boundary/crash-recovery probe: it claims at most one job and exits without completing it, intentionally leaving the lease to expire.
+## Fenced database publication
+
+`ProcessingStore::publish_processed` opens one short PostgreSQL transaction **after** source verification/codec work. It:
+
+1. locks the exact currently owned job and post using worker ID + lease generation;
+2. locks the authoritative source row and requires its SHA-256 to still equal the verified source plan;
+3. rechecks lease expiry with `clock_timestamp()` after lock waits;
+4. writes or verifies the exact ready `media` row, releases the non-deleted post, and completes the same fenced job;
+5. rolls the whole transaction back if output conflicts, source changed, post is unavailable, or lease completion fails/expired.
+
+The media upsert is intentionally strict: an existing post media row is accepted only when all durable output metadata matches exactly. This avoids silently treating nondeterministic bytes/metadata as idempotent success.
+
+No database transaction spans source hashing or media processing.
+
+## Target measurement probe
+
+`tests/source_verify_bench.rs` contains an ignored target-host probe for the safe-open + full SHA-256 + signature-sniff + rewind path over an 8 MiB source. It creates the fixture outside the timed section.
+
+Example on disposable local storage:
 
 ```sh
-DATABASE_URL='postgres://...' \
-GINBAR_WORKER_ID='m3-probe-1' \
-GINBAR_WORKER_LEASE_MS=1000 \
-cargo run --manifest-path src/worker/v2/Cargo.toml -- claim-once
+GINBAR_SOURCE_BENCH_ROOT=/tmp/ginbar-source-bench \
+GINBAR_SOURCE_BENCH_ITERATIONS=10 \
+cargo test --manifest-path src/worker/v2/Cargo.toml \
+  --test source_verify_bench measure_source_open_hash_sniff_8mib \
+  -- --ignored --nocapture
 ```
+
+Target-host measurements are authoritative; do not infer codec throughput from this pre-codec verification probe.
