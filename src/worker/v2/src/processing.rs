@@ -26,31 +26,34 @@ WHERE job.id = $1
   AND job.lease_expires_at > clock_timestamp()
 "#;
 
-const LOCK_JOB_POST_SQL: &str = r#"
+const LOCK_PUBLICATION_INPUTS_SQL: &str = r#"
+WITH owned AS MATERIALIZED (
+    SELECT
+        job.kind,
+        job.lease_expires_at,
+        post.deleted_at IS NULL AS post_available
+    FROM media_jobs AS job
+    JOIN posts AS post ON post.id = job.post_id
+    WHERE job.id = $1
+      AND job.post_id = $2
+      AND job.state = 1
+      AND job.claimed_by = $3
+      AND job.lease_generation = $4
+    FOR UPDATE OF job, post
+), source AS MATERIALIZED (
+    SELECT media_sources.sha256
+    FROM media_sources
+    JOIN owned ON true
+    WHERE media_sources.post_id = $2
+    FOR SHARE OF media_sources
+)
 SELECT
-    job.kind,
-    post.deleted_at IS NULL AS post_available
-FROM media_jobs AS job
-JOIN posts AS post ON post.id = job.post_id
-WHERE job.id = $1
-  AND job.post_id = $2
-  AND job.state = 1
-  AND job.claimed_by = $3
-  AND job.lease_generation = $4
-FOR UPDATE OF job, post
-"#;
-
-const LOCK_SOURCE_SQL: &str = r#"
-SELECT sha256
-FROM media_sources
-WHERE post_id = $1
-FOR SHARE
-"#;
-
-const LEASE_STILL_VALID_SQL: &str = r#"
-SELECT lease_expires_at > clock_timestamp()
-FROM media_jobs
-WHERE id = $1
+    owned.kind,
+    owned.post_available,
+    owned.lease_expires_at > clock_timestamp() AS lease_valid,
+    source.sha256
+FROM owned
+LEFT JOIN source ON true
 "#;
 
 const PUBLISH_SQL: &str = r#"
@@ -340,8 +343,8 @@ impl<'a> ProcessingStore<'a> {
         }
 
         let mut transaction = self.client.transaction()?;
-        let job_post = transaction.query_opt(
-            LOCK_JOB_POST_SQL,
+        let inputs = transaction.query_opt(
+            LOCK_PUBLICATION_INPUTS_SQL,
             &[
                 &lease.id,
                 &lease.post_id,
@@ -349,37 +352,30 @@ impl<'a> ProcessingStore<'a> {
                 &lease.lease_generation,
             ],
         )?;
-        let Some(job_post) = job_post else {
+        let Some(inputs) = inputs else {
             transaction.rollback()?;
             return Ok(PublicationOutcome::LeaseLost);
         };
-        let kind: i16 = job_post.get("kind");
+        let kind: i16 = inputs.get("kind");
         if kind != JOB_KIND_PROCESS_SOURCE {
             transaction.rollback()?;
             return Ok(PublicationOutcome::UnsupportedJobKind { kind });
         }
-        if !job_post.get::<_, bool>("post_available") {
+        if !inputs.get::<_, bool>("post_available") {
             transaction.rollback()?;
             return Ok(PublicationOutcome::PostUnavailable);
         }
-
-        let source = transaction.query_opt(LOCK_SOURCE_SQL, &[&lease.post_id])?;
-        let Some(source) = source else {
+        if !inputs.get::<_, bool>("lease_valid") {
+            transaction.rollback()?;
+            return Ok(PublicationOutcome::LeaseLost);
+        }
+        let Some(source_sha256) = inputs.get::<_, Option<Vec<u8>>>("sha256") else {
             transaction.rollback()?;
             return Ok(PublicationOutcome::SourceUnavailable);
         };
-        let source_sha256: Vec<u8> = source.get("sha256");
         if source_sha256.as_slice() != &plan.source_sha256[..] {
             transaction.rollback()?;
             return Ok(PublicationOutcome::SourceChanged);
-        }
-
-        let lease_valid: bool = transaction
-            .query_one(LEASE_STILL_VALID_SQL, &[&lease.id])?
-            .get(0);
-        if !lease_valid {
-            transaction.rollback()?;
-            return Ok(PublicationOutcome::LeaseLost);
         }
 
         let kind = media.kind as i16;
