@@ -11,7 +11,7 @@ func TestMigrationSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"001_core.sql", "002_media_job_leases.sql"}
+	want := []string{"001_core.sql", "002_media_job_leases.sql", "003_media_sources.sql"}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("got %#v want %#v", names, want)
 	}
@@ -42,6 +42,20 @@ func TestMigrationSet(t *testing.T) {
 	} {
 		if !bytes.Contains(leases, required) {
 			t.Fatalf("lease migration missing %q", required)
+		}
+	}
+
+	sources, err := Migration(names[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range [][]byte{
+		[]byte("CREATE TABLE media_sources"),
+		[]byte("media_sources_origin_check"),
+		[]byte("media_sources_sha256_idx"),
+	} {
+		if !bytes.Contains(sources, required) {
+			t.Fatalf("source migration missing %q", required)
 		}
 	}
 }
