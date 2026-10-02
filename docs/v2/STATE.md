@@ -20,6 +20,7 @@ This file is the resume point. Read it before `PLAN.md`. Do not rely on chat his
 - M3 upload/URL-ingestion + durable-enqueue boundary is complete and integrated.
 - The worker processing-contract slice is isolated on `astra/m3-worker-processing-contract`, branched from exact `v2` tip `a552e96954ec2de42523bb5449a52eff0b216ec8`.
 - This slice changes only `src/worker/v2/**` plus this handoff document.
+- Worker README now matches the source-bound publication contract described below.
 - `.local-agent-results/` remains ignored for evidence ZIPs.
 
 ## Retained architecture and validated decisions
