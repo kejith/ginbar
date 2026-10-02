@@ -13,7 +13,11 @@ This crate is the first M3 slice. It implements durable PostgreSQL media-job own
 
 Each successful claim increments both `attempts` and `lease_generation`. `claimed_by` is the explicit worker identity. Completion, failure, and lease renewal require the same worker ID, lease generation, and an unexpired lease. A stale worker therefore cannot commit after another worker reclaims the job.
 
+Lifecycle mutations first lock the exact owned row and only then evaluate expiry against `clock_timestamp()`. A mutation that starts before expiry but waits on another row lock until after expiry is rejected.
+
 If the final allowed attempt dies, the next bounded claim pass converts the expired row to terminal failure instead of starting an attempt beyond `max_attempts`.
+
+Lease acquisition and renewal accept a `NonZeroU64` millisecond duration. Zero and sub-millisecond lease durations are therefore not representable at the `JobStore` API boundary.
 
 ## Retry and idempotency contract
 

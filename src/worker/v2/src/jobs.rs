@@ -1,8 +1,10 @@
 use postgres::{Client, Error};
+use std::num::NonZeroU64;
 use std::time::Duration;
 
 const STATE_PENDING: i16 = 0;
 const STATE_RUNNING: i16 = 1;
+#[cfg(test)]
 const STATE_SUCCEEDED: i16 = 2;
 const STATE_FAILED: i16 = 3;
 
@@ -31,7 +33,7 @@ WITH candidate AS MATERIALIZED (
         END,
         claimed_at = CASE
             WHEN candidate.state = 1 AND job.attempts >= job.max_attempts THEN NULL
-            ELSE now()
+            ELSE clock_timestamp()
         END,
         claimed_by = CASE
             WHEN candidate.state = 1 AND job.attempts >= job.max_attempts THEN NULL
@@ -39,7 +41,7 @@ WITH candidate AS MATERIALIZED (
         END,
         lease_expires_at = CASE
             WHEN candidate.state = 1 AND job.attempts >= job.max_attempts THEN NULL
-            ELSE now() + ($2::bigint * interval '1 millisecond')
+            ELSE clock_timestamp() + ($2::bigint * interval '1 millisecond')
         END,
         lease_generation = CASE
             WHEN candidate.state = 1 AND job.attempts >= job.max_attempts THEN job.lease_generation
@@ -50,7 +52,7 @@ WITH candidate AS MATERIALIZED (
                 THEN COALESCE(job.last_error, 'lease expired after final attempt')
             ELSE job.last_error
         END,
-        updated_at = now()
+        updated_at = clock_timestamp()
     FROM candidate
     WHERE job.id = candidate.id
     RETURNING
@@ -67,58 +69,79 @@ FROM updated
 "#;
 
 const RENEW_LEASE_SQL: &str = r#"
-UPDATE media_jobs
+WITH owned AS MATERIALIZED (
+    SELECT id, lease_expires_at
+    FROM media_jobs
+    WHERE id = $1
+      AND state = 1
+      AND claimed_by = $2
+      AND lease_generation = $3
+    FOR UPDATE
+)
+UPDATE media_jobs AS job
 SET
-    lease_expires_at = now() + ($4::bigint * interval '1 millisecond'),
-    updated_at = now()
-WHERE id = $1
-  AND state = 1
-  AND claimed_by = $2
-  AND lease_generation = $3
-  AND lease_expires_at > now()
-RETURNING id
+    lease_expires_at = clock_timestamp() + ($4::bigint * interval '1 millisecond'),
+    updated_at = clock_timestamp()
+FROM owned
+WHERE job.id = owned.id
+  AND owned.lease_expires_at > clock_timestamp()
+RETURNING job.id
 "#;
 
 const COMPLETE_SQL: &str = r#"
-UPDATE media_jobs
+WITH owned AS MATERIALIZED (
+    SELECT id, lease_expires_at
+    FROM media_jobs
+    WHERE id = $1
+      AND state = 1
+      AND claimed_by = $2
+      AND lease_generation = $3
+    FOR UPDATE
+)
+UPDATE media_jobs AS job
 SET
     state = 2,
     claimed_at = NULL,
     claimed_by = NULL,
     lease_expires_at = NULL,
     last_error = NULL,
-    updated_at = now()
-WHERE id = $1
-  AND state = 1
-  AND claimed_by = $2
-  AND lease_generation = $3
-  AND lease_expires_at > now()
-RETURNING id
+    updated_at = clock_timestamp()
+FROM owned
+WHERE job.id = owned.id
+  AND owned.lease_expires_at > clock_timestamp()
+RETURNING job.id
 "#;
 
 const FAIL_SQL: &str = r#"
-UPDATE media_jobs
+WITH owned AS MATERIALIZED (
+    SELECT id, lease_expires_at
+    FROM media_jobs
+    WHERE id = $1
+      AND state = 1
+      AND claimed_by = $2
+      AND lease_generation = $3
+    FOR UPDATE
+)
+UPDATE media_jobs AS job
 SET
     state = CASE
-        WHEN NOT $5 OR attempts >= max_attempts THEN 3
+        WHEN NOT $5 OR job.attempts >= job.max_attempts THEN 3
         ELSE 0
     END,
     available_at = CASE
-        WHEN $5 AND attempts < max_attempts
-            THEN now() + ($4::bigint * interval '1 millisecond')
-        ELSE available_at
+        WHEN $5 AND job.attempts < job.max_attempts
+            THEN clock_timestamp() + ($4::bigint * interval '1 millisecond')
+        ELSE job.available_at
     END,
     claimed_at = NULL,
     claimed_by = NULL,
     lease_expires_at = NULL,
     last_error = $6,
-    updated_at = now()
-WHERE id = $1
-  AND state = 1
-  AND claimed_by = $2
-  AND lease_generation = $3
-  AND lease_expires_at > now()
-RETURNING state
+    updated_at = clock_timestamp()
+FROM owned
+WHERE job.id = owned.id
+  AND owned.lease_expires_at > clock_timestamp()
+RETURNING job.state
 "#;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -157,10 +180,12 @@ impl<'a> JobStore<'a> {
     pub fn claim_one(
         &mut self,
         worker_id: &str,
-        lease_for: Duration,
+        lease_ms: NonZeroU64,
     ) -> Result<ClaimOutcome, Error> {
-        let lease_ms = duration_ms_i64(lease_for);
-        let row = self.client.query_opt(CLAIM_ONE_SQL, &[&worker_id, &lease_ms])?;
+        let lease_ms = lease_ms_i64(lease_ms);
+        let row = self
+            .client
+            .query_opt(CLAIM_ONE_SQL, &[&worker_id, &lease_ms])?;
         let Some(row) = row else {
             return Ok(ClaimOutcome::None);
         };
@@ -186,9 +211,9 @@ impl<'a> JobStore<'a> {
         &mut self,
         lease: &JobLease,
         worker_id: &str,
-        lease_for: Duration,
+        lease_ms: NonZeroU64,
     ) -> Result<bool, Error> {
-        let lease_ms = duration_ms_i64(lease_for);
+        let lease_ms = lease_ms_i64(lease_ms);
         Ok(self
             .client
             .query_opt(
@@ -248,6 +273,10 @@ pub fn retry_delay(attempt: i32, base: Duration, max: Duration) -> Duration {
     let max_ms = max.as_millis();
     let delay_ms = base_ms.saturating_mul(multiplier).min(max_ms);
     Duration::from_millis(delay_ms.min(u64::MAX as u128) as u64)
+}
+
+fn lease_ms_i64(lease_ms: NonZeroU64) -> i64 {
+    lease_ms.get().min(i64::MAX as u64) as i64
 }
 
 fn duration_ms_i64(duration: Duration) -> i64 {

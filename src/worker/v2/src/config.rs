@@ -12,8 +12,8 @@ pub struct Config {
 
 impl Config {
     pub fn from_env() -> Result<Self, String> {
-        let database_url = env::var("DATABASE_URL")
-            .map_err(|_| "DATABASE_URL is required".to_owned())?;
+        let database_url =
+            env::var("DATABASE_URL").map_err(|_| "DATABASE_URL is required".to_owned())?;
 
         let worker_id = match env::var("GINBAR_WORKER_ID") {
             Ok(value) if !value.trim().is_empty() => value.trim().to_owned(),
