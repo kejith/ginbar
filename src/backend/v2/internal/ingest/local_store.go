@@ -179,7 +179,7 @@ func (s *LocalStore) newKey() (string, string, error) {
 }
 
 func (s *LocalStore) pathForKey(storageKey string) (string, error) {
-	if storageKey == "" || strings.ContainsRune(storageKey, '\x00') {
+	if !validSourceStorageKey(storageKey) || strings.ContainsRune(storageKey, '\x00') {
 		return "", errors.New("invalid media source storage key")
 	}
 	cleaned := filepath.Clean(filepath.FromSlash(storageKey))
@@ -187,7 +187,7 @@ func (s *LocalStore) pathForKey(storageKey string) (string, error) {
 		return "", errors.New("invalid media source storage key")
 	}
 	sourcePrefix := "sources" + string(os.PathSeparator)
-	if cleaned == "sources" || !strings.HasPrefix(cleaned, sourcePrefix) || filepath.IsAbs(cleaned) {
+	if !strings.HasPrefix(cleaned, sourcePrefix) || filepath.IsAbs(cleaned) {
 		return "", errors.New("invalid media source storage key")
 	}
 	path := filepath.Join(s.root, cleaned)
@@ -196,6 +196,27 @@ func (s *LocalStore) pathForKey(storageKey string) (string, error) {
 		return "", errors.New("invalid media source storage key")
 	}
 	return path, nil
+}
+
+func validSourceStorageKey(storageKey string) bool {
+	parts := strings.Split(storageKey, "/")
+	if len(parts) != 3 || parts[0] != "sources" || len(parts[1]) != 2 || len(parts[2]) != 32 {
+		return false
+	}
+	if parts[1] != parts[2][:2] {
+		return false
+	}
+	return isLowerHex(parts[1]) && isLowerHex(parts[2])
+}
+
+func isLowerHex(value string) bool {
+	for i := range len(value) {
+		char := value[i]
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 type contextReader struct {
