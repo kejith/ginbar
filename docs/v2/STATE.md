@@ -1,9 +1,9 @@
 # Ginbar v2 State / Handoff
 
 Last updated: 2026-10-02
-Phase: M2 full shared-host performance gate passed; targeted around-post visibility regression outstanding
+Phase: M2 COMPLETE; integrate into `v2`, then begin M3 media pipeline
 Integration branch: `v2`
-Active implementation branch: `astra/m2-core-schema-api`
+Completed M2 branch: `astra/m2-core-schema-api`
 Completed M1 branch: `astra/m1-scroll-anchor`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -15,19 +15,22 @@ This file is the resume point. Read it before `PLAN.md`. Do not rely on chat his
 
 - `master` remains untouched by rewrite work.
 - M1 is complete in `v2` at `32e154c4541fcdd2c24c1c05ed278e2dbddef960`.
-- M2 remains a clean descendant of that head and must not merge until the final targeted visibility gate passes.
+- M2 passed its real Go/PostgreSQL/query/load/visibility gates on `astra/m2-core-schema-api`.
+- Fast-forward M2 into `v2`; do not create a merge commit.
 - Backend v2 lives under `src/backend/v2`; legacy Wallium backend is reference-only.
+- `.local-agent-results/` is ignored by Git for local-agent evidence ZIPs.
 
-## M2 architecture
+## M2 architecture retained
 
 - Go 1.25, pgx/v5 5.11.0, standard `net/http`;
 - PostgreSQL authoritative for app data and durable job state;
 - no Redis dependency without measured need;
-- default PostgreSQL pool cap 8;
+- PostgreSQL pool cap 8;
 - request/DB deadline 3 seconds;
 - cursor pagination by post ID, never OFFSET;
 - real search lexer/parser/AST;
-- immutable numeric relational IDs; usernames never foreign keys.
+- immutable numeric relational IDs; usernames never foreign keys;
+- content filters are allowed-visibility constraints, not merely search context.
 
 Endpoints:
 
@@ -61,115 +64,87 @@ Run 7 retained the intended plans. No additional search index justified.
 
 ### Hyphenated tags — fixed
 
-Lexer now accepts `tag-42` while retaining `-tag` exclusion and negative score values. Real Go 1.25 tests and target-server search smoke pass.
+Lexer accepts `tag-42` while retaining `-tag` exclusion and negative score values. Real Go 1.25 tests and target-server search smoke pass.
+
+## Around/direct-link semantics
+
+Around reconstruction has three bounded branches:
+
+1. newer context: allowed visibility + search, `id > selected`, limit radius;
+2. selected: allowed visibility + release/deletion/media checks, ignores search predicates;
+3. older context: allowed visibility + search, `id < selected`, limit radius.
+
+At radius 30 the result is at most 61 posts.
+
+This keeps an allowed canonical post visible regardless of surrounding search state without bypassing content visibility.
 
 ## Run 7 full shared-host gate — passed
 
-Tested revision: `1b74ae6e271c544847e7bbbc9e23c8a136007298`.
-
-Target:
-
-- Ubuntu 24.04;
-- i7-7700, 4C/8T;
-- 62 GiB RAM;
-- Docker Go 1.25.14;
-- disposable PostgreSQL 17.11;
-- Wallium kept running.
+Tested `1b74ae6e271c544847e7bbbc9e23c8a136007298` on Ubuntu 24.04 / i7-7700 4C/8T / 62 GiB RAM with Wallium running, Docker Go 1.25.14, PostgreSQL 17.11, and a fresh deterministic 100k-post DB.
 
 Validation:
 
 - `go mod tidy`: pass;
 - `go test ./...`: pass;
-- committed `go.mod` / `go.sum` byte-identical to tidy output;
-- schema: 495 ms;
-- deterministic seed: 33,562 ms;
-- 100k posts, 100k media, 300k post_tags.
+- committed module files matched tidy output;
+- all five SQL plans bounded;
+- 25/25 HTTP cells at concurrency 1/4/8/16/32: 2,000 successes, zero errors;
+- peak API CPU 51%, RSS 20,372 KiB;
+- PostgreSQL reached 8 active connections in only 1/52 samples.
 
-Plans:
+Decision: pool 8 is sufficient. Do not test/increase to 16 without new saturation evidence.
 
-- first feed: 0.194 ms;
-- old cursor: 0.196 ms;
-- tag + score: 2.952 ms;
-- tag + excluded + score: 1.852 ms;
-- around: 0.355 ms.
+## Final visibility gate — passed
 
-All remained bounded and used intended indexes.
+Tested final M2 code at `d9fafdaabff39bbb30f598b8f719e49be474666a` using Docker Go 1.25.14 and PostgreSQL 17.11.
 
-HTTP matrix: 5 endpoints x concurrency 1/4/8/16/32, 2,000 requests per cell.
+Validation:
 
-- every one of 25 cells: 2,000 successes, zero errors;
-- no timeouts/non-200 benchmark responses;
-- feed p95 at c32: 7.273 ms first page / 7.181 ms old cursor;
-- tag+score p95 c32: 13.020 ms;
-- tag+exclude+score p95 c32: 19.289 ms;
-- around p95 c32: 13.396 ms.
+- full Go test suite passed;
+- generated module files matched committed files;
+- schema 138 ms; deterministic seed 32,491 ms;
+- SFW post 49999: HTTP 200, selected exactly once, 61 SFW posts total;
+- `49999?q=tag-42`: selected remains present exactly once while search shapes context;
+- NSFW post 50000 under default SFW visibility: HTTP 404 `post_not_found`.
 
-Resources:
+Around EXPLAIN:
 
-- peak API CPU: 51%;
-- peak API RSS: 20,372 KiB;
-- load1: 2.52-3.52;
-- max PostgreSQL connections: 8 total / 8 active;
-- 8 active connections occurred in only 1 of 52 samples (1.92%).
+- planning 1.981 ms; execution 0.465 ms; 195 shared hits;
+- strict `id > 49999`, exact `id = 49999`, strict `id < 49999`;
+- 30 + 1 + 30 bounded rows;
+- all media access uses bounded `media_pkey` lookup;
+- no substantial unexpected scan.
 
-Decision: pool 8 is sufficient for the measured shared-host workload. Do not test/increase to 16 without new saturation evidence.
+Around-only HTTP regression, 2,000 successes / zero errors per cell:
 
-## Visibility semantic issue found after Run 7
+- c1 p95 2.277 ms / 557.8 rps;
+- c4 p95 2.628 ms / 1726.8 rps;
+- c8 p95 4.871 ms / 2448.5 rps;
+- c16 p95 8.443 ms / 2527.0 rps;
+- c32 p95 13.712 ms / 2718.6 rps.
 
-`M2.md` defines `feed.Query.Filters` / `AroundQuery.Filters` as allowed content visibility. The unauthenticated skeleton defaults to SFW so non-SFW/secret content is not exposed before authenticated visibility exists.
+Versus Run 7, p95 changed -0.022 to +0.920 ms and throughput -2.4% to -8.2%, with zero failed requests and no severe monotonic regression. Peak API CPU 34.9%, RSS 19,388 KiB, PG active connections 7.
 
-Run 7's around implementation incorrectly let the selected canonical post bypass those filters. This made NSFW seed post 50000 visible by direct link despite default SFW visibility.
+Decision: visibility correction accepted; no additional M2 tuning justified.
 
-Correct semantics:
+## M2 gate decision
 
-- newer/older context branches: allowed visibility + search predicates;
-- selected branch: allowed visibility, but search predicates do not hide the canonical selected post;
-- release/deletion/media-readiness constraints always apply.
+M2 PASSES.
 
-Current `BuildAround` implements that split. `Filters` are now explicitly documented as allowed visibility.
+Keep:
 
-Regression test asserts:
-
-- strict `>` / `<` context bounds;
-- visibility predicate applies to all three branches;
-- search predicates apply only to newer/older;
-- all three media lookups remain bounded;
-- response remains at most 30 + selected + 30.
-
-An isolated local Go 1.23 query-builder test passed after this correction.
-
-## Final targeted gate prepared
-
-Full Run 7 feed/search/pool evidence remains valid; only the corrected around branch needs revalidation.
-
-Prepared artifacts:
-
-- `src/backend/v2/bench/explain_visibility.sql`
-- `src/backend/v2/bench/run_visibility_gate.sh`
-- updated `docs/v2/M2_RUN.md`
-
-The targeted gate:
-
-- uses real Docker Go 1.25;
-- applies fresh schema + seed to disposable PostgreSQL;
-- verifies SFW post 49999 returns 200 and appears exactly once;
-- verifies the selected post remains present even with nonmatching surrounding search state;
-- verifies NSFW post 50000 returns 404 under default SFW visibility;
-- captures corrected around EXPLAIN;
-- benchmarks around post 49999 at concurrency 1/4/8/16/32 with 2,000 requests per cell;
-- records CPU/RSS/PostgreSQL connection samples;
-- never writes the repository.
-
-## M2 integration gate
-
-If the targeted visibility gate passes and around latency shows no material regression from Run 7, M2 is ready to integrate into `v2` with:
-
-- pool cap remaining 8;
-- current media lookup;
-- current tag-ID search shape;
+- pool cap 8;
+- bounded media lookup;
+- resolved tag-ID search shape;
 - current indexes;
-- no Redis addition.
+- no Redis dependency.
+
+No further M2 benchmark is justified by current evidence.
+
+## Local-agent evidence workflow
+
+Before every future local-agent handoff, ensure `.local-agent-results/` remains gitignored. Require one ZIP containing exact SHA/status, commands, stdout/stderr, logs, JSON/TSV/CSV, plans, benchmarks, environment/versions, errors, cleanup/restoration evidence, and `findings.md`. If execution is remote, the agent must download/copy the ZIP into `.local-agent-results/` and report the exact local path. The user should upload the ZIP here with: `Analyze this results ZIP, update project state, decide what the evidence means, and plan/implement the next step.`
 
 ## Single best next task
 
-Give an execution-only local agent the current exact `astra/m2-core-schema-api` head and have it run `docs/v2/M2_RUN.md` / `src/backend/v2/bench/run_visibility_gate.sh` against a fresh disposable PostgreSQL container. Return the smoke assertions, visibility EXPLAIN, five around latency cells, resource samples, clean-worktree state, and cleanup confirmation. Do not let the agent modify code or Git. If it passes, integrate M2 into `v2` here.
+After fast-forwarding M2 into `v2`, create a short-lived M3 branch from current `v2`. Implement the durable media-job execution boundary around the existing `media_jobs` table: transactional claim with `FOR UPDATE SKIP LOCKED`, lease/reclaim/retry/failure completion semantics, cancellation-safe tests, and the minimal Rust worker skeleton claiming one job at a time. Validate crash/reclaim/idempotency behavior before adding image/video processing.
