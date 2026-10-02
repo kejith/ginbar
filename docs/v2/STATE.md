@@ -1,8 +1,9 @@
 # Ginbar v2 State / Handoff
 
 Last updated: 2026-10-03
-Phase: M3 media pipeline integration — ingestion/enqueue boundary PASSED AND INTEGRATED
+Phase: M3 media pipeline integration — worker source/processing contract IMPLEMENTED ON BRANCH; validation pending
 Integration branch: `v2`
+Active M3 branch: `astra/m3-worker-source-contract`
 Legacy branch: `master` (read-only for rewrite work)
 
 ## Read this first
@@ -12,11 +13,15 @@ This file is the resume point. Read it before `PLAN.md`. Do not rely on chat his
 ## Branch status
 
 - `master` remains untouched by rewrite work at `181fa44d79c7b4a1984c1a35795762dd503b3f77`.
+- `v2` remains at `a552e96954ec2de42523bb5449a52eff0b216ec8`.
 - M1 board benchmark is complete.
 - M2 fresh schema + core Go API is complete and integrated.
 - M3 durable PostgreSQL media-job ownership/recovery boundary is complete and integrated.
 - M3 upload/URL-ingestion + durable-enqueue boundary is complete and integrated.
-- `v2` was fast-forwarded from `3769f4144885d951fd1cddba4c7d1b4d162c5324` through the exact validated ingestion SHA `01cd1887fbb42cdcd0f3881dd38395495dc5047b`, then received this state-only integration commit.
+- The worker source/processing contract is isolated on `astra/m3-worker-source-contract`, branched from exact `v2` tip `a552e96954ec2de42523bb5449a52eff0b216ec8`.
+- Implementation commits before this state update:
+  - `febc7b160f7cc905b2c7f2023b7481c6d3b12856` — source verification, processing/output contract, fenced publication tests and measurement probe;
+  - `24c95f6a8d210d9c173a5e2d6152113c3342da4b` — reduce publication preflight from three PostgreSQL queries to one lock/recheck round trip and document source immutability.
 - Backend v2 lives under `src/backend/v2`; legacy backend is reference-only.
 - Worker v2 lives under `src/worker/v2`; legacy `src/worker` is reference-only unless explicitly reviewed for reuse.
 - `.local-agent-results/` is ignored for local-agent evidence ZIPs.
@@ -25,178 +30,197 @@ This file is the resume point. Read it before `PLAN.md`. Do not rely on chat his
 
 Keep unless new evidence contradicts them:
 
-- Go 1.25, pgx/v5, standard `net/http`;
+- Go 1.25 + pgx/v5 for API/workflows; Rust for media work;
 - PostgreSQL authoritative for application/workflow/durable job state;
 - no Redis dependency without measured need;
-- PostgreSQL pool cap 8;
-- request/DB deadline discipline and bounded concurrency;
+- PostgreSQL pool cap 8 on the Go API until measurements justify more;
+- bounded concurrency and explicit deadlines/cancellation;
 - post-ID cursor pagination, never OFFSET;
 - bounded/indexed hot SQL and target-host measurements before accepting performance-sensitive work;
 - immutable numeric relational IDs; usernames never foreign keys;
-- content visibility is an allowed-visibility constraint, not merely search context;
 - local NVMe is the intended media/source store;
-- processing is at-least-once and durable external effects must be idempotent/deterministic.
+- processing is at-least-once; durable external effects must be deterministic/idempotent;
+- media-job ownership remains readiness-first `FOR UPDATE SKIP LOCKED` with worker ID + lease-generation fencing and strict post-lock real-time expiry checks;
+- initial worker execution concurrency remains one job at a time; no production polling loop or Redis wakeup dependency yet.
 
-The integrated media-job boundary retains readiness-first claim ordering, `FOR UPDATE SKIP LOCKED`, lease-generation fencing, post-lock real-time expiry checks, one-job worker concurrency, and no Redis wakeup dependency.
+## Previously accepted M3 ingestion boundary
 
-## M3 ingestion/enqueue boundary — integrated
+The integrated ingestion boundary provides:
 
-### Scope
+- authoritative `media_sources` rows for upload/URL inputs;
+- bounded source staging outside DB transactions;
+- SHA-256 and exact source byte size;
+- strict source-key grammar `sources/<2 lowercase hex>/<32 lowercase hex>`;
+- URL SSRF protection and untrusted declared MIME;
+- one short PostgreSQL transaction/CTE creating unreleased post + source + pending kind-0 job.
 
-This slice establishes source ingestion/storage plus durable enqueue before codecs.
+Accepted target baselines from that slice:
 
-It deliberately does **not** expose an HTTP posting route. Authentication is not implemented in M3 and Ginbar has no anonymous posting; callers must supply a positive authenticated numeric `Actor.UserID`.
+- 8 MiB source stage + SHA-256 + file/directory fsync + publication + removal: **45.1468 ms/op mean, 186.06 MB/s, 67,564.7 B/op, 32 allocs/op** on target-local NVMe;
+- PostgreSQL ingestion write on PostgreSQL 17.11: c1 **0.348 ms / 2,870.87 TPS / 0 errors**, c4 **0.457 ms / 8,761.36 TPS / 0 errors**.
 
-It also does not perform media sniffing, decoding, AVIF/video processing, duplicate policy, release, regeneration, or progress UI.
+The process-crash orphan gap between source-file publication and authoritative ingestion commit remains intentionally unresolved until a production-safe janitor/reconciliation path is designed.
 
-### Source schema
+## M3 worker source/processing contract — implemented on branch
 
-Migration `003_media_sources.sql` adds one authoritative source row per post:
+### Scope and intentional omissions
 
-- `post_id` primary key / FK to `posts`;
-- upload or URL source type;
-- unique relative source `storage_key`;
-- effective source URL for URL imports only;
-- optional original upload name;
-- declared MIME as untrusted metadata;
-- positive byte size;
-- SHA-256;
-- bounded text/origin constraints;
-- non-unique SHA-256 index for future exact-duplicate lookup without aliasing posts.
+This slice connects a claimed kind-0 media job to its authoritative source and defines the execution/publication contract before real codecs.
 
-The existing `media` table remains processed output; source metadata is not forced into final width/height/duration fields before processing.
+It deliberately does **not** add:
 
-### Staging/storage workflow
+- AVIF/image encoding;
+- video transcoding;
+- production output-file writer/publication code;
+- production polling/executor loop;
+- worker concurrency above one;
+- Redis;
+- API/auth changes;
+- schema changes.
 
-`internal/ingest.LocalStore`:
+`src/worker/v2/Cargo.toml` adds only `sha2 = "0.10"` for source integrity verification and `libc = "0.2"` for Unix directory-relative safe opens.
 
-1. streams to `.staging/` outside a DB transaction;
-2. enforces `maxBytes + 1` bounded reads;
-3. hashes SHA-256 while writing;
-4. rejects empty/oversized/cancelled inputs and removes partial temp files;
-5. `fsync`s the staged file and uses mode `0640`;
-6. publishes to a random `sources/<2-lower-hex>/<32-lower-hex>` key with no-overwrite hard-link publication on the same filesystem;
-7. syncs newly created shard-parent metadata and the shard directory.
+### Fenced source lookup
 
-Directories use `0750`. Duplicate byte streams intentionally get distinct keys; exact/perceptual duplicate policy belongs later in processing/release.
+`ProcessingStore::load_source` requires:
 
-Storage-key removal accepts only the exact generated grammar `sources/<2 lowercase hex>/<32 lowercase hex>`, requires the shard to equal the first two ID characters, and retains canonical-path/containment checks as defense in depth.
+- exact job ID and post ID;
+- running job state;
+- current worker ID;
+- current lease generation;
+- unexpired lease via `clock_timestamp()`;
+- job kind 0.
 
-### Service boundary and resource limits
+It loads the authoritative `media_sources` row and validates basic DB metadata/origin consistency before filesystem work. Missing source, unsupported job kind, invalid source metadata, and lost lease are explicit outcomes.
 
-`internal/ingest.Service`:
+### Safe bounded source verification
 
-- validates authenticated actor and content filter before staging;
-- has explicit staging, DB, and cleanup timeouts;
-- bounds concurrent ingestion workflows with a semaphore;
-- performs byte streaming/download outside DB transactions;
-- uses cancellation-independent bounded cleanup after definite repository failure;
-- preserves a staged object on ambiguous DB commit outcome, because deleting it could leave committed PostgreSQL state pointing at missing bytes.
+`SourceVerifier`:
 
-A process crash after source publication but before/while authoritative DB commit can still leave an unreferenced source object. This is safe for referenced data but requires an orphan-reconciliation/janitor path before production ingestion is enabled.
+- canonicalizes the configured media root and requires a real `sources` directory;
+- revalidates the exact integrated source-key grammar and shard/ID relationship;
+- on Unix, holds the canonical `sources` directory FD open and uses `openat` with `O_DIRECTORY`/`O_NOFOLLOW` for the shard plus `O_NOFOLLOW` for the source file, so untrusted path components are never followed as symlinks;
+- requires a regular file;
+- rejects DB byte sizes outside the configured verification bound before reading;
+- checks opened-file length against the authoritative byte size;
+- reads with a bounded 128 KiB buffer and checks caller cancellation between reads;
+- computes full SHA-256 and compares it with `media_sources.sha256`;
+- captures only the first 4 KiB during the same hash pass for type sniffing, avoiding a second source scan;
+- rewinds the same verified open file handle for the processor boundary instead of reopening the path.
 
-### URL import / SSRF boundary
+Errors are classified as retryable I/O, terminal input/integrity/path/type errors, or cancellation.
 
-`HTTPURLFetcher`:
+Published source files are now an explicit **application-immutable** contract. Passing the same open FD from verification to processing avoids a path-reopen race, but an FD is not a filesystem snapshot if another trusted process rewrites that inode. Deployment/maintenance/regeneration code must never mutate a published source in place; replacement must use a new durable object/metadata identity.
 
-- accepts only HTTP/HTTPS;
-- rejects userinfo, fragments, malformed/zero ports, loopback/private/link-local/multicast/unspecified and explicitly blocked special-purpose ranges;
-- disables environment HTTP proxies;
-- resolves destinations itself and dials only validated resolved IPs;
-- revalidates redirects with a bounded redirect count;
-- has explicit connect/TLS/response-header timeouts;
-- requires HTTP 200;
-- rejects oversized declared `Content-Length` early;
-- relies on LocalStore's independent stream bound for the authoritative decompressed/chunked byte cap.
+### Real media-type routing
 
-### PostgreSQL atomic enqueue
+Declared MIME is never used to select a processor.
 
-`postgres.Store.CreateIngestion` uses a short transaction and one data-modifying CTE round trip to atomically create:
+Current signature routing recognizes:
 
-1. an unreleased post (`release_state = 0`);
-2. its `media_sources` row;
-3. one initial pending kind-0 `media_jobs` row.
+- JPEG;
+- PNG;
+- GIF87a/GIF89a;
+- WebP;
+- AVIF;
+- common MP4-family video brands;
+- WebM.
 
-No DB transaction spans staging/download. Definite rollback permits source cleanup. Non-rollback commit errors surface as `ingest.ErrCommitOutcomeUnknown`; the source object is retained for reconciliation.
+Known HEIF/HEIC brands are deliberately not treated as generic MP4 video.
 
-## Ingestion validation history
+This is only an initial routing/security boundary. Future codecs must structurally parse/decode the complete file and reject malformed/truncated content even when its leading signature is recognized.
 
-### First full gate — FAIL on one source-key validator defect
+### Explicit processor boundaries and deterministic output identity
 
-Evidence ZIP: `m3-ingestion-enqueue-20261002T224645Z.zip`.
-ZIP SHA-256: `64F83CD5EBAD0BDD00600256C0E6E8DC27934AAF0EFECCA64F03819FA8722123`.
-Exact tested SHA: `ba8c120e5848ec1c887e1dd56cbd6e5fdeff28a3`.
-Environment: Ubuntu 24.04.3 target host, Go 1.25.14, PostgreSQL 17.11, Docker 28.5.1, Intel i7-7700, ext4 on `/dev/md2` RAID1 over local Samsung NVMe.
+`ImageProcessor` and `VideoProcessor` are separate traits. `dispatch_verified_source` routes from the sniffed type only.
 
-Passed in that full gate:
+Recipe version 1 derives the deterministic primary output key from post ID + verified source SHA-256 + media class:
 
-- provenance, `gofmt`, full Go tests, vet and ingest race tests;
-- migration order 001 -> 002 -> 003;
-- real PostgreSQL atomic success and later-constraint rollback tests;
-- unreleased-post invisibility;
-- staging size/cancel/cleanup/permissions/durability checks;
-- service authentication/concurrency/timeout/cleanup semantics;
-- ambiguous-commit preservation;
-- URL/SSRF boundary checks;
-- cleanup/restoration;
-- target staging and PostgreSQL latency benchmarks.
+`media/v1/<image|video>/<source-hash-shard>/<post-id>-<source-sha256>`
 
-The only failure was that `LocalStore.pathForKey` accepted malformed but contained paths. Corrective commits `77e18a165de765a49da9febcd31c2cd114ea5b46` and `f635d811b7116a39f717bca93fb1ef7402ba20c5` tightened the grammar and added regression coverage. No PostgreSQL/schema/URL/service/write/fsync/concurrency/benchmark code changed.
+The key is extensionless; authoritative output MIME is PostgreSQL metadata. Any future recipe/codec change that may change durable output bytes or semantics must bump the recipe version rather than reuse another recipe's identity.
 
-### Final targeted gate — PASS
+`ProcessedMedia` must match the plan's media class and storage key and provide valid dimensions, duration, byte size, SHA-256, MIME and optional perceptual hash.
 
-Evidence ZIP: `m3-ingestion-enqueue-final-20261002T225737Z.zip`.
-ZIP SHA-256: `538F65E7C196BB24FF8C4FBB0F155221DB40E38BD78C2B79A794CFD7DA1CEF0F`.
-Exact tested SHA: `01cd1887fbb42cdcd0f3881dd38395495dc5047b`.
+External output-file publication is intentionally not implemented in this slice. Future codecs must publish the deterministic file key atomically/idempotently before the DB publication transaction; an ambiguous DB commit must not trigger deletion of an output that may already be referenced.
 
-Verified from raw evidence:
+### Fenced PostgreSQL publication transaction
 
-- exact feature SHA and exact merge-base `3769f4144885d951fd1cddba4c7d1b4d162c5324`;
-- detached tested checkout was clean and `.local-agent-results/probe.zip` was ignored;
-- diff since the first full gate changed only `local_store.go`, `local_store_test.go`, and `docs/v2/STATE.md`;
-- `gofmt`, `go test ./...`, `go vet ./...`, and `go test -race ./internal/ingest` all passed;
-- malformed-key regression tests each passed 10/10;
-- generated-key Stage -> validation -> Remove passed 10/10;
-- duplicate-byte distinct-key smoke passed 10/10;
-- no targeted test skipped or flaked;
-- an initial malformed-key command had a shell-quoting error before any test ran; the corrected command was captured separately and passed, so this was not a product/test failure;
-- the two unchanged PostgreSQL tests skipped only in the explicit no-DB check because `GINBAR_TEST_DATABASE_URL` was intentionally unset;
-- disposable runner/checkout were removed and refs/persistent state were unchanged during the gate.
+`ProcessingStore::publish_processed` runs only after source verification/processor work and holds no DB transaction during hashing/codec work.
 
-Decision: the M3 ingestion/enqueue boundary PASSES and is integrated into `v2`.
+The short publication transaction uses:
 
-## Accepted target-host baselines
+1. one preflight SQL round trip whose materialized CTEs lock the exact current job/post and authoritative source row, then evaluate `clock_timestamp()` lease validity after those lock waits;
+2. source SHA-256 comparison against the verified plan;
+3. one data-modifying CTE that writes/verifies the ready `media` row, releases the non-deleted post, and completes the same worker/generation-fenced job;
+4. a second strict `lease_expires_at > clock_timestamp()` fence in the final job update;
+5. transaction rollback if output conflicts, source changed/disappeared, post is unavailable, or final job completion loses/expires its lease.
 
-These remain the authoritative first baselines for this slice because the final correction did not change the measured paths.
+The `media` upsert accepts an existing row only if **all** durable output metadata is identical. A retry therefore cannot silently bless nondeterministic output under the deterministic key.
 
-### Local source staging
+If the write CTE waits on another DB row long enough to cross lease expiry, its media/post changes remain uncommitted; `job_completed = false` causes the caller to roll the entire transaction back.
 
-`BenchmarkLocalStoreStage8MiB` includes stage + SHA-256 + file fsync + hard-link publication + directory fsync + remove on target local NVMe.
+### Committed coverage
 
-Three runs:
+Unit tests cover:
 
-- 47.5255 ms/op, 176.51 MB/s, 67,558 B/op, 32 allocs/op;
-- 44.1955 ms/op, 189.81 MB/s, 67,568 B/op, 32 allocs/op;
-- 43.7195 ms/op, 191.87 MB/s, 67,568 B/op, 32 allocs/op.
+- supported/unsupported signature sniffing including HEIC not becoming MP4;
+- byte-size and SHA-256 integrity failures;
+- source cancellation classification;
+- strict source-key validation;
+- Unix source symlink rejection;
+- deterministic output-plan identity;
+- image processor dispatch and output-plan validation.
 
-Arithmetic mean: **45.1468 ms/op, 186.06 MB/s, 67,564.7 B/op, 32 allocs/op**.
+PostgreSQL integration tests in `tests/processing_contract.rs` cover:
 
-### PostgreSQL ingestion write
+- source lookup requires the current fenced lease;
+- atomic ready-media + post release + job completion;
+- already-expired publication leaves no media and keeps the post unreleased;
+- publication that begins unexpired but blocks on the job row until after real expiry loses the lease and rolls back;
+- stale generation cannot publish after reclaim while the current generation can;
+- changed source SHA-256 is rejected;
+- conflicting preexisting media is rejected without releasing the post.
 
-PostgreSQL 17.11, exact migrations 001/002/003 and authoritative post/source/job CTE write shape:
+The existing durable job-state integration suite remains unchanged and must continue to pass.
 
-- c1: 1,000/1,000, zero failures, **0.348 ms average**, **2,870.87 TPS**;
-- c4: 4,000/4,000, zero failures, **0.457 ms average**, **8,761.36 TPS**.
+### Target measurement probe
 
-Cumulative disposable benchmark state after both runs: 5,000 posts, 5,000 sources, 5,000 jobs, 0 media rows.
+Ignored test `measure_source_open_hash_sniff_8mib` measures the new pre-codec verification path over an 8 MiB disposable source:
 
-## Remaining non-blocking observations
+- safe directory-relative open;
+- full SHA-256;
+- first-4-KiB signature sniff;
+- rewind.
 
-- Process crash between source publication and authoritative DB commit can leave an unreferenced file. Orphan reconciliation/janitor remains required before production ingestion is enabled.
-- Deployment must ensure the Go API and Rust worker share the media root with compatible UID/GID/permissions (`0640` files / `0750` directories currently).
-- Declared MIME is untrusted; worker processing must sniff/validate actual content.
-- URL imports currently permit any valid public TCP port; narrow only if product/security policy requires it.
-- The target staging and ingestion-write baselines should only be rerun when the measured paths materially change.
+Fixture creation/sync is outside the timed section. This probe establishes source-verification overhead only; it is not a codec-throughput benchmark.
+
+## Validation status
+
+The current ChatGPT execution runtime does not contain `rustc`/`cargo` or a disposable PostgreSQL target environment. Therefore **no Rust compile/fmt/Clippy/test claim is made for this branch yet**.
+
+The implementation has been reviewed structurally here, including the post-implementation round-trip reduction, but the branch must pass an execution-only Rust/PostgreSQL/target-filesystem gate before integration into `v2`.
+
+## Correctness/performance decisions
+
+- Hash and sniff in one source pass; do not reread the source merely to identify its processor family.
+- Keep only a 4 KiB sniff prefix and a fixed 128 KiB read buffer; do not buffer the whole upload in worker memory.
+- Keep source verification and codec work outside DB transactions.
+- Reduce publication preflight to one PostgreSQL round trip while retaining explicit row locks and post-lock real-time expiry evaluation.
+- Keep an explicit short DB transaction for publication so partial media/post changes can be rolled back if the final strict job fence fails after another lock wait.
+- Treat source storage as immutable after ingestion; do not design worker correctness around mutable source inodes.
+- Keep output identity deterministic and recipe-versioned before choosing codecs.
+- Do not optimize AVIF/video until source verification, fencing, publication and baseline costs are validated.
+
+## Remaining observations before codec work
+
+- Real codec structural validation and encoding are not implemented.
+- Atomic filesystem publication for processed outputs is specified but not implemented.
+- There is no production executor/polling loop yet, so `ProcessingError` disposition is not yet wired to `JobStore::fail` retry scheduling.
+- Cancellation is checked between local file reads; ordinary blocking local filesystem reads are not forcibly interrupted mid-syscall.
+- Source-file immutability must be preserved operationally; current ingestion modes are `0640` files / `0750` directories.
+- Source-ingestion orphan reconciliation remains required before production ingestion is enabled.
+- No source-verification or publication-transaction target baseline exists yet.
 
 ## Local-agent evidence workflow
 
@@ -204,4 +228,4 @@ For target-host work, use isolated/disposable resources and return one ZIP with 
 
 ## Single best next task
 
-Start the next M3 slice from current `v2`: implement the Rust worker source-consumption/processing contract before codec optimization. A claimed kind-0 job must load its authoritative `media_sources` row, open the canonical shared-root source safely, verify byte-size/SHA-256 consistency, sniff and validate the real media type instead of trusting declared MIME, and dispatch through explicit image/video processor boundaries. Define deterministic/idempotent processed-output keys and the short PostgreSQL publication transaction that will eventually write `media`, release the post, and complete the fenced job, but do not yet optimize AVIF/video encoding. Add bounded I/O/cancellation/error classification and target-host measurements for source-open/hash/sniff overhead so the following codec slice starts from a validated execution contract.
+Run an **execution-only validation gate** against the exact `astra/m3-worker-source-contract` SHA after this state-file commit: Rust fmt/check/Clippy/unit tests; full PostgreSQL 17 integration tests including existing job fencing and the new publication lock-wait/stale-generation/rollback cases; Linux safe-open/symlink/integrity/cancellation probes; the target-local 8 MiB source-open/hash/sniff measurement; and a disposable PostgreSQL baseline for the exact two-round-trip fenced publication transaction. If any gate fails, fix this branch before considering fast-forward integration into `v2`.
