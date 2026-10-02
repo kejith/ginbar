@@ -102,9 +102,39 @@ func TestLocalStoreRejectsNonCanonicalStorageKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []string{"", "../sources/a", "sources/../sources/a", "/sources/a", "other/a"} {
+	for _, key := range []string{
+		"",
+		"../sources/a",
+		"sources/../sources/a",
+		"/sources/a",
+		"other/a",
+		"sources/a/not-hex",
+		"sources/aa/not-32-hex",
+		"sources/ab/0123456789abcdef0123456789abcdef",
+		"sources/01/0123456789abcdef0123456789abcdeg",
+		"sources/01/0123456789ABCDEF0123456789ABCDEF",
+		"sources/01/0123456789abcdef0123456789abcdef/extra",
+	} {
 		if err := store.Remove(context.Background(), key); err == nil {
 			t.Fatalf("Remove(%q) unexpectedly succeeded", key)
+		}
+	}
+}
+
+func TestValidSourceStorageKeyRequiresGeneratedShape(t *testing.T) {
+	valid := "sources/01/0123456789abcdef0123456789abcdef"
+	if !validSourceStorageKey(valid) {
+		t.Fatalf("validSourceStorageKey(%q) = false", valid)
+	}
+	for _, key := range []string{
+		"sources/0/0123456789abcdef0123456789abcdef",
+		"sources/01/0123456789abcdef0123456789abcde",
+		"sources/02/0123456789abcdef0123456789abcdef",
+		"sources/01/0123456789abcdef0123456789abcdeg",
+		"sources/01/0123456789ABCDEF0123456789ABCDEF",
+	} {
+		if validSourceStorageKey(key) {
+			t.Fatalf("validSourceStorageKey(%q) = true", key)
 		}
 	}
 }
