@@ -1,9 +1,8 @@
 # Ginbar v2 State / Handoff
 
 Last updated: 2026-10-03
-Phase: M3 media pipeline integration — ingestion/enqueue boundary FIXED AFTER FAILED GATE; targeted revalidation pending
+Phase: M3 media pipeline integration — ingestion/enqueue boundary PASSED AND INTEGRATED
 Integration branch: `v2`
-Active M3 branch: `astra/m3-ingestion-enqueue`
 Legacy branch: `master` (read-only for rewrite work)
 
 ## Read this first
@@ -12,19 +11,15 @@ This file is the resume point. Read it before `PLAN.md`. Do not rely on chat his
 
 ## Branch status
 
-- `master` remains untouched by rewrite work.
-- `v2` remains at `3769f4144885d951fd1cddba4c7d1b4d162c5324`.
+- `master` remains untouched by rewrite work at `181fa44d79c7b4a1984c1a35795762dd503b3f77`.
 - M1 board benchmark is complete.
 - M2 fresh schema + core Go API is complete and integrated.
 - M3 durable PostgreSQL media-job ownership/recovery boundary is complete and integrated.
-- The M3 ingestion/enqueue slice remains isolated on `astra/m3-ingestion-enqueue`, based on exact `v2` tip `3769f4144885d951fd1cddba4c7d1b4d162c5324`.
-- First full ingestion gate tested `ba8c120e5848ec1c887e1dd56cbd6e5fdeff28a3` and failed on one storage-key validation defect; all other requested gates passed.
-- Corrective source/test commits after that gate:
-  - `77e18a165de765a49da9febcd31c2cd114ea5b46` — enforce exact generated media-source key grammar;
-  - `f635d811b7116a39f717bca93fb1ef7402ba20c5` — commit regression coverage for malformed shard/key combinations.
+- M3 upload/URL-ingestion + durable-enqueue boundary is complete and integrated.
+- `v2` was fast-forwarded from `3769f4144885d951fd1cddba4c7d1b4d162c5324` through the exact validated ingestion SHA `01cd1887fbb42cdcd0f3881dd38395495dc5047b`, then received this state-only integration commit.
 - Backend v2 lives under `src/backend/v2`; legacy backend is reference-only.
 - Worker v2 lives under `src/worker/v2`; legacy `src/worker` is reference-only unless explicitly reviewed for reuse.
-- `.local-agent-results/` is ignored on the exact feature checkout for evidence ZIPs.
+- `.local-agent-results/` is ignored for local-agent evidence ZIPs.
 
 ## Retained architecture and validated decisions
 
@@ -42,9 +37,9 @@ Keep unless new evidence contradicts them:
 - local NVMe is the intended media/source store;
 - processing is at-least-once and durable external effects must be idempotent/deterministic.
 
-The integrated media-job boundary retains readiness-first claim ordering, `FOR UPDATE SKIP LOCKED`, lease-generation fencing, post-lock real-time expiry checks, one-job worker concurrency, and no production polling loop/Redis wakeup dependency yet.
+The integrated media-job boundary retains readiness-first claim ordering, `FOR UPDATE SKIP LOCKED`, lease-generation fencing, post-lock real-time expiry checks, one-job worker concurrency, and no Redis wakeup dependency.
 
-## M3 ingestion/enqueue boundary
+## M3 ingestion/enqueue boundary — integrated
 
 ### Scope
 
@@ -85,7 +80,7 @@ The existing `media` table remains processed output; source metadata is not forc
 
 Directories use `0750`. Duplicate byte streams intentionally get distinct keys; exact/perceptual duplicate policy belongs later in processing/release.
 
-After the first full gate, key validation was tightened so `pathForKey` accepts only the exact generated grammar and additionally requires the two-character shard to equal the first two characters of the 32-hex ID. Existing canonical-path and containment checks remain in place.
+Storage-key removal accepts only the exact generated grammar `sources/<2 lowercase hex>/<32 lowercase hex>`, requires the shard to equal the first two ID characters, and retains canonical-path/containment checks as defense in depth.
 
 ### Service boundary and resource limits
 
@@ -93,7 +88,7 @@ After the first full gate, key validation was tightened so `pathForKey` accepts 
 
 - validates authenticated actor and content filter before staging;
 - has explicit staging, DB, and cleanup timeouts;
-- bounds total concurrent ingestion workflows with a semaphore;
+- bounds concurrent ingestion workflows with a semaphore;
 - performs byte streaming/download outside DB transactions;
 - uses cancellation-independent bounded cleanup after definite repository failure;
 - preserves a staged object on ambiguous DB commit outcome, because deleting it could leave committed PostgreSQL state pointing at missing bytes.
@@ -124,49 +119,59 @@ A process crash after source publication but before/while authoritative DB commi
 
 No DB transaction spans staging/download. Definite rollback permits source cleanup. Non-rollback commit errors surface as `ingest.ErrCommitOutcomeUnknown`; the source object is retained for reconciliation.
 
-## First full ingestion gate — FAIL on one source defect
+## Ingestion validation history
+
+### First full gate — FAIL on one source-key validator defect
 
 Evidence ZIP: `m3-ingestion-enqueue-20261002T224645Z.zip`.
-Uploaded ZIP SHA-256: `64F83CD5EBAD0BDD00600256C0E6E8DC27934AAF0EFECCA64F03819FA8722123`.
+ZIP SHA-256: `64F83CD5EBAD0BDD00600256C0E6E8DC27934AAF0EFECCA64F03819FA8722123`.
 Exact tested SHA: `ba8c120e5848ec1c887e1dd56cbd6e5fdeff28a3`.
 Environment: Ubuntu 24.04.3 target host, Go 1.25.14, PostgreSQL 17.11, Docker 28.5.1, Intel i7-7700, ext4 on `/dev/md2` RAID1 over local Samsung NVMe.
 
-Passed:
+Passed in that full gate:
 
-- exact SHA/base/clean-checkout provenance and ignored-results-path check;
-- required `gofmt` check;
-- full Go tests without DB URL;
-- `go vet ./...`;
-- `go test -race ./internal/ingest`;
-- full PostgreSQL-backed `go test ./... -count=1 -v` with both ingestion integration tests executing;
-- migration order 001 -> 002 -> 003 and source-origin constraints;
-- atomic success: one unreleased post + one source + one pending kind-0 job, no final media row;
-- later source-constraint failure rolled back posts/media_sources/media_jobs to zero after a valid post insertion path;
-- processing post invisibility from released-feed semantics;
-- empty/oversized/cancelled source cleanup;
-- exact bytes/hash, duplicate-key isolation, permissions, same-filesystem hard-link publication and directory fsync behavior;
-- service authentication/concurrency/timeout/definite-failure cleanup behavior;
-- real LocalStore + disposable PostgreSQL failure probe left zero DB rows and no source object;
-- ambiguous-commit preservation test;
-- URL/SSRF source review and committed tests;
-- cleanup/restoration with no gate container/volume/network left and no production state changed.
+- provenance, `gofmt`, full Go tests, vet and ingest race tests;
+- migration order 001 -> 002 -> 003;
+- real PostgreSQL atomic success and later-constraint rollback tests;
+- unreleased-post invisibility;
+- staging size/cancel/cleanup/permissions/durability checks;
+- service authentication/concurrency/timeout/cleanup semantics;
+- ambiguous-commit preservation;
+- URL/SSRF boundary checks;
+- cleanup/restoration;
+- target staging and PostgreSQL latency benchmarks.
 
-Only failing requirement:
+The only failure was that `LocalStore.pathForKey` accepted malformed but contained paths. Corrective commits `77e18a165de765a49da9febcd31c2cd114ea5b46` and `f635d811b7116a39f717bca93fb1ef7402ba20c5` tightened the grammar and added regression coverage. No PostgreSQL/schema/URL/service/write/fsync/concurrency/benchmark code changed.
 
-- `LocalStore.pathForKey` checked canonical path containment but did not enforce the exact generated storage-key grammar. A disposable build-copy regression probe proved these malformed examples were accepted:
-  - `sources/a/not-hex`;
-  - `sources/aa/not-32-hex`;
-  - `sources/ab/0123456789abcdef0123456789abcdef` (shard does not match ID prefix).
+### Final targeted gate — PASS
 
-This was the sole source-change issue. No PostgreSQL, SSRF, cleanup, transaction, or performance defect was found.
+Evidence ZIP: `m3-ingestion-enqueue-final-20261002T225737Z.zip`.
+ZIP SHA-256: `538F65E7C196BB24FF8C4FBB0F155221DB40E38BD78C2B79A794CFD7DA1CEF0F`.
+Exact tested SHA: `01cd1887fbb42cdcd0f3881dd38395495dc5047b`.
 
-## Target-host baselines from the failed gate
+Verified from raw evidence:
 
-These measurements remain valid because the corrective diff only changes key grammar validation and tests; it does not change DB SQL, file write/fsync/publication operations, hashing, URL fetch, schema, or concurrency behavior.
+- exact feature SHA and exact merge-base `3769f4144885d951fd1cddba4c7d1b4d162c5324`;
+- detached tested checkout was clean and `.local-agent-results/probe.zip` was ignored;
+- diff since the first full gate changed only `local_store.go`, `local_store_test.go`, and `docs/v2/STATE.md`;
+- `gofmt`, `go test ./...`, `go vet ./...`, and `go test -race ./internal/ingest` all passed;
+- malformed-key regression tests each passed 10/10;
+- generated-key Stage -> validation -> Remove passed 10/10;
+- duplicate-byte distinct-key smoke passed 10/10;
+- no targeted test skipped or flaked;
+- an initial malformed-key command had a shell-quoting error before any test ran; the corrected command was captured separately and passed, so this was not a product/test failure;
+- the two unchanged PostgreSQL tests skipped only in the explicit no-DB check because `GINBAR_TEST_DATABASE_URL` was intentionally unset;
+- disposable runner/checkout were removed and refs/persistent state were unchanged during the gate.
+
+Decision: the M3 ingestion/enqueue boundary PASSES and is integrated into `v2`.
+
+## Accepted target-host baselines
+
+These remain the authoritative first baselines for this slice because the final correction did not change the measured paths.
 
 ### Local source staging
 
-`BenchmarkLocalStoreStage8MiB` measures stage + SHA-256 + file fsync + hard-link publication + directory fsync + remove on target local NVMe.
+`BenchmarkLocalStoreStage8MiB` includes stage + SHA-256 + file fsync + hard-link publication + directory fsync + remove on target local NVMe.
 
 Three runs:
 
@@ -176,48 +181,27 @@ Three runs:
 
 Arithmetic mean: **45.1468 ms/op, 186.06 MB/s, 67,564.7 B/op, 32 allocs/op**.
 
-This is the authoritative first target baseline for the staging durability path, not a speedup claim.
-
 ### PostgreSQL ingestion write
 
-PostgreSQL 17.11 disposable benchmark using exact migrations 001/002/003 and the authoritative post/source/job CTE write shape:
+PostgreSQL 17.11, exact migrations 001/002/003 and authoritative post/source/job CTE write shape:
 
 - c1: 1,000/1,000, zero failures, **0.348 ms average**, **2,870.87 TPS**;
 - c4: 4,000/4,000, zero failures, **0.457 ms average**, **8,761.36 TPS**.
 
-Cumulative state after both runs: 5,000 posts, 5,000 sources, 5,000 jobs, 0 media rows.
-
-This is the first target baseline for this transaction shape.
-
-## Corrective implementation after failed gate
-
-Commits `77e18a165de765a49da9febcd31c2cd114ea5b46` and `f635d811b7116a39f717bca93fb1ef7402ba20c5` change only:
-
-- `src/backend/v2/internal/ingest/local_store.go`;
-- `src/backend/v2/internal/ingest/local_store_test.go`.
-
-The validator now requires exactly:
-
-`source/<grammar>` = `sources/<2 lowercase hex>/<32 lowercase hex>`
-
-and the shard must match the first two characters of the 32-character ID.
-
-Committed regression coverage now rejects the three exact failing probe examples plus wrong length, non-hex, uppercase, extra-component, traversal, absolute and wrong-prefix forms. A valid generated-form key is also checked explicitly.
-
-No production PostgreSQL, schema, URL-fetcher, service workflow, hashing, write/fsync/publication, concurrency, or benchmark code changed after the measured gate.
+Cumulative disposable benchmark state after both runs: 5,000 posts, 5,000 sources, 5,000 jobs, 0 media rows.
 
 ## Remaining non-blocking observations
 
 - Process crash between source publication and authoritative DB commit can leave an unreferenced file. Orphan reconciliation/janitor remains required before production ingestion is enabled.
-- Deployment must ensure Go API and future Rust worker share the media root with compatible UID/GID/permissions; current file/dir modes are `0640`/`0750`.
-- Declared MIME remains untrusted; worker processing must sniff/validate actual content.
+- Deployment must ensure the Go API and Rust worker share the media root with compatible UID/GID/permissions (`0640` files / `0750` directories currently).
+- Declared MIME is untrusted; worker processing must sniff/validate actual content.
 - URL imports currently permit any valid public TCP port; narrow only if product/security policy requires it.
-- The target staging and DB transaction baselines above should not be rerun merely for the key-validation fix unless the targeted gate reveals a broader issue.
+- The target staging and ingestion-write baselines should only be rerun when the measured paths materially change.
 
 ## Local-agent evidence workflow
 
-For target-host work, use isolated/disposable resources and return one ZIP with exact SHA/status, commands, raw stdout/stderr, environment/tool versions, failures, and cleanup/restoration evidence. Preserve raw remote evidence until no longer needed.
+For target-host work, use isolated/disposable resources and return one ZIP with exact SHA/status, commands, raw stdout/stderr, environment/tool versions, measurements, failures, and cleanup/restoration evidence. Preserve raw remote evidence until no longer needed.
 
 ## Single best next task
 
-Run a **targeted execution-only revalidation** against the exact feature-branch SHA after this state-file commit. Verify the diff since `ba8c120e5848ec1c887e1dd56cbd6e5fdeff28a3` changes only `local_store.go`, `local_store_test.go`, and this state document; run Go 1.25 `gofmt`, `go test ./...`, `go vet ./...`, and `go test -race ./internal/ingest`; run the exact malformed-key regression cases plus normal generated-key stage/remove smoke behavior. Do not rerun PostgreSQL/pgbench, URL/SSRF, or the 8 MiB target benchmark unless the targeted checks expose a broader production-code issue. Return one evidence ZIP; if every targeted gate passes, review and fast-forward the ingestion slice into `v2`.
+Start the next M3 slice from current `v2`: implement the Rust worker source-consumption/processing contract before codec optimization. A claimed kind-0 job must load its authoritative `media_sources` row, open the canonical shared-root source safely, verify byte-size/SHA-256 consistency, sniff and validate the real media type instead of trusting declared MIME, and dispatch through explicit image/video processor boundaries. Define deterministic/idempotent processed-output keys and the short PostgreSQL publication transaction that will eventually write `media`, release the post, and complete the fenced job, but do not yet optimize AVIF/video encoding. Add bounded I/O/cancellation/error classification and target-host measurements for source-open/hash/sniff overhead so the following codec slice starts from a validated execution contract.
