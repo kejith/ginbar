@@ -69,14 +69,12 @@ pub enum SourceType {
     Url = 1,
 }
 
-impl TryFrom<i16> for SourceType {
-    type Error = ();
-
-    fn try_from(value: i16) -> Result<Self, Self::Error> {
+impl SourceType {
+    pub(crate) fn from_db(value: i16) -> Option<Self> {
         match value {
-            0 => Ok(Self::Upload),
-            1 => Ok(Self::Url),
-            _ => Err(()),
+            0 => Some(Self::Upload),
+            1 => Some(Self::Url),
+            _ => None,
         }
     }
 }
@@ -481,7 +479,7 @@ mod tests {
     use super::*;
     use std::io::Write;
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
@@ -565,6 +563,22 @@ mod tests {
     }
 
     #[test]
+    fn verifier_honors_cancellation_between_reads() {
+        let mut body = vec![0x5a_u8; READ_BUFFER_BYTES * 3];
+        body[..3].copy_from_slice(&[0xff, 0xd8, 0xff]);
+        let fixture = Fixture::new(&body);
+        let verifier = SourceVerifier::new(&fixture.root, body.len() as u64).expect("create verifier");
+        let checks = AtomicUsize::new(0);
+        let error = verifier
+            .verify(fixture.record(), || {
+                checks.fetch_add(1, Ordering::Relaxed) >= 2
+            })
+            .expect_err("mid-read cancellation must fail");
+        assert_eq!(error.disposition(), ErrorDisposition::Cancelled);
+        assert!(checks.load(Ordering::Relaxed) >= 3);
+    }
+
+    #[test]
     fn verifier_rejects_invalid_storage_key_shape() {
         let fixture = Fixture::new(b"\xff\xd8\xffverified-source");
         let verifier = SourceVerifier::new(&fixture.root, 1024).expect("create verifier");
@@ -599,6 +613,24 @@ mod tests {
         let error = verifier
             .verify(fixture.record(), || false)
             .expect_err("symlink must fail");
+        assert_eq!(error.disposition(), ErrorDisposition::Terminal);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn verifier_rejects_symlink_shard() {
+        use std::os::unix::fs::symlink;
+
+        let fixture = Fixture::new(b"\xff\xd8\xffverified-source");
+        let source_path = fixture.source_path();
+        let shard_path = source_path.parent().expect("source shard").to_path_buf();
+        let real_shard = fixture.root.join("real-shard");
+        fs::rename(&shard_path, &real_shard).expect("move real shard");
+        symlink(&real_shard, &shard_path).expect("create shard symlink");
+        let verifier = SourceVerifier::new(&fixture.root, 1024).expect("create verifier");
+        let error = verifier
+            .verify(fixture.record(), || false)
+            .expect_err("symlink shard must fail");
         assert_eq!(error.disposition(), ErrorDisposition::Terminal);
     }
 

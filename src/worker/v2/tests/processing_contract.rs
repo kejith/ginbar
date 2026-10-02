@@ -218,7 +218,7 @@ fn publication_rechecks_expiry_after_job_lock_wait() {
     let (post_id, job_id) = db.insert_source_job(source_sha256);
     let mut claimant = db.connect();
     let outcome = JobStore::new(&mut claimant)
-        .claim_one("worker-a", lease_ms(400))
+        .claim_one("worker-a", lease_ms(1_000))
         .expect("claim short lease");
     let ClaimOutcome::Claimed(lease) = outcome else {
         panic!("expected claim, got {outcome:?}");

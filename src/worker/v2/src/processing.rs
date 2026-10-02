@@ -299,7 +299,7 @@ impl<'a> ProcessingStore<'a> {
         let Some(sha256) = row.get::<_, Option<Vec<u8>>>("sha256") else {
             return Ok(SourceLoadOutcome::InvalidSourceMetadata);
         };
-        let Ok(source_type) = SourceType::try_from(source_type) else {
+        let Some(source_type) = SourceType::from_db(source_type) else {
             return Ok(SourceLoadOutcome::InvalidSourceMetadata);
         };
         let Ok(byte_size) = u64::try_from(byte_size) else {
@@ -485,6 +485,27 @@ mod tests {
         assert_eq!(media.kind, MediaKind::Image);
     }
 
+    #[test]
+    fn dispatch_routes_video_processor_and_validates_output() {
+        let mut body = vec![0x1a, 0x45, 0xdf, 0xa3, 0x42, 0x82, 0x84];
+        body.extend_from_slice(b"webm");
+        body.extend_from_slice(b"processor-source");
+        let fixture = Fixture::new(&body);
+        let verifier = SourceVerifier::new(&fixture.root, 1024).expect("create verifier");
+        let mut verified = verifier
+            .verify(fixture.record(), || false)
+            .expect("verify source");
+        assert_eq!(verified.media_type(), SniffedMediaType::WebM);
+        let mut image = PanicImageProcessor;
+        let mut video = FakeVideoProcessor { calls: 0 };
+        let (plan, media) = dispatch_verified_source(&mut verified, &mut image, &mut video)
+            .expect("dispatch video");
+        assert_eq!(video.calls, 1);
+        assert_eq!(plan.storage_key, media.storage_key);
+        assert_eq!(media.kind, MediaKind::Video);
+        assert!(plan.storage_key.starts_with("media/v1/video/"));
+    }
+
     struct FakeImageProcessor {
         calls: usize,
     }
@@ -519,6 +540,43 @@ mod tests {
             _plan: &OutputPlan,
         ) -> Result<ProcessedMedia, ProcessingError> {
             panic!("video processor must not be called for an image")
+        }
+    }
+
+    struct PanicImageProcessor;
+
+    impl ImageProcessor for PanicImageProcessor {
+        fn process_image(
+            &mut self,
+            _source: &mut VerifiedSource,
+            _plan: &OutputPlan,
+        ) -> Result<ProcessedMedia, ProcessingError> {
+            panic!("image processor must not be called for a video")
+        }
+    }
+
+    struct FakeVideoProcessor {
+        calls: usize,
+    }
+
+    impl VideoProcessor for FakeVideoProcessor {
+        fn process_video(
+            &mut self,
+            _source: &mut VerifiedSource,
+            plan: &OutputPlan,
+        ) -> Result<ProcessedMedia, ProcessingError> {
+            self.calls += 1;
+            Ok(ProcessedMedia {
+                kind: MediaKind::Video,
+                storage_key: plan.storage_key.clone(),
+                mime_type: "video/mp4".to_owned(),
+                width: 1920,
+                height: 1080,
+                duration_ms: 1_000,
+                byte_size: 456,
+                sha256: [8; 32],
+                perceptual_hash: None,
+            })
         }
     }
 
