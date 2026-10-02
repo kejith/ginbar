@@ -1,8 +1,9 @@
 # Ginbar v2 State / Handoff
 
 Last updated: 2026-10-02
-Phase: M2 COMPLETE AND INTEGRATED; M3 media pipeline is next
+Phase: M3 durable media-job boundary IMPLEMENTED ON BRANCH; validation gate pending
 Integration branch: `v2`
+Active M3 branch: `astra/m3-media-job-boundary`
 Completed M2 branch: `astra/m2-core-schema-api`
 Completed M1 branch: `astra/m1-scroll-anchor`
 Legacy branch: `master` (read-only for rewrite work)
@@ -14,9 +15,12 @@ This file is the resume point. Read it before `PLAN.md`. Do not rely on chat his
 ## Branch status
 
 - `master` remains untouched by rewrite work.
+- `v2` remains at `c1c5f095d4a8cc342809381ec171df7ee99cb02d` at the start of M3 work.
 - M1 completed at `32e154c4541fcdd2c24c1c05ed278e2dbddef960`.
-- M2 passed its real Go/PostgreSQL/query/load/visibility gates and was fast-forwarded into `v2` at `ffbf529d88686aa123890893386aaf37dc1b3bb2` with no merge commit.
+- M2 passed its real Go/PostgreSQL/query/load/visibility gates and was fast-forwarded into `v2` at `ffbf529d88686aa123890893386aaf37dc1b3bb2` with no merge commit; follow-up state documentation brought `v2` to `c1c5f095d4a8cc342809381ec171df7ee99cb02d`.
+- M3 durable media-job boundary implementation is on `astra/m3-media-job-boundary` at `b33d9eaba864809afd250c55ac5d335a133cef76` before this state-file update.
 - Backend v2 lives under `src/backend/v2`; legacy Wallium backend is reference-only.
+- Worker v2 work lives under `src/worker/v2`; legacy `src/worker` code is reference-only unless explicitly reviewed for reuse.
 - `.local-agent-results/` is ignored by Git for local-agent evidence ZIPs.
 
 ## M2 architecture retained
@@ -140,10 +144,53 @@ Keep:
 
 No further M2 benchmark is justified by current evidence.
 
+## M3 durable media-job boundary — implementation pending validation
+
+Implementation commit before this state update: `b33d9eaba864809afd250c55ac5d335a133cef76` on `astra/m3-media-job-boundary`.
+
+Implemented:
+
+- `002_media_job_leases.sql` extends existing `media_jobs` rather than replacing it;
+- explicit `lease_generation` fencing token increments on every successful claim/reclaim;
+- running-state checks require attempt number, worker identity, claim timestamp and lease expiry;
+- non-running states clear ownership/lease fields;
+- one partial expression index, `media_jobs_runnable_idx`, orders runnable rows by readiness timestamp, then priority and ID;
+- claim is one atomic PostgreSQL statement using `FOR UPDATE SKIP LOCKED` and returns at most one job;
+- expired leases are reclaimed by the same bounded claim path;
+- if the final allowed attempt dies, the next claim pass terminalizes it instead of starting attempt `max_attempts + 1`;
+- complete, fail and renew transitions require worker ID + lease generation + unexpired lease, so stale workers cannot commit after reclaim;
+- retryable failure returns to pending with caller-supplied backoff until the attempt limit; non-retryable failure is terminal;
+- `src/worker/v2` is a clean-slate Rust crate using direct PostgreSQL access, not the legacy worker implementation;
+- initial worker concurrency is exactly one claim at a time;
+- no production polling loop exists yet, avoiding idle database polling before processors exist;
+- `claim-once` is an explicit crash/recovery probe that claims one job and intentionally lets its lease expire;
+- README makes the idempotency rule explicit: leases prevent concurrent ownership but cannot make external media side effects exactly-once, so processors must use deterministic/upsert/atomic-publication semantics.
+
+Performance decision:
+
+- runnable ordering is readiness timestamp first, then priority and ID. This aligns the claim predicate/order with one partial expression index and avoids a strict priority-first design where future-scheduled high-priority rows can cause avoidable scans. Priority is a tie-breaker among similarly ready work, not strict global preemption.
+
+Tests added but not yet executed in an authoritative environment:
+
+- `FOR UPDATE SKIP LOCKED` skips a locked candidate;
+- expired lease reclaim increments attempt and fence generation;
+- stale completion is rejected after reclaim;
+- repeated crash at max attempts becomes terminal failure;
+- retryable failure requeues and then terminalizes at max attempts;
+- lease renewal/completion require current ownership;
+- bounded exponential retry-delay unit test.
+
+Validation status:
+
+- branch/base relationship was verified: implementation commit is exactly one commit ahead of `v2` base `c1c5f095d4a8cc342809381ec171df7ee99cb02d`;
+- this ChatGPT runtime has Go 1.23.2 but no `rustc`, `cargo`, or `psql`, and cannot reach GitHub from the shell;
+- therefore Rust compile/format/lint, real PostgreSQL integration tests, claim/reclaim crash tests, and `EXPLAIN (ANALYZE, BUFFERS)` are still required;
+- do not integrate this M3 slice into `v2` until that gate passes.
+
 ## Local-agent evidence workflow
 
 Before every future local-agent handoff, ensure `.local-agent-results/` remains gitignored. Require one ZIP containing exact SHA/status, commands, stdout/stderr, logs, JSON/TSV/CSV, plans, benchmarks, environment/versions, errors, cleanup/restoration evidence, and `findings.md`. If execution is remote, the agent must download/copy the ZIP into `.local-agent-results/` and report the exact local path. The user should upload the ZIP here with: `Analyze this results ZIP, update project state, decide what the evidence means, and plan/implement the next step.`
 
 ## Single best next task
 
-Create a short-lived M3 branch from current `v2`. Implement the durable media-job execution boundary around the existing `media_jobs` table: transactional claim with `FOR UPDATE SKIP LOCKED`, lease/reclaim/retry/failure completion semantics, cancellation-safe tests, and the minimal Rust worker skeleton claiming one job at a time. Validate crash/reclaim/idempotency behavior before adding image/video processing.
+Run the execution-only M3 durable-job validation gate against the exact branch SHA after this state-file commit: Go tests, Rust fmt/check/clippy/tests, disposable PostgreSQL 17 state-machine/crash-reclaim tests, and `EXPLAIN (ANALYZE, BUFFERS)` plus a small claim-contention benchmark. Return one raw-evidence ZIP; analyze it here and fix the branch if any gate fails before considering fast-forward integration into `v2`.
