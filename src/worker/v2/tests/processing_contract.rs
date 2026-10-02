@@ -10,9 +10,8 @@ use std::env;
 use std::fs;
 use std::num::NonZeroU64;
 use std::path::PathBuf;
-use std::sync::mpsc;
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const CORE_MIGRATION: &str = include_str!("../../../backend/v2/internal/schema/migrations/001_core.sql");
 const LEASE_MIGRATION: &str = include_str!("../../../backend/v2/internal/schema/migrations/002_media_job_leases.sql");
@@ -89,6 +88,33 @@ fn claim(client: &mut Client, worker: &str, lease_ms: u64) -> ginbar_worker_v2::
         other => panic!("unexpected claim outcome: {other:?}"),
     }
 }
+fn wait_for_blocked_backend_then_expiry(owner: &mut Client, pid: i32, job_id: i64) {
+    let deadline = Instant::now() + Duration::from_secs(2);
+    loop {
+        let blocked: bool = owner.query_one(
+            "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE pid=$1 AND wait_event_type='Lock')",
+            &[&pid],
+        ).expect("observe blocked publisher").get(0);
+        if blocked {
+            let unexpired: bool = owner.query_one(
+                "SELECT clock_timestamp() < lease_expires_at FROM media_jobs WHERE id=$1",
+                &[&job_id],
+            ).expect("check lease before expiry").get(0);
+            assert!(unexpired, "publisher did not block before lease expiry");
+            break;
+        }
+        assert!(Instant::now() < deadline, "publisher did not block on the job row");
+        thread::sleep(Duration::from_millis(5));
+    }
+    loop {
+        let expired: bool = owner.query_one(
+            "SELECT clock_timestamp() >= lease_expires_at FROM media_jobs WHERE id=$1",
+            &[&job_id],
+        ).expect("wait for lease expiry").get(0);
+        if expired { break; }
+        thread::sleep(Duration::from_millis(5));
+    }
+}
 
 #[test]
 fn loads_verifies_and_publishes_under_fenced_lease() {
@@ -105,8 +131,8 @@ fn loads_verifies_and_publishes_under_fenced_lease() {
     let verified = prepare_claimed_source(&mut client, &lease, &root, 1024, &NeverCancelled).expect("prepare source");
     assert_eq!(verified.media_type, MediaType::Image(ImageFormat::Png));
     assert_eq!(verified.sha256, source_sha);
-    let output = processed(post_id, &source.sha256);
-    assert_eq!(publish_processed(&mut client, &lease, "processor-1", &output).expect("publish"), PublishOutcome::Published);
+    let output = processed(post_id, &verified.sha256);
+    assert_eq!(publish_processed(&mut client, &lease, "processor-1", &verified.sha256, &output).expect("publish"), PublishOutcome::Published);
     let row = client.query_one(
         r#"SELECT p.release_state, p.released_at IS NOT NULL, m.processing_state, m.storage_key, m.sha256,
                   j.state, j.claimed_by, j.lease_expires_at IS NULL
@@ -124,6 +150,21 @@ fn loads_verifies_and_publishes_under_fenced_lease() {
 }
 
 #[test]
+fn source_digest_change_blocks_publication() {
+    let Some(mut db) = TestDb::new() else { eprintln!("skipping: GINBAR_TEST_DATABASE_URL is not set"); return; };
+    let body = b"\x89PNG\r\n\x1a\nprocessing contract";
+    let (post_id, _, _, source_sha) = db.insert_source_job(body);
+    let mut client = db.connect();
+    let lease = claim(&mut client, "processor-source-race", 5_000);
+    client.execute("UPDATE media_sources SET sha256=$2 WHERE post_id=$1", &[&post_id, &[0x44u8; 32].as_slice()]).expect("replace source digest");
+    let output = processed(post_id, &source_sha);
+    assert_eq!(publish_processed(&mut client, &lease, "processor-source-race", &source_sha, &output).expect("publish"), PublishOutcome::LeaseLostOrConflict);
+    let row = client.query_one("SELECT release_state, (SELECT count(*) FROM media WHERE post_id=posts.id) FROM posts WHERE id=$1", &[&post_id]).expect("read state");
+    assert_eq!(row.get::<_, i16>(0), 0);
+    assert_eq!(row.get::<_, i64>(1), 0);
+}
+
+#[test]
 fn expired_lease_cannot_publish_or_release() {
     let Some(mut db) = TestDb::new() else { eprintln!("skipping: GINBAR_TEST_DATABASE_URL is not set"); return; };
     let body = b"\x89PNG\r\n\x1a\nprocessing contract";
@@ -131,7 +172,7 @@ fn expired_lease_cannot_publish_or_release() {
     let mut client = db.connect();
     let lease = claim(&mut client, "processor-2", 5_000);
     client.execute("UPDATE media_jobs SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1", &[&lease.id]).expect("expire lease");
-    assert_eq!(publish_processed(&mut client, &lease, "processor-2", &processed(post_id, &source_sha)).expect("publish"), PublishOutcome::LeaseLostOrConflict);
+    assert_eq!(publish_processed(&mut client, &lease, "processor-2", &source_sha, &processed(post_id, &source_sha)).expect("publish"), PublishOutcome::LeaseLostOrConflict);
     let row = client.query_one("SELECT p.release_state, (SELECT count(*) FROM media WHERE post_id=p.id) FROM posts p WHERE p.id=$1", &[&post_id]).expect("read state");
     assert_eq!(row.get::<_, i16>(0), 0);
     assert_eq!(row.get::<_, i64>(1), 0);
@@ -142,27 +183,20 @@ fn publication_rechecks_expiry_after_row_lock_wait() {
     let Some(mut db) = TestDb::new() else { eprintln!("skipping: GINBAR_TEST_DATABASE_URL is not set"); return; };
     let body = b"\x89PNG\r\n\x1a\nprocessing contract";
     let (post_id, _, _, source_sha) = db.insert_source_job(body);
-    let mut claimer = db.connect();
-    let lease = claim(&mut claimer, "processor-lockwait", 400);
+    let mut publish_client = db.connect();
+    let lease = claim(&mut publish_client, "processor-lockwait", 500);
+    let publish_pid: i32 = publish_client.query_one("SELECT pg_backend_pid()", &[]).expect("publisher pid").get(0);
 
     let mut locker = db.connect();
     let mut tx = locker.transaction().expect("lock transaction");
     tx.query_one("SELECT id FROM media_jobs WHERE id=$1 FOR UPDATE", &[&lease.id]).expect("lock job");
-
-    let url = db.url.clone();
-    let schema = db.schema.clone();
     let lease_for_thread = lease.clone();
     let output = processed(post_id, &source_sha);
-    let (started_tx, started_rx) = mpsc::channel();
     let handle = thread::spawn(move || {
-        let mut client = Client::connect(&url, NoTls).expect("thread db");
-        client.batch_execute(&format!("SET search_path TO {schema};")).expect("thread search path");
-        started_tx.send(()).unwrap();
-        publish_processed(&mut client, &lease_for_thread, "processor-lockwait", &output).expect("publish")
+        publish_processed(&mut publish_client, &lease_for_thread, "processor-lockwait", &source_sha, &output).expect("publish")
     });
-    started_rx.recv().unwrap();
-    thread::sleep(Duration::from_millis(650));
-    tx.commit().expect("unlock job");
+    wait_for_blocked_backend_then_expiry(&mut db.owner, publish_pid, lease.id);
+    tx.rollback().expect("unlock job");
     assert_eq!(handle.join().expect("publisher thread"), PublishOutcome::LeaseLostOrConflict);
 
     let row = db.owner.query_one(
