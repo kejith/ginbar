@@ -2,18 +2,21 @@ use crate::jobs::JobLease;
 use crate::processing::{validate_processed_storage_key, MediaKind, ProcessedMedia};
 use postgres::{Client, Error as PgError};
 use std::fmt;
+use std::fmt::Write as _;
 
 const PUBLISH_SQL: &str = r#"
 WITH owned AS MATERIALIZED (
-    SELECT id, post_id, lease_expires_at
-    FROM media_jobs
-    WHERE id = $1
-      AND post_id = $2
-      AND kind = 0
-      AND state = 1
-      AND claimed_by = $3
-      AND lease_generation = $4
-    FOR UPDATE
+    SELECT job.id, job.post_id, job.lease_expires_at
+    FROM media_jobs AS job
+    JOIN media_sources AS source ON source.post_id = job.post_id
+    WHERE job.id = $1
+      AND job.post_id = $2
+      AND job.kind = 0
+      AND job.state = 1
+      AND job.claimed_by = $3
+      AND job.lease_generation = $4
+      AND source.sha256 = $5
+    FOR UPDATE OF job
 ), valid AS MATERIALIZED (
     SELECT id, post_id FROM owned
     WHERE lease_expires_at > clock_timestamp()
@@ -22,7 +25,7 @@ WITH owned AS MATERIALIZED (
         post_id, kind, processing_state, storage_key, mime_type,
         width, height, duration_ms, byte_size, sha256, perceptual_hash
     )
-    SELECT valid.post_id, $5, 1, $6, $7, $8, $9, $10, $11, $12, $13
+    SELECT valid.post_id, $6, 1, $7, $8, $9, $10, $11, $12, $13, $14
     FROM valid
     ON CONFLICT (post_id) DO UPDATE
     SET kind = EXCLUDED.kind,
@@ -93,11 +96,13 @@ pub fn publish_processed(
     client: &mut Client,
     lease: &JobLease,
     worker_id: &str,
+    source_sha256: &[u8; 32],
     media: &ProcessedMedia,
 ) -> Result<PublishOutcome, PublicationError> {
-    validate_publication(lease, worker_id, media)?;
+    validate_publication(lease, worker_id, source_sha256, media)?;
     let kind = media.kind.as_i16();
-    let sha256 = media.sha256.as_slice();
+    let source_sha256 = source_sha256.as_slice();
+    let output_sha256 = media.sha256.as_slice();
     let row = client.query_opt(
         PUBLISH_SQL,
         &[
@@ -105,6 +110,7 @@ pub fn publish_processed(
             &lease.post_id,
             &worker_id,
             &lease.lease_generation,
+            &source_sha256,
             &kind,
             &media.storage_key,
             &media.mime_type,
@@ -112,7 +118,7 @@ pub fn publish_processed(
             &media.height,
             &media.duration_ms,
             &media.byte_size,
-            &sha256,
+            &output_sha256,
             &media.perceptual_hash,
         ],
     )?;
@@ -126,6 +132,7 @@ pub fn publish_processed(
 fn validate_publication(
     lease: &JobLease,
     worker_id: &str,
+    source_sha256: &[u8; 32],
     media: &ProcessedMedia,
 ) -> Result<(), PublicationError> {
     if lease.id <= 0 || lease.post_id <= 0 || lease.kind != 0 {
@@ -145,6 +152,12 @@ fn validate_publication(
     }
     validate_processed_storage_key(&media.storage_key, lease.post_id)
         .map_err(|error| PublicationError::Invalid(error.to_string()))?;
+    let expected_digest = digest_hex(source_sha256);
+    if !media.storage_key.contains(&format!("-{expected_digest}.")) {
+        return Err(PublicationError::Invalid(
+            "processed media key does not embed verified source digest".to_owned(),
+        ));
+    }
     if media.mime_type.is_empty() || media.mime_type.len() > 255 {
         return Err(PublicationError::Invalid(
             "processed media MIME type length is invalid".to_owned(),
@@ -166,4 +179,12 @@ fn validate_publication(
         ));
     }
     Ok(())
+}
+
+fn digest_hex(digest: &[u8; 32]) -> String {
+    let mut encoded = String::with_capacity(64);
+    for byte in digest {
+        write!(&mut encoded, "{byte:02x}").expect("writing to String cannot fail");
+    }
+    encoded
 }
