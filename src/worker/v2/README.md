@@ -38,14 +38,16 @@ Future processors must durably publish output under this deterministic identity 
 
 ## Atomic processed-media publication
 
-`publication::publish_processed` is the short authoritative commit point after codec/output-file work. One PostgreSQL statement:
+`publication::publish_processed` is the short authoritative commit point after codec/output-file work. It receives the digest of the source that was actually verified. One PostgreSQL statement:
 
-1. locks and rechecks the exact running kind-0 job by ID, post ID, worker ID, lease generation, and post-lock real-time expiry;
-2. writes ready `media` (`processing_state=1`) or accepts an idempotent existing row only when storage key and output SHA-256 match;
-3. releases the post only after the ready media row exists;
-4. succeeds the fenced job and clears ownership only after those mutations succeed.
+1. identifies the exact running kind-0 job by ID, post ID, worker ID and lease generation;
+2. requires the current authoritative `media_sources.sha256` to match the verified source digest and requires the deterministic output key to embed that digest;
+3. locks the job and rechecks lease expiry using post-lock real time;
+4. writes ready `media` (`processing_state=1`) or accepts an idempotent existing row only when storage key and output SHA-256 match;
+5. releases the post only after the ready media row exists;
+6. succeeds the fenced job and clears ownership only after those mutations succeed.
 
-An expired/stale lease, deleted/non-releasable post, or conflicting prior media identity returns `LeaseLostOrConflict` without releasing the post or completing the job. No PostgreSQL transaction spans source hashing, decode/encode, or filesystem output work.
+An expired/stale lease, source-identity change, deleted/non-releasable post, or conflicting prior media identity returns `LeaseLostOrConflict` without releasing the post or completing the job. No PostgreSQL transaction spans source hashing, decode/encode, or filesystem output work.
 
 ## Crash/idempotency notes
 
