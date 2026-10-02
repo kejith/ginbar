@@ -108,8 +108,8 @@ func (s *LocalStore) publish(tempName string) (string, error) {
 			return "", err
 		}
 		finalDir := filepath.Dir(finalPath)
-		if err := os.MkdirAll(finalDir, 0o750); err != nil {
-			return "", fmt.Errorf("create source shard directory: %w", err)
+		if err := s.ensureShardDirectory(finalDir); err != nil {
+			return "", err
 		}
 		if err := os.Link(tempName, finalPath); err != nil {
 			if errors.Is(err, os.ErrExist) {
@@ -128,6 +128,20 @@ func (s *LocalStore) publish(tempName string) (string, error) {
 		return key, nil
 	}
 	return "", errors.New("could not allocate unique media source key")
+}
+
+func (s *LocalStore) ensureShardDirectory(path string) error {
+	err := os.Mkdir(path, 0o750)
+	if err == nil {
+		if err := syncDirectory(s.sources); err != nil {
+			return fmt.Errorf("sync source root after shard creation: %w", err)
+		}
+		return nil
+	}
+	if errors.Is(err, os.ErrExist) {
+		return nil
+	}
+	return fmt.Errorf("create source shard directory: %w", err)
 }
 
 func (s *LocalStore) Remove(ctx context.Context, storageKey string) error {

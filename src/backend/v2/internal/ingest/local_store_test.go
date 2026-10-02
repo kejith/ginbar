@@ -126,3 +126,22 @@ func assertNoSourceFiles(t *testing.T, root string) {
 		}
 	}
 }
+
+func BenchmarkLocalStoreStage8MiB(b *testing.B) {
+	payload := bytes.Repeat([]byte{0x5a}, 8<<20)
+	store, err := NewLocalStore(b.TempDir(), int64(len(payload)))
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.SetBytes(int64(len(payload)))
+	b.ResetTimer()
+	for range b.N {
+		staged, err := store.Stage(context.Background(), bytes.NewReader(payload))
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := store.Remove(context.Background(), staged.StorageKey); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
