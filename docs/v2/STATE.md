@@ -1,7 +1,7 @@
 # Ginbar v2 State / Handoff
 
 Last updated: 2026-10-02
-Phase: M2 COMPLETE; integrate into `v2`, then begin M3 media pipeline
+Phase: M2 COMPLETE AND INTEGRATED; M3 media pipeline is next
 Integration branch: `v2`
 Completed M2 branch: `astra/m2-core-schema-api`
 Completed M1 branch: `astra/m1-scroll-anchor`
@@ -14,9 +14,8 @@ This file is the resume point. Read it before `PLAN.md`. Do not rely on chat his
 ## Branch status
 
 - `master` remains untouched by rewrite work.
-- M1 is complete in `v2` at `32e154c4541fcdd2c24c1c05ed278e2dbddef960`.
-- M2 passed its real Go/PostgreSQL/query/load/visibility gates on `astra/m2-core-schema-api`.
-- Fast-forward M2 into `v2`; do not create a merge commit.
+- M1 completed at `32e154c4541fcdd2c24c1c05ed278e2dbddef960`.
+- M2 passed its real Go/PostgreSQL/query/load/visibility gates and was fast-forwarded into `v2` at `ffbf529d88686aa123890893386aaf37dc1b3bb2` with no merge commit.
 - Backend v2 lives under `src/backend/v2`; legacy Wallium backend is reference-only.
 - `.local-agent-results/` is ignored by Git for local-agent evidence ZIPs.
 
@@ -129,7 +128,7 @@ Decision: visibility correction accepted; no additional M2 tuning justified.
 
 ## M2 gate decision
 
-M2 PASSES.
+M2 PASSES AND IS INTEGRATED.
 
 Keep:
 
@@ -147,4 +146,4 @@ Before every future local-agent handoff, ensure `.local-agent-results/` remains 
 
 ## Single best next task
 
-After fast-forwarding M2 into `v2`, create a short-lived M3 branch from current `v2`. Implement the durable media-job execution boundary around the existing `media_jobs` table: transactional claim with `FOR UPDATE SKIP LOCKED`, lease/reclaim/retry/failure completion semantics, cancellation-safe tests, and the minimal Rust worker skeleton claiming one job at a time. Validate crash/reclaim/idempotency behavior before adding image/video processing.
+Create a short-lived M3 branch from current `v2`. Implement the durable media-job execution boundary around the existing `media_jobs` table: transactional claim with `FOR UPDATE SKIP LOCKED`, lease/reclaim/retry/failure completion semantics, cancellation-safe tests, and the minimal Rust worker skeleton claiming one job at a time. Validate crash/reclaim/idempotency behavior before adding image/video processing.
