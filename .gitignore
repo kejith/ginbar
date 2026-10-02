@@ -11,6 +11,9 @@ src/frontend/dist/
 src/frontend/.env.local
 .env
 
+# ── Local AI agent evidence bundles ──────────────────────────────────────────
+.local-agent-results/
+
 # ── Redis snapshot (created in cwd by the Redis server) ──────────────────────
 dump.rdb
 
