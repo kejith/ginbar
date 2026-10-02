@@ -100,32 +100,37 @@ func TestCreateIngestionAtomicallyCreatesUnreleasedPostSourceAndJob(t *testing.T
 	}
 }
 
-func TestCreateIngestionFailureRollsBackAllRows(t *testing.T) {
+func TestCreateIngestionLaterConstraintFailureRollsBackPostSourceAndJob(t *testing.T) {
 	store, cleanup := testIngestionStore(t)
 	defer cleanup()
 
+	ctx := context.Background()
+	var userID int64
+	if err := store.pool.QueryRow(ctx, "INSERT INTO users (username) VALUES ('rollback-user') RETURNING id").Scan(&userID); err != nil {
+		t.Fatal(err)
+	}
 	hash := sha256.Sum256([]byte("source"))
-	_, err := store.CreateIngestion(context.Background(), ingest.CreateRequest{
-		AuthorUserID: 999999,
+	_, err := store.CreateIngestion(ctx, ingest.CreateRequest{
+		AuthorUserID: userID,
 		Filter:       model.FilterSFW,
 		Source: ingest.SourceRecord{
-			Type:       ingest.SourceUpload,
+			Type:       ingest.SourceType(99),
 			StorageKey: "sources/aa/ffffffffffffffffffffffffffffffff",
 			ByteSize:   6,
 			SHA256:     hash,
 		},
 	})
 	if err == nil {
-		t.Fatal("ingestion with missing author unexpectedly succeeded")
+		t.Fatal("ingestion with invalid source type unexpectedly succeeded")
 	}
 
 	for _, table := range []string{"posts", "media_sources", "media_jobs"} {
 		var count int
-		if err := store.pool.QueryRow(context.Background(), "SELECT count(*) FROM "+table).Scan(&count); err != nil {
+		if err := store.pool.QueryRow(ctx, "SELECT count(*) FROM "+table).Scan(&count); err != nil {
 			t.Fatal(err)
 		}
 		if count != 0 {
-			t.Fatalf("table %s retained %d rows after failed ingestion", table, count)
+			t.Fatalf("table %s retained %d rows after later transaction failure", table, count)
 		}
 	}
 }
@@ -163,7 +168,7 @@ func testIngestionStore(t *testing.T) (*Store, func()) {
 			admin.Close(context.Background())
 			t.Fatal(err)
 		}
-		if _, err := admin.Exec(ctx, string(migration)); err != nil {
+		if _, err := admin.Exec(ctx, string(migration), pgx.QueryExecModeSimpleProtocol); err != nil {
 			admin.Close(context.Background())
 			t.Fatalf("apply migration %s: %v", name, err)
 		}
