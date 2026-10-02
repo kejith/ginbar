@@ -1,8 +1,9 @@
 # Ginbar v2 State / Handoff
 
 Last updated: 2026-10-02
-Phase: M3 media pipeline integration — durable media-job boundary PASSED AND INTEGRATED
+Phase: M3 media pipeline integration — ingestion/enqueue boundary IMPLEMENTED ON BRANCH; validation pending
 Integration branch: `v2`
+Active M3 branch: `astra/m3-ingestion-enqueue`
 Legacy branch: `master` (read-only for rewrite work)
 
 ## Read this first
@@ -12,136 +13,159 @@ This file is the resume point. Read it before `PLAN.md`. Do not rely on chat his
 ## Branch status
 
 - `master` remains untouched by rewrite work.
-- `v2` was fast-forwarded from `c1c5f095d4a8cc342809381ec171df7ee99cb02d` through the validated M3 durable-job boundary at `23a41843503f70fbc1b471c9686bfb4602d16f71`, then received this state-only integration commit.
+- `v2` remains at `3769f4144885d951fd1cddba4c7d1b4d162c5324`.
 - M1 board benchmark is complete.
 - M2 fresh schema + core Go API is complete and integrated.
-- M3 is in progress. The durable PostgreSQL media-job ownership/recovery boundary is complete and integrated; upload/URL ingestion, real media processing, release workflow, regeneration, and progress UI remain.
+- M3 durable PostgreSQL media-job ownership/recovery boundary is complete and integrated.
+- The next M3 ingestion/enqueue slice is isolated on `astra/m3-ingestion-enqueue`, branched from exact `v2` tip `3769f4144885d951fd1cddba4c7d1b4d162c5324`.
+- Ingestion implementation commits before this state update:
+  - `49ee8879f573519c659ff99927d1230a51d71c1f` — initial upload/URL staging + atomic enqueue boundary;
+  - `010f105b6b1a073ebe2245ee11b56bc0c9383ec2` — source publication durability + committed 8 MiB staging benchmark;
+  - `91b4a3d102f08e6e15f0e60ff08a770d2cbdffc8` — hardened PostgreSQL transaction gate.
 - Backend v2 lives under `src/backend/v2`; legacy backend is reference-only.
 - Worker v2 lives under `src/worker/v2`; legacy `src/worker` is reference-only unless explicitly reviewed for reuse.
 - `.local-agent-results/` is ignored for local-agent evidence ZIPs.
 
-## Retained M2 architecture and decisions
+## Retained architecture and validated decisions
 
-Keep these unless new evidence contradicts them:
+Keep unless new evidence contradicts them:
 
 - Go 1.25, pgx/v5, standard `net/http`;
-- PostgreSQL authoritative for app data and durable job state;
+- PostgreSQL authoritative for application/workflow/durable job state;
 - no Redis dependency without measured need;
 - PostgreSQL pool cap 8;
-- request/DB deadline 3 seconds;
+- request/DB deadline discipline and bounded concurrency;
 - post-ID cursor pagination, never OFFSET;
-- bounded media lookup;
-- resolved immutable tag-ID search using existing indexes;
-- real search lexer/parser/AST;
+- bounded/indexed hot SQL and target-host measurements before accepting performance-sensitive work;
 - immutable numeric relational IDs; usernames never foreign keys;
-- content visibility is an allowed-visibility constraint, not merely search context.
+- content visibility is an allowed-visibility constraint, not merely search context;
+- local NVMe is the intended media/source store;
+- processing is at-least-once and durable external effects must be idempotent/deterministic.
 
-M2 target-host validation remains accepted. Do not reopen pool/index/search decisions without new evidence.
+The integrated media-job boundary retains readiness-first claim ordering, `FOR UPDATE SKIP LOCKED`, lease-generation fencing, post-lock real-time expiry checks, one-job worker concurrency, and no production polling loop/Redis wakeup dependency yet.
 
-## M3 durable media-job boundary — integrated
+## M3 ingestion/enqueue boundary — implemented on branch
 
-The first M3 slice establishes durable worker ownership/recovery before codecs or media processing.
+### Scope and intentional omissions
 
-Integrated architecture:
+This slice creates the source-ingestion/storage/enqueue boundary before codecs.
 
-- PostgreSQL is the only durable media-job authority;
-- existing `media_jobs` is extended rather than replaced;
-- `lease_generation` is a fencing token incremented on every successful claim/reclaim;
-- one atomic claim/reclaim statement uses `FOR UPDATE SKIP LOCKED` and returns at most one job;
-- expired jobs are reclaimed through the same bounded claim path;
-- final-attempt crashes terminalize on the next claim pass rather than creating attempt `max_attempts + 1`;
-- retryable failures return to pending with delayed `available_at`; non-retryable/exhausted failures are terminal;
-- non-running states clear claim/lease ownership fields;
-- processing is explicitly at-least-once, so future durable media side effects must use deterministic keys/upserts or equivalent atomic publication;
-- initial worker concurrency is one job at a time;
-- no production polling loop and no Redis wakeup dependency exist yet.
+It deliberately does **not** expose an HTTP posting route yet. Authentication is not implemented in M3 and Ginbar has no anonymous posting, so the service requires an explicit authenticated numeric `Actor.UserID` that a later auth-aware HTTP handler can supply.
 
-Claim ordering is readiness timestamp first, then priority and ID. `media_jobs_runnable_idx` matches that order. Priority is a tie-breaker among similarly ready work rather than strict global preemption.
+It also does not perform media sniffing, decoding, AVIF/video processing, duplicate policy, release, or regeneration. Those belong after the source contract is validated.
 
-Lifecycle correctness details:
+### Source schema
 
-- renew/complete/fail first lock the exact owned row via a materialized `SELECT ... FOR UPDATE` CTE and evaluate expiry afterward with `clock_timestamp()`;
-- a lifecycle operation that starts before expiry but waits on a row lock past expiry is rejected;
-- `claim_one` and `renew_lease` take positive `NonZeroU64` lease milliseconds, eliminating zero/sub-millisecond lease construction;
-- generation fencing rejects stale/wrong owners after reclaim;
-- no database transaction spans media processing.
+Migration `003_media_sources.sql` adds one authoritative source row per post:
 
-## M3 validation history
+- `post_id` primary key / FK to `posts`;
+- source type upload or URL;
+- unique relative `storage_key`;
+- effective source URL for URL imports only;
+- optional original upload name;
+- declared MIME as untrusted metadata;
+- positive byte size;
+- SHA-256;
+- bounded text lengths and origin consistency checks;
+- non-unique SHA-256 index for later exact-duplicate lookup without silently aliasing posts.
 
-### First gate — implementation defects found
+The existing `media` table remains the final processed-media record; source metadata is not forced into final width/height/duration fields before processing.
 
-Evidence ZIP: `m3-media-job-boundary-20261002T222824Z.zip`.
-Exact tested SHA: `c015fec556ed21b588d05c6c8371592addda7a49`.
+### Staging/storage workflow
 
-Found and fixed:
+`internal/ingest.LocalStore` stages bytes under one configured root:
 
-- lifecycle mutations used transaction-start `now()` and could wait past lease expiry yet still commit;
-- lease durations could truncate zero/sub-millisecond `Duration` values to zero;
-- Rust formatting and Clippy checks failed.
+1. stream to `.staging/` outside a DB transaction;
+2. enforce source byte limit using `max + 1` bounded reads;
+3. hash SHA-256 while writing;
+4. reject empty/oversized/cancelled inputs and remove partial temp files;
+5. `fsync` the staged file and set mode `0640`;
+6. publish to a random canonical relative key `sources/<shard>/<id>` using a no-overwrite hard link on the same filesystem;
+7. sync a newly created shard's parent directory and then the shard directory after publication.
 
-The same gate established that the claim path was already bounded and index-backed: the 100k mixed-queue runnable claim used `media_jobs_runnable_idx` and executed in about 0.564 ms; fresh idle lookup used three shared hits / about 0.222 ms. Target-host c1/c4 contention completed with zero errors.
+Directories are `0750`. Storage-key removal rejects traversal/noncanonical keys and syncs the containing directory.
 
-One immediately post-churn idle lookup touched 51,562 shared buffers. Treat this as MVCC/index-cleanup sensitivity evidence, not justification for a different claim query/index or Redis. There is still no production polling loop.
+Duplicate byte streams intentionally receive distinct random source keys. Exact/perceptual duplicate policy belongs to the processor/release workflow, not staging.
 
-### Second gate — implementation passed; committed fixture bug found
+### Service boundary and resource limits
 
-Evidence ZIP: `m3-media-job-boundary-revalidation-20261002T210832Z.zip`.
-Exact tested SHA: `ddef21300c4b8f4fbe8ecd1d5ca0bbc5dc5359fb`.
-Environment: Rust 1.99.0, PostgreSQL 17.11, Docker 28.5.1 on the target host.
+`internal/ingest.Service`:
 
-Passed:
+- requires authenticated positive numeric user ID and valid content filter before staging;
+- has explicit staging, DB, and cleanup timeouts;
+- bounds total concurrent ingestion workflows with a semaphore;
+- performs all byte streaming/downloads outside DB transactions;
+- uses a cancellation-independent bounded cleanup context for definite repository failures;
+- preserves a staged object on an ambiguous DB commit result, because deleting it could leave a successfully committed PostgreSQL row pointing at a missing file.
 
-- Rust fmt/check/Clippy/unit checks;
-- independent lock-wait expiry traces for complete/renew/fail;
-- positive `NonZeroU64` lease API checks;
-- SKIP LOCKED, single-owner race, crash/reclaim, retry, max-attempt, stale/wrong owner/generation, ownership clearing, and claim-once probes;
-- runnable 100k-job plan about 0.577 ms and fresh-idle plan about 0.215 ms;
-- c1: 1,000 transactions, zero errors, 2.681 ms average, 373.05 TPS;
-- c4: 4,000 transactions, zero errors, 2.744 ms average, 1457.68 TPS;
-- no material contention regression.
+A crash after source publication but before/while the DB transaction can still leave an unreferenced source object. This is safe for referenced rows but requires an orphan reconciliation/janitor path before production rollout.
 
-The only gate failure was the committed lock-wait regression fixture: after rejected completion, `claim_one` correctly reclaimed the same expired job while the fixture incorrectly locked a newly inserted job. Production behavior itself passed the independent traces.
+### URL import / SSRF boundary
 
-Fixture correction `7526bc60628c2dc68ccbabee12ed0b4be92aebeb` reuses the same job and asserts attempts/generations 1/1 -> 2/2 -> 3/3 so every lock targets the actual leased row.
+`HTTPURLFetcher`:
 
-### Final targeted gate — PASS
+- accepts only HTTP/HTTPS;
+- rejects userinfo, fragments, malformed/zero ports, loopback/private/link-local/multicast/unspecified and explicitly blocked special-purpose ranges;
+- disables environment HTTP proxies;
+- resolves destinations itself and dials the validated resolved IP directly;
+- revalidates redirects with a bounded redirect count;
+- enforces connect/TLS/response-header timeouts;
+- requires HTTP 200;
+- rejects declared `Content-Length` over the limit early;
+- relies on the local stager's independent byte cap for the authoritative bound, including decompressed/chunked bodies.
 
-Evidence ZIP: `m3-media-job-boundary-final-20261002T214437Z.zip`.
-Exact tested SHA: `23a41843503f70fbc1b471c9686bfb4602d16f71`.
-Uploaded ZIP SHA-256: `C641408284F0AC7A9D5859998048EADAC21E43AAA1C758FC34EF6EA4CA19EF2A`.
+### PostgreSQL atomic enqueue
 
-Verified from raw evidence:
+`postgres.Store.CreateIngestion` uses a short transaction and one data-modifying CTE round trip to atomically create:
 
-- exact SHA and merge-base were correct; checkout was clean;
-- diff since `ddef21300c4b8f4fbe8ecd1d5ca0bbc5dc5359fb` changed only `src/worker/v2/tests/job_state.rs` and `docs/v2/STATE.md`; production Rust/SQL/Go/manifests were unchanged;
-- `cargo fmt --check`, `cargo check --all-targets`, Clippy `-D warnings`, and no-DB tests all passed;
-- full PostgreSQL 17.11 suite passed: five committed DB integration tests, zero failures;
-- `mutations_recheck_expiry_after_row_lock_wait` passed 10/10 focused runs with zero failures, skips, timeouts, or observed flakes;
-- every focused run used clean disposable DB state and exercised one job through attempts/generations 1/1 -> 2/2 -> 3/3;
-- cleanup removed disposable DB/container/build/cache resources and the tested checkout was clean before disposal;
-- expensive claim-plan/contention benchmarks were intentionally not rerun because production code had not changed since the already-passed second gate.
+1. an unreleased post (`release_state = 0`);
+2. its `media_sources` row;
+3. one initial pending `media_jobs` row (`kind = 0`).
 
-Decision: durable media-job ownership/recovery boundary PASSES and is integrated into `v2`. No further tuning of this slice is justified by current evidence.
+No database transaction spans staging/download. A definite transaction/commit rollback permits source cleanup. A non-rollback commit error is surfaced as `ingest.ErrCommitOutcomeUnknown`, and the source object is preserved for reconciliation.
 
-## Remaining non-blocking observations
+The PostgreSQL integration test deliberately triggers a later `media_sources` constraint failure after a valid author/post insertion path and verifies `posts`, `media_sources`, and `media_jobs` all remain empty, proving transaction rollback across the authoritative triple rather than only an early FK failure.
 
-- Immediately post-churn idle lookup cost remains MVCC/index-cleanup sensitive even though fresh/steady lookups are bounded and index-backed. Revisit only when the production worker polling/wakeup mechanism exists and can be measured.
-- Extremely large positive lease millisecond values can exceed PostgreSQL timestamp/interval range and return a database error. Ordinary configured leases are unaffected; define a practical upper bound with the production worker-loop configuration instead of adding an arbitrary limit now.
+## Tests and provisional measurements
 
-## M3 next-slice constraints
+Committed unit coverage includes:
 
-The next media work should preserve these boundaries:
+- exact bytes/hash/stage/remove;
+- oversize and empty input cleanup;
+- cancellation cleanup;
+- duplicate bytes with distinct keys;
+- path traversal/noncanonical key rejection;
+- authenticated actor required before staging;
+- definite DB/service failure cleanup even after caller cancellation;
+- ambiguous commit preserves source;
+- effective URL metadata propagation;
+- one-slot concurrency bound and cancellation while waiting;
+- stage timeout;
+- URL syntax/address-range and private-DNS-answer rejection;
+- migration-set coverage;
+- PostgreSQL success and later-constraint rollback integration cases.
 
-- no anonymous posting path;
-- keep HTTP handlers thin and put ingestion/workflow logic behind explicit service/storage boundaries;
-- unreleased/processing posts must stay invisible to the public feed;
-- PostgreSQL remains authoritative for workflow/job state;
-- local NVMe is the intended media store;
-- stage inputs with bounded size/time/concurrency and cancellation;
-- avoid holding database transactions while streaming/downloading bytes;
-- enqueue durable processing work transactionally with the authoritative post/source state;
-- do not introduce Redis unless a measured wakeup/cache need appears;
-- do not start codec optimization before the source-ingestion/storage contract is coherent.
+A committed `BenchmarkLocalStoreStage8MiB` measures the durability path (stage + SHA-256 + fsync + publish + remove). A provisional local run in the current ChatGPT execution environment was about 6.6 ms/op / 1.27 GB/s for 8 MiB. This is **not** target-host evidence and must not be used as a production claim.
+
+Pure ingestion-package checks were run provisionally with the locally available Go toolchain and passed `go test` and `go vet`. The current runtime does not provide the required real PostgreSQL/target-host environment, so the full Go 1.25 + PostgreSQL 17 gate remains required.
+
+## Correctness/performance decisions
+
+- Keep file staging outside DB transactions; do not hold a PostgreSQL connection while the client/network streams bytes.
+- Keep one SQL round trip inside the short transaction for post/source/job creation.
+- Preserve files on ambiguous commit results; prefer an orphan that can be reconciled over a committed DB row whose source was deleted.
+- Do not content-address/alias source storage during ingestion; later duplicate processing may make policy decisions with full media context.
+- Keep URL SSRF enforcement in the fetcher rather than relying on application DNS or proxy configuration.
+- No Redis is justified by this slice.
+- No HTTP posting endpoint until authenticated user context exists.
+
+## Unresolved / next-gate observations
+
+- A process crash between source publication and authoritative DB commit can leave an unreferenced file. Add a safe orphan janitor/reconciliation design before production ingestion is enabled; do not solve it with eager deletion that risks referenced-data loss.
+- Deployment must ensure the Go API and future Rust worker share the media root with compatible UID/GID/permissions; current file/dir modes are `0640`/`0750`.
+- Declared MIME is untrusted metadata; actual type validation/sniffing belongs to worker processing.
+- URL imports currently allow any valid public TCP port; revisit only if product/security policy requires a narrower port allowlist.
+- No target-host staging throughput or real PostgreSQL transaction-latency measurement exists yet.
 
 ## Local-agent evidence workflow
 
@@ -149,4 +173,4 @@ For target-host work, use isolated/disposable resources and return one ZIP with 
 
 ## Single best next task
 
-Start the next M3 slice from current `v2`: design and implement the upload/URL-ingestion + durable-enqueue boundary before codecs. Define the minimal staging/source-storage metadata needed in the fresh schema, keep byte streaming/downloads outside DB transactions with explicit size/time/cancellation limits, create the unreleased post/source state and processing job atomically once the staged input is accepted, and keep the service boundary compatible with future authenticated user context rather than exposing anonymous posting. Validate DB/file cleanup on failures and cancellation, duplicate/partial-ingestion behavior, bounded resource use, and the hot SQL shapes before beginning AVIF/video processing.
+Run the execution-only M3 ingestion/enqueue validation gate against the exact branch SHA after this state-file commit: Go 1.25 format/test/vet/race checks; disposable PostgreSQL 17 migration and atomic success/later-failure rollback tests; filesystem cleanup/cancellation/permission checks; URL SSRF unit checks; target-host 8 MiB staging benchmark; and a small real-PostgreSQL ingestion transaction-latency benchmark. Return one raw-evidence ZIP. If any gate fails, fix this branch before considering fast-forward integration into `v2`.
