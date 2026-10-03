@@ -6,8 +6,10 @@ use crate::processing::{
 use image::codecs::png::PngDecoder;
 use image::codecs::webp::WebPDecoder;
 use image::imageops::FilterType;
-use image::{DynamicImage, GenericImageView, ImageDecoder, ImageFormat as CodecFormat, ImageReader};
-use rgb::ComponentSlice;
+use image::{
+    DynamicImage, GenericImageView, ImageDecoder, ImageFormat as CodecFormat, ImageReader,
+};
+use rgb::FromSlice;
 use std::io::{BufReader, Seek, SeekFrom};
 
 // These constants are part of processing contract v1. Changing an output-affecting
@@ -49,7 +51,8 @@ impl ImageProcessor for BoundedImageProcessor {
         validate_dimensions(decoded_width, decoded_height)?;
 
         let thumbnail = make_square_thumbnail(&image);
-        let main = if decoded_width > MAX_OUTPUT_DIMENSION || decoded_height > MAX_OUTPUT_DIMENSION {
+        let main = if decoded_width > MAX_OUTPUT_DIMENSION || decoded_height > MAX_OUTPUT_DIMENSION
+        {
             let resized = image.resize(
                 MAX_OUTPUT_DIMENSION,
                 MAX_OUTPUT_DIMENSION,
@@ -114,11 +117,9 @@ fn ensure_supported_still(source: &mut VerifiedSource) -> Result<(), ProcessErro
                 .file
                 .seek(SeekFrom::Start(0))
                 .map_err(|error| ProcessError::retryable(format!("rewind PNG source: {error}")))?;
-            let decoder = PngDecoder::with_limits(
-                BufReader::new(&mut source.file),
-                decode_limits(),
-            )
-            .map_err(|error| classify_decode_error("inspect PNG", error))?;
+            let decoder =
+                PngDecoder::with_limits(BufReader::new(&mut source.file), decode_limits())
+                    .map_err(|error| classify_decode_error("inspect PNG", error))?;
             if decoder
                 .is_apng()
                 .map_err(|error| classify_decode_error("inspect PNG animation", error))?
@@ -204,7 +205,9 @@ fn decode_limits() -> image::Limits {
 
 fn validate_dimensions(width: u32, height: u32) -> Result<(), ProcessError> {
     if width == 0 || height == 0 {
-        return Err(ProcessError::terminal("decoded image dimensions must be positive"));
+        return Err(ProcessError::terminal(
+            "decoded image dimensions must be positive",
+        ));
     }
     if width > MAX_INPUT_DIMENSION || height > MAX_INPUT_DIMENSION {
         return Err(ProcessError::terminal(format!(
@@ -227,7 +230,7 @@ fn make_square_thumbnail(image: &DynamicImage) -> DynamicImage {
     let y = (height - side) / 2;
     let view = image.view(x, y, side, side);
     DynamicImage::ImageRgba8(image::imageops::resize(
-        &view,
+        &*view,
         THUMBNAIL_DIMENSION,
         THUMBNAIL_DIMENSION,
         FilterType::Triangle,
@@ -253,9 +256,7 @@ fn encode_avif(image: &DynamicImage, quality: f32) -> Result<Vec<u8>, ProcessErr
 
 fn classify_decode_error(context: &str, error: image::ImageError) -> ProcessError {
     match error {
-        image::ImageError::IoError(error) => {
-            ProcessError::retryable(format!("{context}: {error}"))
-        }
+        image::ImageError::IoError(error) => ProcessError::retryable(format!("{context}: {error}")),
         other => ProcessError::terminal(format!("{context}: {other}")),
     }
 }
@@ -325,7 +326,8 @@ mod tests {
 
     #[test]
     fn thumbnail_key_is_derived_from_canonical_identity() {
-        let main = "media/01/513/v1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.avif";
+        let main =
+            "media/01/513/v1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.avif";
         assert_eq!(
             thumbnail_output_key(main).unwrap(),
             "media/01/513/v1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.thumb.avif"
