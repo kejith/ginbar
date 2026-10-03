@@ -1,7 +1,7 @@
 # Ginbar v2 State / Handoff
 
 Last updated: 2026-10-03
-Phase: M3 image-processing slice IMPLEMENTED ON FEATURE BRANCH — VALIDATION / TARGET MEASUREMENT PENDING
+Phase: M3 image-processing slice — FIRST TARGET GATE FAILED; CORRECTIVE PATCH READY FOR REVALIDATION
 Integration branch: `v2`
 Active feature branch: `astra/m3-image-processing`
 Legacy branch: `master` (read-only for rewrite work)
@@ -17,10 +17,12 @@ This file is the resume point. Read it before `PLAN.md`. Do not rely on chat his
 - M2 fresh schema + core Go API is complete and integrated.
 - M3 durable PostgreSQL media-job ownership/recovery boundary is complete and integrated.
 - M3 upload/URL-ingestion + durable-enqueue boundary is complete and integrated.
-- M3 Rust worker source-consumption/publication contract is complete, validated, and integrated.
+- M3 Rust worker source-consumption/fenced-publication contract is complete, validated, and integrated.
 - `v2` remains unchanged by the image-processing candidate at `e601c78486d219f97f98e55349209849f79c353f`.
-- `astra/m3-image-processing` was branched from that exact `v2` SHA. Image-processing implementation and README changes are present through `d057e6f5bc9950c46c425d3fcbec01642c12a4a0`; this state update is a documentation-only commit after that candidate SHA.
-- The image-processing candidate has **not** been compiled, tested, benchmarked, or integrated from this session because the available execution environment lacks the required Rust/target-host runtime. Do not infer a pass or performance result from code inspection.
+- `astra/m3-image-processing` was branched from that exact `v2` SHA.
+- First image-processing target gate tested `56ead29cc0f14fabf84469147faa65ecbe508a5f` and FAILED before tests/benchmarks because of formatting and Rust API compile errors.
+- Corrective source/formatting commits are present through `89935e37fef6c10ed3cf3a0379dcb57eae74fc12`; this document is the state-only commit after that corrective head.
+- The corrective head has not yet been compiled/tested/benchmarked. Do not infer a pass.
 - Worker v2 lives under `src/worker/v2`; legacy `src/worker` remains reference-only unless explicitly reviewed for reuse.
 - `.local-agent-results/` remains ignored for evidence ZIPs.
 
@@ -37,13 +39,13 @@ Keep unless new evidence contradicts them:
 - at-least-once processing requires deterministic/idempotent durable side effects;
 - initial production media-worker concurrency remains one job at a time;
 - source verification and codec/filesystem work stay outside DB transactions;
-- final publication is fenced by job ownership, lease generation, source identity, post eligibility, and post-lock real-time lease expiry.
+- final DB publication is fenced by job ownership, lease generation, source identity, post eligibility, and post-lock real-time lease expiry.
 
 The integrated durable-job boundary retains readiness-first `FOR UPDATE SKIP LOCKED` claiming, bounded retries, generation fencing, and no production polling loop yet.
 
 ## Integrated ingestion/enqueue boundary
 
-The prior ingestion slice remains validated:
+Validated behavior remains:
 
 - upload/URL bytes stage outside DB transactions;
 - `media_sources` stores authoritative source key, byte size, and SHA-256;
@@ -58,207 +60,126 @@ Accepted ingestion baselines:
 - PostgreSQL ingestion CTE c1: **0.348 ms**, **2,870.87 TPS**, zero errors;
 - PostgreSQL ingestion CTE c4: **0.457 ms**, **8,761.36 TPS**, zero errors.
 
-## Integrated worker source-consumption / publication contract
+## Integrated worker source/publication contract
 
-### Source preparation
+`src/worker/v2/src/processing.rs` validates source-key grammar/path containment, rejects symlinks, enforces source byte limits, verifies filesystem size + full SHA-256, sniffs actual bytes, and rewinds the verified handle before processor dispatch. Filesystem/database I/O and cancellation are retryable; integrity/type/key/path failures are terminal.
 
-`src/worker/v2/src/processing.rs` provides the validated kind-0 source boundary:
-
-- load authoritative `media_sources` by immutable post ID;
-- exact source-key grammar validation;
-- canonical shared-root containment checks;
-- reject symlink source files and shard directories;
-- enforce configured maximum source bytes;
-- compare filesystem and DB byte sizes;
-- stream with a fixed 128 KiB buffer while checking cancellation;
-- verify full SHA-256 against authoritative source metadata;
-- sniff actual bytes instead of trusting declared MIME;
-- rewind and pass the same verified file handle to processor dispatch.
-
-Recognized routing families are JPEG, PNG, GIF, WebP, AVIF/HEIF-family ISO-BMFF images, MP4-family video, and EBML-family video. This is family routing only; concrete codecs still own full parse/decode validation.
-
-Error classification is explicit: database/filesystem I/O and cancellation are retryable; missing source, unsupported job kind, invalid digest/key/path, integrity mismatch, and unsupported media type are terminal.
-
-### Processor boundary and deterministic identity
-
-`ImageProcessor` and `VideoProcessor` are explicit traits. The integrated `v2` branch still contains only the validated boundary; the first concrete `ImageProcessor` exists only on the unvalidated feature branch described below.
-
-Processed output identity is deterministic and versioned:
+Processed identity remains deterministic and versioned:
 
 `media/<post shard>/<post id>/v<processing version>-<source SHA-256>.<format>`
 
-Identity binds immutable post ID, verified source digest, processing-contract version, and output format. At-least-once retries therefore have a stable side-effect target. A processing algorithm that changes output semantics must advance the processing version instead of silently reusing incompatible keys.
+`src/worker/v2/src/publication.rs` is the validated short DB commit point after durable output work. It fences exact running job ownership/generation, authoritative source SHA-256, post eligibility, and post-lock lease expiry; accepts an existing media row only when deterministic storage key and output digest agree; releases the post only after ready media exists; and succeeds/clears the job only after the whole publication statement succeeds.
 
-### Fenced processed-media publication
+### Accepted target-host baselines
 
-`src/worker/v2/src/publication.rs` is the short authoritative commit point after durable output-file work.
-
-The validated single PostgreSQL statement:
-
-1. identifies the exact running kind-0 job by job ID, post ID, worker ID and lease generation;
-2. requires current authoritative `media_sources.sha256` to equal the verified source digest;
-3. requires the post to be undeleted and in releasable state `(0,1)` **before** any media write;
-4. `FOR UPDATE`-locks both job and post;
-5. rechecks lease expiry with `clock_timestamp()` after lock acquisition;
-6. inserts ready `media`, or accepts an existing row only when deterministic storage key and output SHA-256 match;
-7. releases the post only after a ready media row is accepted;
-8. succeeds the job and clears ownership only after media + release succeed.
-
-Rust-side validation additionally requires the deterministic output key to embed the same verified source digest.
-
-Rejected stale/expired/source-changed/deleted/non-releasable/conflicting cases leave no unintended ready media, do not release the post, and do not succeed the job.
-
-## Worker processing validation history
-
-### First full gate — FAIL
-
-Evidence ZIP: `m3-worker-processing-contract-20261003T011708Z.zip`.
-ZIP SHA-256: `205DF7A3F16E2964B9779E0D36DCCE0E8DB4B199BF5A4C8C62A601FEADA1EB76`.
-Exact tested SHA: `4a9a5e1a4296871945146ea15dcfce6b419169ba`.
-
-The full gate passed source/path/integrity behavior, full PostgreSQL tests, fencing, query-plan shape, lock-wait expiry, cleanup, and target measurements. It failed on three items:
-
-- `cargo fmt --check` formatting differences;
-- Rust 1.99 Clippy `chunks_exact_to_as_chunks` denial;
-- a real SQL ordering defect where a soft-deleted post could receive ready `media` before the later release update rejected it.
-
-Corrective commits applied formatting, used `as_chunks::<4>()`, moved post eligibility/locking ahead of media insertion, and added committed deleted/non-releasable regressions.
-
-### Final targeted gate — PASS
-
-Evidence ZIP: `m3-worker-processing-contract-final-20261003T013900Z.zip`.
-ZIP SHA-256: `14DA7E1C4B8FB5495EFA6D2C1C920FD01CCF724F7441EFE5A928887216238ACB`.
-Exact tested SHA: `37ba916fad6e265f8e8ffde7b742533f8c55425a`.
-Environment: Ubuntu 24.04.3, Linux 6.8.0-88-generic, Intel i7-7700, Rust 1.99.0, Cargo 1.99.0, PostgreSQL 17.11, ext4 on local mirrored NVMe. Resolved production `sha2`: **0.10.9**.
-
-Verified from raw evidence:
-
-- exact feature SHA, exact `v2` merge base, expected four-file corrective delta, and unchanged `master`;
-- `cargo fmt --check`, `cargo check`, and `cargo clippy --all-targets -- -D warnings` passed;
-- no-DB run: 8 unit tests passed; only DB-backed tests emitted the intentional unset-URL skip markers;
-- PostgreSQL run: 8 unit + 5 durable-job + 5 processing-contract tests passed; zero DB-enabled skips;
-- deleted/non-releasable publication regression: **10/10**, zero failures/flakes/skips/timeouts;
-- publication lock-wait expiry regression: **10/10**, zero failures/flakes/skips/timeouts;
-- predecessor durable-job post-lock expiry regression passed;
-- focused wrong-owner, stale-generation, source-digest-change, already-expired, existing-media-conflict, deleted-post, and success probes all executed and passed;
-- success path produced exactly one ready media row, released the post, succeeded/cleared the job, and confirmed source verification occurred outside a DB transaction;
-- corrected query plan used bounded indexed access and locked job/post eligibility before `written_media`; no unbounded sequential scan appeared;
-- cleanup removed the disposable database/container/network/checkouts/build outputs while leaving repository refs and production state untouched.
-
-Some harness/setup attempts were corrected during the gate (missing Rust components in the first disposable container, PostgreSQL readiness timing, malformed `cargo tree` package syntax, and an initial zero-test benchmark filter). Final evidence files are from the corrected executions; none of those attempts was counted as a product pass.
-
-Decision: the worker source-consumption/publication contract PASSES and is integrated into `v2`.
-
-## Accepted target-host worker baselines
-
-### Source open + verify + sniff + rewind
-
-Release mode, warm page cache, 128 KiB verification buffer, 15 operations per size:
+Source open + verify + sniff + rewind, release mode, warm cache:
 
 - 8 MiB: **35.104 ms**, **227.91 MiB/s**;
 - 64 MiB: **298.757 ms**, **214.92 MiB/s**;
 - 256 MiB: **1,122.598 ms**, **228.05 MiB/s**.
 
-These remain the baseline until source verification architecture materially changes. They measure source preparation only, not decode/encode.
+Corrected fenced publication SQL, PostgreSQL 17.11:
 
-### Corrected publication SQL
-
-PostgreSQL 17.11, concurrency 1, 1,000 unique successful publications:
-
-- **1,000/1,000**, zero errors;
-- **1.539 ms average statement latency**;
+- 1,000/1,000 successful unique publications;
+- **1.539 ms** average statement latency;
 - **644.22 TPS**;
-- final state: 1,000 ready media rows, 1,000 released posts, 1,000 succeeded jobs.
+- bounded indexed plan, no unbounded sequential scan; one-row execution **0.949 ms**.
 
-The corrected one-row `EXPLAIN (ANALYZE, BUFFERS)` used bounded index paths for job/source/post/media, with no unbounded sequential scan; execution time was **0.949 ms**. Top-level buffers: shared hit=58, read=4, dirtied=11, written=6.
+The prior source/publication-contract final evidence ZIP was `m3-worker-processing-contract-final-20261003T013900Z.zip`, SHA-256 `14DA7E1C4B8FB5495EFA6D2C1C920FD01CCF724F7441EFE5A928887216238ACB`, exact tested SHA `37ba916fad6e265f8e8ffde7b742533f8c55425a`; that contract PASSED and is integrated.
 
-The pre-fix 1.419 ms / 698.34 TPS measurement is historical only and must not be used as the accepted publication baseline.
+## M3 image-processing candidate
 
-## M3 image-processing candidate — unvalidated
+### Durable no-overwrite output publication
 
-Feature branch: `astra/m3-image-processing`, based exactly on `v2` `e601c78486d219f97f98e55349209849f79c353f`.
-Implementation/README candidate before this state-only commit: `d057e6f5bc9950c46c425d3fcbec01642c12a4a0`.
+`src/worker/v2/src/output.rs` implements local-filesystem durable publication:
 
-### Durable output publication
-
-New `src/worker/v2/src/output.rs` implements a local-filesystem no-overwrite publication protocol:
-
-- output keys must be relative under `media/` with normal path components;
-- output root and directory components reject symlinks/non-directories;
+- output keys are relative under `media/` with normal path components;
+- output directory components reject symlinks/non-directories;
 - same-directory staging uses `create_new`;
-- complete staged bytes are written and file-`fsync`ed;
-- final publication uses same-filesystem `hard_link`, which fails rather than replacing an existing destination;
-- the containing directory is `fsync`ed after final publication;
-- the staging name is removed and the directory is `fsync`ed again;
-- retries encountering an existing final stream and verify exact byte size + SHA-256 before accepting it as idempotent reuse;
+- full staged bytes are written and file-`fsync`ed;
+- final publication uses same-filesystem `hard_link`, which cannot replace an existing destination;
+- containing directory is `fsync`ed after publication;
+- staging file is removed and directory is `fsync`ed again;
+- retries verify existing final byte size + SHA-256 before idempotent reuse;
 - different bytes at the deterministic target are a terminal collision and are never overwritten.
 
-Unit tests inject crashes after staging-file fsync and after final directory fsync, and cover exact reuse plus collision preservation. A process crash can leave a hidden staging orphan; this is safe for correctness but needs later janitor/housekeeping.
-
-This protocol assumes the deployment media root is a local filesystem with normal same-directory hard-link/fsync durability semantics. The target ext4/NVMe host must validate that assumption.
+Unit tests inject crashes after staged-file fsync and after final-directory fsync and cover exact reuse/collision preservation. Hidden staging orphans can remain after process death; correctness is safe, housekeeping remains future work.
 
 ### Bounded still-image processor
 
-New `src/worker/v2/src/image.rs` implements `BoundedImageProcessor`.
-
-Current supported still input is deliberately narrow:
+`src/worker/v2/src/image.rs` implements `BoundedImageProcessor` for:
 
 - JPEG;
 - non-animated PNG;
 - non-animated WebP.
 
-Animated PNG/WebP, GIF, AVIF/HEIF input, and video are terminal in this processing version rather than silently flattening or partially decoding them. Video remains out of this slice.
+Animated PNG/WebP, GIF, AVIF/HEIF input, and video are terminal for this processing version rather than silently flattening/partially decoding them. Video remains out of this slice.
 
-The candidate:
+Candidate processing-version-1 constants/behavior:
 
-- fully decodes before any durable output publication;
-- reads/applies decoder orientation and revalidates dimensions afterward;
-- caps input dimension at 16,384 px, decoded pixels at 80,000,000, and decoder allocation hint at 384 MiB;
-- downsizes the canonical image to fit 1,280 px without upscaling;
-- center-crops by view and directly resizes the thumbnail to 256x256 without materializing a full-size crop buffer;
-- explicitly drops the original full decode after a main-image downsize to reduce peak retained memory;
-- encodes both outputs before publishing either file;
-- uses `ravif` with explicit one-thread encoding, speed 10, main quality 75, thumbnail quality 60;
-- builds `image` without default features and enables only JPEG/PNG/WebP decoding;
-- publishes a deterministic auxiliary `<canonical stem>.thumb.avif` first and the integrated canonical `processed_output_key(...).avif` second;
-- returns canonical AVIF SHA-256/size/dimensions to the already-validated fenced DB publication path.
+- full decode before durable output publication;
+- decoder orientation applied, dimensions revalidated afterward;
+- input max dimension 16,384 px;
+- max decoded pixels 80,000,000;
+- decoder allocation hint 384 MiB;
+- canonical image fits within 1,280 px without upscaling;
+- center-crop view is resized directly to a 256x256 thumbnail without materializing the full crop;
+- original full decode is dropped after main-image downsize;
+- both AVIF objects encode before either is durably published;
+- `ravif`: explicit one encoder thread, speed 10, main quality 75, thumbnail quality 60;
+- `image` default features disabled; JPEG/PNG/WebP only;
+- deterministic auxiliary `<canonical stem>.thumb.avif` published first, canonical deterministic `.avif` second;
+- canonical AVIF SHA-256/size/dimensions feed the already-validated fenced DB publication.
 
-Those codec limits/quality/speed settings are **candidate processing-version-1 constants**, not accepted production settings yet. Any output-affecting change after integration requires advancing `PROCESSING_VERSION`.
+Any output-affecting change after integration requires advancing `PROCESSING_VERSION`.
 
-### Execution path and tests
+`src/worker/v2/src/main.rs` provides `process-once` only; it is not a production polling loop. It claims one job, verifies the source, performs bounded still-image processing, durably publishes outputs, then calls the fenced DB publication. Long-running lease renewal is not yet implemented; validation uses a comfortably long probe lease.
 
-`src/worker/v2/src/main.rs` now has a `process-once` probe that claims, verifies, processes, durably publishes, and then executes the existing fenced DB publication for at most one still-image job. It is not a production polling loop. `GINBAR_MEDIA_ROOT` is required; source size defaults to 512 MiB; target probes should use a lease comfortably above measured one-image duration because periodic renewal during codec work is not implemented in this probe.
+`src/worker/v2/tests/image_pipeline.rs` adds PostgreSQL-backed crash-before-DB retry/idempotency and deterministic canonical-key collision regressions. `examples/image_bench.rs` separates source verification from decode/transform/AVIF/durable-publication timing and uses fresh post IDs to prevent output reuse from faking codec performance.
 
-New PostgreSQL-backed `tests/image_pipeline.rs` covers:
+## First image-processing target gate — FAIL
 
-- crash after both durable output files but before DB publication, followed by lease expiry/reclaim, deterministic file reuse, and successful fenced retry;
-- deterministic canonical-key collision preserving unrelated bytes and preventing DB media publication/post release.
+Evidence ZIP: `m3-image-processing-20261003T123812Z.zip`.
+ZIP SHA-256: `1153CB218BC4654B0E57252236EBC638C87A02A7A124C3A7B51D6AA6E5EB9322`.
+Exact tested SHA: `56ead29cc0f14fabf84469147faa65ecbe508a5f`.
+Observed merge base: exact `v2` `e601c78486d219f97f98e55349209849f79c353f`.
+Target: Ubuntu 24.04.3, Linux 6.8.0-88-generic, Intel i7-7700, 62 GiB RAM, ext4 `/dev/md2` RAID1 over two NVMe devices.
 
-New `examples/image_bench.rs` times verified-source preparation separately from decode/transform/AVIF/durable-publication and uses a fresh post ID each iteration so output reuse cannot fake codec performance.
+Important methodology deviation: the disposable build container used **Rust/Cargo 1.94.0**, not the requested 1.99.0. Therefore even a successful result from this run would not have satisfied the intended toolchain gate. The observed source/API failures are still actionable and were corrected; the next successful validation must use Rust 1.99.x.
 
-### Validation status and unresolved gates
+Raw evidence showed:
 
-No local or target execution result exists yet for this candidate. Required before integration:
+- `cargo fmt --check`: FAIL; rustfmt changes were required in `examples/image_bench.rs`, `src/image.rs`, `src/output.rs`, `src/main.rs`, and `tests/image_pipeline.rs`;
+- `cargo check`: FAIL with `E0277` because `SubImage<&DynamicImage>` itself did not satisfy `GenericImageView` at the direct resize call;
+- `cargo check`: FAIL with `E0599` because `as_rgba` is supplied by `rgb::FromSlice`, while the candidate imported `ComponentSlice`;
+- Clippy failed on the same compile errors and rejected the unused `ComponentSlice` import under `-D warnings`;
+- no-DB `cargo test` failed at compilation, so no tests executed;
+- dependency trees succeeded and resolved `image 0.25.10`, `ravif 0.13.0`, `rav1e 0.8.1`, `rgb 0.8.52`, `rayon 1.12.0`, `rayon-core 1.13.0`, `maybe-rayon 0.1.1`, root `sha2 0.10.9`, and transitive `sha2 0.11.0`;
+- generated disposable `Cargo.lock` SHA-256: `4B355C9016EF56D71C78D4CFCC347BF0A6FD2F3DBA8E6F36465B6D3EDEDAA74A`;
+- because the correctness gate failed, no release build, DB-enabled tests, codec/resource benchmarks, API load measurements, or process/thread measurements ran;
+- server cleanup restored all pre-existing services/containers; raw remote evidence was retained by the executor for follow-up.
 
-- exact-SHA `cargo fmt --check`, `cargo check`, and `cargo clippy --all-targets -- -D warnings` on Rust 1.99;
-- no-DB and disposable-PostgreSQL full test runs, including all predecessor worker tests and new image tests;
-- confirm `image` / `ravif` / `rav1e` / `rgb` resolved versions and inspect any generated `Cargo.lock`; the v2 worker still has no committed lock, so transitive build/output reproducibility must be decided before production integration;
-- real supported-media codec benchmarks on the target host, with raw per-image verify/process timings, output sizes, CPU, RSS, and environment/tool/dependency versions;
-- a large-but-valid synthetic input resource probe to test the candidate memory/pixel limits;
-- matched same-run API latency/throughput measurements with and without one concurrent worker image job, using the existing v2 HTTP benchmark harness and disposable database/media root; report p50/p95/p99/max/RPS/errors and resource samples rather than claiming a speedup from design alone;
-- verify the worker remains one job at a time and AVIF encoder thread count remains bounded during the load measurement;
-- verify cleanup leaves production/Wallium and repository refs/state untouched.
+### Corrective patch after failed gate
 
-Potential compile issue to settle from evidence rather than guesswork: the candidate uses `rgb::ComponentSlice` because `ravif` 0.13 documents that conversion path; if Rust 1.99 Clippy/deprecation warnings reject it under `-D warnings`, change it only after capturing the exact failure.
+No output semantics/constants were changed.
+
+- `385ec92061920a8751f7931c9e9a161e65dbf3ae`: changed the crop resize to borrow the dereferenced `SubImageInner` (`&*view`), which is the `image 0.25.10` type implementing `GenericImageView`; changed the RGB slice trait import to `rgb::FromSlice`; applied rustfmt changes in `src/image.rs`.
+- `098d1b9b58e94d48d5eb0dcfe9620f73eeccb888`: applied captured rustfmt changes to `examples/image_bench.rs`.
+- `42d416afce7d3e70be3448767101022073fc9a6e`: applied captured rustfmt changes to `src/output.rs`.
+- `b34ac39085da4f67157989b2d8447b1f03690bd6`: applied captured rustfmt changes to `src/main.rs`.
+- `89935e37fef6c10ed3cf3a0379dcb57eae74fc12`: applied captured rustfmt changes to `tests/image_pipeline.rs`.
+
+This primary session has no Rust toolchain, so those corrective commits are inspection-derived and **unvalidated**. Do not merge to `v2` until revalidation passes.
 
 ## Remaining observations
 
-- The durable output/codec work above exists only on the unvalidated feature branch; integrated `v2` still intentionally stops at the source/processor/publication contract.
-- Standard-library canonicalization + symlink checks are not equivalent to Linux `openat2`/`O_NOFOLLOW` race-proof resolution against a malicious concurrent local filesystem writer. The current media tree is service-controlled; revisit only if that threat model changes.
-- Full source SHA-256 verification costs one sequential read before codec consumption. Do not redesign it without real codec/profile evidence.
-- A process crash between ingestion source publication and authoritative DB commit can leave an unreferenced source file. Orphan reconciliation/janitor remains required before production ingestion is enabled.
-- Processed-output staging orphans are similarly possible after process death and need eventual housekeeping, though deterministic final publication remains correct.
-- The one-shot image command does not renew its lease during long codec work; the target gate must use a sufficiently long probe lease. A production runner will need a measured renewal/cancellation strategy before long-running workloads are enabled.
+- The image/output work still exists only on the feature branch; integrated `v2` intentionally remains at the source/processor/fenced-publication boundary.
+- The target evidence confirms ext4 on local mirrored NVMe, but output crash/idempotency tests did not execute because compilation failed.
+- Full source SHA-256 verification still costs one sequential read before codec consumption; do not redesign without profile/codec evidence.
+- Standard-library canonicalization + symlink checks are not equivalent to Linux `openat2`/`O_NOFOLLOW` against a malicious concurrent local filesystem writer; the media tree remains service-controlled.
+- Ingestion source orphans and processed-output staging orphans need eventual janitor/reconciliation work before production enablement.
+- `ravif`/`rav1e` pull Rayon/threading support transitively even though the candidate sets `with_num_threads(Some(1))`; runtime CPU/thread behavior must still be measured.
+- The generated v2 `Cargo.lock` is currently evidence only. Because this worker is an application/binary, committing a lockfile is likely appropriate for reproducible production builds, but make that decision after the corrected Rust 1.99 correctness gate confirms the resolved graph.
 - Deployment must ensure Go API and Rust worker share the media root with compatible UID/GID/permissions.
 
 ## Local-agent evidence workflow
@@ -267,4 +188,4 @@ For target-host work, use isolated/disposable resources and return one ZIP with 
 
 ## Single best next task
 
-Run the complete read-only/execution-only target-host validation gate against the exact `astra/m3-image-processing` state commit: compile/lint/test the candidate and predecessor contracts, run real image codec/resource benchmarks, and run matched API baseline versus one concurrent worker image job on disposable state. Return one raw evidence ZIP. Analyze that evidence here, fix/tune the feature branch if needed, then integrate into `v2` only after the gate passes and the API-latency/resource impact is acceptable.
+Run a **targeted corrective correctness gate first** against the exact current `astra/m3-image-processing` head using Rust/Cargo **1.99.x**: verify exact SHA/merge base, run `cargo fmt --check`, `cargo check`, `cargo clippy --all-targets -- -D warnings`, no-DB tests, dependency trees, and disposable-PostgreSQL full tests. Do not run codec/API benchmarks unless that correctness gate passes. If it passes, continue in the same evidence run with the previously specified real-media codec/resource benchmarks and matched API baseline-vs-one-worker latency/resource measurements, then return one raw evidence ZIP. Integrate into `v2` only after those results are reviewed here and accepted.
