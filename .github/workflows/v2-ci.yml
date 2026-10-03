@@ -1,0 +1,56 @@
+name: v2 CI
+
+on:
+  push:
+    branches:
+      - v2
+      - 'astra/**'
+    paths:
+      - '.github/workflows/v2-ci.yml'
+      - '.gitignore'
+      - 'go.work'
+      - 'scripts/v2-ci.sh'
+      - 'src/backend/v2/**'
+      - 'src/frontend/**'
+      - 'src/worker/v2/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v2-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  correctness:
+    name: correctness
+    runs-on: [self-hosted, Linux, X64, amp-isolated]
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          clean: true
+
+      - name: Verify checkout
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git status --short --branch
+
+      - name: Run scoped v2 correctness gate
+        shell: bash
+        env:
+          GINBAR_CI_BASE_SHA: ${{ github.event.before }}
+        run: bash scripts/v2-ci.sh auto "$GINBAR_CI_BASE_SHA"
+
+      - name: Verify tracked checkout remained unchanged
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code
+          test -z "$(git status --porcelain --untracked-files=no)"
