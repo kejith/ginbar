@@ -1,7 +1,7 @@
 # Ginbar v2 State / Handoff
 
 Last updated: 2026-10-03
-Phase: M3 image-processing slice — CORRECTNESS PASSED; CPU-INTERFERENCE GATE STILL BLOCKS INTEGRATION
+Phase: M3 image-processing slice — CORRECTNESS PASSED; PEAK-LOAD CPU COEXISTENCE UNSOLVED; LOAD-SENSITIVITY GATE NEXT
 Integration branch: `v2`
 Active feature branch: `astra/m3-image-processing`
 Legacy branch: `master` (read-only for rewrite work)
@@ -19,11 +19,13 @@ This file is the resume point. Read it before `PLAN.md`. Do not rely on chat his
 - M3 durable PostgreSQL media-job ownership/recovery boundary is integrated.
 - M3 upload/URL-ingestion + durable-enqueue boundary is integrated.
 - M3 Rust worker source-consumption/fenced-publication contract is integrated.
-- Image-processing source candidate accepted for correctness/release behavior: `e53605838075509800efeaa644319d29e18587f2` on `astra/m3-image-processing`, based exactly on `v2` `e601c78486d219f97f98e55349209849f79c353f`.
-- Later commits on the feature branch are state-only; image-processing source semantics have not changed since `e536058...`.
-- Do **not** merge to `v2` yet. Target-host CPU/API interference remains unresolved.
+- Image-processing source candidate accepted for correctness/release behavior: `e53605838075509800efeaa644319d29e18587f2`, based exactly on `v2` `e601c78486d219f97f98e55349209849f79c353f`.
+- Later feature-branch commits are state/history-only; image-processing source semantics have not changed since `e536058...`.
+- Do **not** merge to `v2` yet. The current target host cannot demonstrate acceptable coexistence between the CPU-heavy worker and the API at the existing closed-loop saturation benchmark.
 - Worker v2 lives under `src/worker/v2`; legacy `src/worker` remains reference-only.
 - `.local-agent-results/` remains ignored for evidence ZIPs.
+
+Two transient feature-branch commits attempted then reverted a `Cargo.lock` import because the primary session could not guarantee byte-for-byte identity through that write path. Net tree effect is zero. The exact validated lock bytes remain in the core-isolation evidence ZIP and are not yet committed.
 
 ## Retained architecture / decisions
 
@@ -41,7 +43,7 @@ Keep unless evidence contradicts them:
 - initial media-worker concurrency is one job at a time;
 - source verification and codec/filesystem work stay outside DB transactions;
 - final media publication is fenced by job ownership/generation, source identity, post eligibility, and post-lock real-time lease expiry;
-- worker scheduling/resource policy must protect API latency under concurrent processing; one-job concurrency by itself is insufficient.
+- worker scheduling/resource policy must protect API latency under realistic concurrent load; a max-throughput saturation benchmark is useful capacity evidence but should not by itself define an impossible zero-interference requirement on a fully utilized 4-core host.
 
 ## Integrated performance baselines
 
@@ -112,7 +114,9 @@ Accepted correctness results:
 - deterministic collision preservation/no DB release: pass;
 - six end-to-end jobs: exactly-once ready media publication, cleared ownership, released posts, canonical/thumbnail files present, DB/filesystem SHA matching, unrelated sentinel unchanged.
 
-Resolved dependency lock SHA-256 repeatedly equals `4B355C9016EF56D71C78D4CFCC347BF0A6FD2F3DBA8E6F36465B6D3EDEDAA74A`. The preceding corrective ZIP contains the actual lock bytes. Because this is an application binary and AVIF output/performance is dependency-sensitive, committing this exact `Cargo.lock` remains intended before integration, but not before the performance architecture is accepted.
+Resolved dependency lock SHA-256 repeatedly equals `4B355C9016EF56D71C78D4CFCC347BF0A6FD2F3DBA8E6F36465B6D3EDEDAA74A`.
+
+The core-isolation evidence ZIP now contains the exact generated `Cargo.lock` bytes with that SHA-256. Commit those exact bytes only through a path that can verify byte identity afterward, then rerun `cargo check --locked`/tests before integration.
 
 Accepted codec/resource measurements, five iterations each:
 
@@ -124,7 +128,7 @@ Accepted codec/resource measurements, five iterations each:
 
 ## API interference history
 
-### Unisolated final gate — BLOCKING
+### Unisolated saturation gate — BLOCKING AS PEAK-CAPACITY EVIDENCE
 
 Existing `httpbench.go`, `/api/v2/posts/49999/around?radius=30`, concurrency 8, 2,000 requests, three baseline + three valid worker-overlap rounds:
 
@@ -135,55 +139,78 @@ Existing `httpbench.go`, `/api/v2/posts/49999/around?radius=30`, concurrency 8, 
 | p99 | 5.678 ms | 6.884 ms | **+21.24%** |
 | throughput | 2,386.6 req/s | 2,106.6 req/s | **-11.73%** |
 
-Worker used roughly one CPU and ~370 MiB RSS. This blocked integration and led to the CPU-isolation experiment.
+Worker used roughly one CPU and ~370 MiB RSS.
 
-### CPU scheduling/isolation experiment — WEIGHT/QUOTA NOT SUFFICIENT
+### CPU weight/quota experiment — NOT SUFFICIENT
 
-Evidence ZIP: `m3-image-processing-cpu-isolation-20261003T152345Z.zip`.
-ZIP SHA-256: `C95822B7C84AFFDF69D85AC9899E69D6169B88F0A12AA090B8B54D27B9168A04`.
-Source semantics remained the accepted `e536058...`; branch HEAD at experiment start was state-only `da6ddf4a53582cc602aa32a56ece73630d0aa5c4`.
+Evidence ZIP: `m3-image-processing-cpu-isolation-20261003T152345Z.zip`, SHA-256 `C95822B7C84AFFDF69D85AC9899E69D6169B88F0A12AA090B8B54D27B9168A04`.
 
-Methodology:
+Five balanced rounds per policy, exactly one active worker job during valid loaded intervals, 24/24 integrity fixtures passed.
 
-- five interleaved baseline rounds;
-- five balanced primary rounds each for unrestricted worker, low CPU weight, and 0.5-CPU quota;
-- 2,000 requests per round, concurrency 8;
-- exactly one active worker job before/after every valid loaded HTTP interval;
-- 17 total valid loaded rounds retained in raw evidence (B=6, C=6, D=5);
-- 24/24 media/job fixture integrity audits passed;
-- all primary rounds had 2,000 HTTP 200 responses and zero errors;
-- cleanup restored the pre-run Docker container/network inventory exactly.
+| Policy | p95 vs baseline | p99 vs baseline | throughput vs baseline |
+| --- | ---: | ---: | ---: |
+| unrestricted | **+32.37%** | +46.28% | **-15.79%** |
+| low weight (`cpu.weight=10`) | **+32.64%** | +37.91% | **-14.96%** |
+| 0.5 CPU quota | **+24.10%** | +25.20% | **-10.81%** |
 
-Observed worker policies:
+Low scheduling weight was ineffective. The 0.5-CPU hard cap still left material interference and stretched the standalone 8192x8192 job from **2.04 s** to **7.53 s** (3.69x slower).
 
-- B unrestricted: `cpu.weight=100`, no quota;
-- C Docker `--cpu-shares 256`: actual cgroup v2 `cpu.weight=10`, no quota;
-- D Docker `--cpus 0.5`: `cpu.max=50000 100000`, default weight.
+### Physical-core cpuset experiment — ALSO NOT SUFFICIENT AT SATURATION
 
-Median API results across five balanced rounds:
+Evidence ZIP: `m3-image-processing-core-isolation-20261003T155243Z.zip`.
+ZIP SHA-256: `316CC0036675A0E54C6A0E0F4922EF39A9323A2AA5044009F55932FDE45E40B6`.
+Experiment feature HEAD: `411b3c1d1f1ddf57d09f614156920be3427054fd`; processing source remained `e536058...`.
 
-| Policy | p95 | p95 vs baseline | p99 vs baseline | throughput vs baseline |
-| --- | ---: | ---: | ---: | ---: |
-| baseline | 4.761 ms | — | — | 2,402.6 req/s |
-| unrestricted | 6.303 ms | **+32.37%** | +46.28% | **-15.79%** |
-| low weight (`cpu.weight=10`) | 6.316 ms | **+32.64%** | +37.91% | **-14.96%** |
-| 0.5 CPU quota | 5.909 ms | **+24.10%** | +25.20% | **-10.81%** |
+Evidence quality:
 
-Interpretation:
+- embedded SHA-256 manifest verified all 442 payload files;
+- exact generated `Cargo.lock` recovered and verified at accepted SHA-256 `4B355C...AA74A`;
+- all 20 balanced primary rounds passed validity gates;
+- all 13 worker fixtures passed integrity;
+- all ten loaded primary rounds kept exactly one active job through the HTTP interval;
+- pre-existing Docker/container/network state was restored; raw remote evidence retained.
 
-- Low scheduling weight did not materially protect p95 versus unrestricted processing.
-- A 0.5-CPU hard cap reduced interference, but still left a material ~24% p95 regression.
-- The 0.5-CPU cap also stretched the standalone 8192x8192 job from **2.04 s** unrestricted to **7.53 s** (3.69x slower), with 112 median throttled periods and ~11.8 s median throttled-usec across loaded rounds.
-- Therefore neither tested policy is acceptable as the final production scheduling policy.
+Conditions:
 
-Critical CPU-topology/context finding:
+- A: API/PG `0-7`, no worker;
+- B: API/PG `0-2,4-6`, no worker (reserve physical core `3/7`);
+- C: API/PG `0-7`, worker `3,7`;
+- D: API/PG `0-2,4-6`, worker `3,7`.
 
-- i7-7700 topology pairs logical CPUs by physical core as `0/4`, `1/5`, `2/6`, `3/7`.
-- Under the saturated around-post benchmark, API samples commonly consume about **0.9-1.2 logical CPUs** while PostgreSQL consumes roughly **3.7-5.1 logical CPUs** before the media worker is added.
-- The worker adds about **1.0-1.1 logical CPUs** unrestricted.
-- The host is therefore already close to CPU saturation in this benchmark. CFS weight/quota changes logical CPU entitlement but do not create physical-core/SMT isolation, so the remaining interference is plausibly physical-core/SMT contention rather than an accidental multi-core worker bug.
+Median five-round results:
 
-Decision: **still do not integrate image processing into `v2`.** Source correctness is accepted; target-host CPU coexistence is not.
+| Condition | p95 | p99 | throughput |
+| --- | ---: | ---: | ---: |
+| A full-host baseline | 4.464 ms | 5.410 ms | 2,518.1 req/s |
+| B reserved-core baseline | 5.404 ms | 6.463 ms | 2,242.1 req/s |
+| C pin-only worker | 6.846 ms | 8.444 ms | 1,884.3 req/s |
+| D partitioned worker | 6.630 ms | 8.056 ms | 2,005.1 req/s |
+
+Separate effects:
+
+- reservation tax B vs A: p95 **+21.04%**, p99 +19.46%, throughput **-10.96%**;
+- worker interference D vs B: p95 **+22.70%**, p99 +24.64%, throughput **-10.57%**;
+- pin-only C vs A: p95 **+53.35%**, throughput **-25.17%**.
+
+Standalone worker time did not worsen from pinning: 2.20 s on all logical CPUs versus 2.08 s on `3,7`; peak thread count fell from 11 to 5.
+
+Important limitation: this was safe disposable isolation of the Ginbar API/PG/worker only. Existing unrelated host workloads were intentionally left untouched and remained free to schedule on the host, so `3,7` was not an exclusive whole-host physical core. Nevertheless the reservation baseline alone demonstrates that taking one physical core away from Ginbar API/PG costs materially under this saturation test before the media worker even runs.
+
+### Profiling attempt — BLOCKED BY HOST POLICY
+
+The physical-core experiment triggered profiling. Input hashes for the 8192x8192 PNG and Fronalpstock JPEG were verified.
+
+`perf stat`, `perf record -g`, and `perf report --stdio` were attempted read-only with container-scoped `CAP_PERFMON`. Kernel `perf_event_paranoid=4` denied access; both record attempts produced zero-byte data. No host sysctl/capability/security setting was changed.
+
+Therefore there is **no evidence-backed function-level hotspot attribution**. Do not claim decode, resize, RGBA conversion, rav1e, hashing, allocator, or filesystem work is the dominant CPU hotspot from these runs.
+
+## Current interpretation
+
+The image-processing implementation is correctness-accepted. Three different coexistence mechanisms (normal scheduling, low cgroup weight/hard quota, and safe cpuset partitioning) all show material API degradation under the existing concurrency-8 closed-loop benchmark.
+
+That benchmark is also effectively a peak-capacity test: full-host API/PG reaches ~2.5k req/s, and merely removing one of four physical cores reduces throughput ~11% and p95 ~21%. On this host there is no spare physical core at that offered load.
+
+Accordingly, do not micro-optimize the image path based on the failed saturation coexistence test, and do not weaken AVIF quality/output semantics. The next architectural question is whether worker interference remains material at lower API offered loads where actual CPU headroom exists. That determines whether a load-aware admission policy can safely share this host, or whether worker capacity must be separated from latency-sensitive API capacity.
 
 ## Remaining observations / deferred work
 
@@ -192,7 +219,7 @@ Decision: **still do not integrate image processing into `v2`.** Source correctn
 - Ingestion source orphans and processed staging orphans need eventual janitor/reconciliation work.
 - The one-shot worker does not renew leases; production polling needs measured renewal/cancellation behavior later in M3.
 - Deployment must ensure API and worker share media storage with compatible UID/GID/permissions.
-- Do not lower AVIF quality, change output dimensions, change formats, or otherwise alter processing-v1 output semantics merely to satisfy the benchmark without first profiling where CPU time is spent.
+- Do not lower AVIF quality, output dimensions, or format merely to satisfy a saturated-host benchmark without profiler or load-curve evidence.
 
 ## Local-agent evidence workflow
 
@@ -200,24 +227,19 @@ For target-host work, use isolated/disposable resources and return one ZIP conta
 
 ## Single best next task
 
-Run one target-host **physical-core cpuset isolation experiment**, still with no source changes and no production configuration changes.
+Run a target-host **API-load sensitivity / worker coexistence curve** with no source changes and no production configuration changes.
 
-The experiment must compare:
+Use the existing `src/backend/v2/bench/httpbench.go`; do not add a new load generator yet. Vary closed-loop HTTP concurrency to create different CPU/headroom regimes while keeping the same endpoint and disposable data:
 
-1. full-host baseline: API + PostgreSQL allowed CPUs `0-7`, no worker;
-2. reserved-core baseline: API + PostgreSQL restricted to three physical cores (`0,1,2,4,5,6`), no worker;
-3. pin-only control: API + PostgreSQL still `0-7`, worker restricted to the fourth physical-core sibling pair (`3,7`);
-4. true dedicated-core partition: API + PostgreSQL restricted to `0,1,2,4,5,6`, worker restricted to `3,7`.
+1. concurrency 1;
+2. concurrency 2;
+3. concurrency 4;
+4. concurrency 8 (existing saturation reference).
 
-Use at least five interleaved valid rounds per condition with the same 8192x8192 input, around-post endpoint, concurrency 8, and 2,000 requests. Capture exact cpuset controls, CPU/RSS/threads, DB connections, job overlap/integrity, and worker standalone completion time.
+For each concurrency, collect at least five interleaved no-worker baseline rounds and five valid one-worker-overlap rounds using the accepted 8192x8192 PNG, with request counts chosen so the HTTP interval remains shorter than the worker job and overlap is provable. Preserve the same integrity/job-overlap checks used by prior gates.
 
-Evaluate two costs separately:
+Record p50/p95/p99/max/RPS/errors plus API/PG/worker CPU and RSS, PostgreSQL connections, host CPU utilization/pressure if readable, and worker wall time. Calculate worker-vs-baseline deltas at each concurrency and relate them to measured baseline CPU headroom.
 
-- **reservation tax:** reserved-core baseline versus full-host baseline;
-- **worker interference:** dedicated-core loaded versus reserved-core baseline.
+The goal is to locate the load/headroom point at which one worker begins to materially affect latency/throughput. If low/moderate concurrency shows small interference while c8 alone degrades materially, design the production worker runner around explicit load-aware admission/backoff rather than permanent CPU reservation or codec changes. If interference remains material even with substantial CPU headroom, the next architecture decision is separate worker capacity; only then revisit profiler access or image-pipeline optimization.
 
-A dedicated core is only useful if the reservation tax itself is tolerable and the loaded run remains close to its matched reserved baseline. Do not accept it merely because worker interference disappears after permanently sacrificing too much API capacity.
-
-If dedicated physical-core partitioning still leaves material API degradation or an unacceptable reservation tax, stop further scheduling tweaks and perform read-only `perf stat` + `perf record/report` profiling of the accepted release source on both the 8192x8192 PNG and the large photographic JPEG. Profile decode/transform/resize/AVIF phases by symbol evidence before proposing any image-algorithm or codec change.
-
-If dedicated-core partitioning succeeds, document the deployment cpuset constraint, commit the accepted exact `Cargo.lock`, run one short exact-head correctness + matched performance confirmation, then fast-forward/integrate into `v2` if the gate remains green.
+Do not merge to `v2` until this load-sensitivity evidence is reviewed and the production coexistence policy is explicit.
