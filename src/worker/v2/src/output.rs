@@ -174,16 +174,20 @@ impl OutputStore {
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {
                     match fs::create_dir(&next) {
                         Ok(()) => {
-                            sync_directory(&current, "fsync parent after output directory creation")?;
+                            sync_directory(
+                                &current,
+                                "fsync parent after output directory creation",
+                            )?;
                         }
                         Err(create_error)
                             if create_error.kind() == io::ErrorKind::AlreadyExists =>
                         {
-                            let metadata = fs::symlink_metadata(&next).map_err(|inspect_error| {
-                                ProcessError::retryable(format!(
-                                    "inspect raced output directory: {inspect_error}"
-                                ))
-                            })?;
+                            let metadata =
+                                fs::symlink_metadata(&next).map_err(|inspect_error| {
+                                    ProcessError::retryable(format!(
+                                        "inspect raced output directory: {inspect_error}"
+                                    ))
+                                })?;
                             if metadata.file_type().is_symlink() || !metadata.is_dir() {
                                 return Err(ProcessError::terminal(format!(
                                     "output directory component is not a real directory: {}",
@@ -301,16 +305,24 @@ impl OutputStore {
 
 fn validate_output_key(storage_key: &str) -> Result<&Path, ProcessError> {
     if storage_key.is_empty() || storage_key.len() > 512 {
-        return Err(ProcessError::terminal("processed output key length is invalid"));
+        return Err(ProcessError::terminal(
+            "processed output key length is invalid",
+        ));
     }
     let path = Path::new(storage_key);
     if path.is_absolute() {
-        return Err(ProcessError::terminal("processed output key must be relative"));
+        return Err(ProcessError::terminal(
+            "processed output key must be relative",
+        ));
     }
     let mut components = path.components();
     match components.next() {
         Some(Component::Normal(root)) if root == "media" => {}
-        _ => return Err(ProcessError::terminal("processed output key must be under media/")),
+        _ => {
+            return Err(ProcessError::terminal(
+                "processed output key must be under media/",
+            ))
+        }
     }
     let mut count = 1usize;
     for component in components {
@@ -322,14 +334,16 @@ fn validate_output_key(storage_key: &str) -> Result<&Path, ProcessError> {
         count += 1;
     }
     if count < 2 || path.file_name().is_none() {
-        return Err(ProcessError::terminal("processed output key has no filename"));
+        return Err(ProcessError::terminal(
+            "processed output key has no filename",
+        ));
     }
     Ok(path)
 }
 
 fn sync_directory(path: &Path, context: &str) -> Result<(), ProcessError> {
-    let directory = File::open(path)
-        .map_err(|error| ProcessError::retryable(format!("{context}: {error}")))?;
+    let directory =
+        File::open(path).map_err(|error| ProcessError::retryable(format!("{context}: {error}")))?;
     directory
         .sync_all()
         .map_err(|error| ProcessError::retryable(format!("{context}: {error}")))
