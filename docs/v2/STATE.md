@@ -1,11 +1,21 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-03
-Phase: **M3 media pipeline — still-image processing integrated; production worker loop next**
+Phase: **M3 media pipeline — production worker runner implemented on feature branch; correctness/performance gates pending**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
 Read this file first. Use [`PLAN.md`](PLAN.md) for stable architecture/milestone rules and [`PERFORMANCE.md`](PERFORMANCE.md) for accepted benchmark history. Do not use chat history as project memory.
+
+## Current refs / branch safety
+
+Validated before this slice:
+
+- `v2`: `a95dc4d4fa5647626b767c610be10325f1521dcb`;
+- legacy `master`: `181fa44d79c7b4a1984c1a35795762dd503b3f77`;
+- active feature branch: `astra/m3-worker-runner`.
+
+`master` must not be modified. The worker-runner branch is not accepted into `v2` until its PostgreSQL correctness gate and target-host continuous-runner performance gate both pass.
 
 ## Current rewrite status
 
@@ -15,9 +25,45 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable architecture/milestone
 - M3 upload/URL ingestion + durable enqueue: **integrated**.
 - M3 source verification + generation-fenced DB publication: **integrated**.
 - M3 still-image JPEG/PNG/WebP -> deterministic AVIF canonical + thumbnail pipeline: **integrated**.
+- M3 production worker runner: **implemented on `astra/m3-worker-runner`, not yet validated/accepted**.
 - M3 is **not complete**.
 
-Next milestone work is the long-running production worker loop with lease renewal/cancellation/lost-ownership handling. Do not start video before that runner boundary is validated.
+Do not start video before the production-runner boundary is accepted.
+
+## Production runner slice — implementation pending validation
+
+Current feature implementation adds:
+
+- long-running `run` worker command;
+- serial claiming with at most one executing job;
+- 500 ms default idle polling rather than a busy loop;
+- bounded PostgreSQL reconnect backoff (250 ms base, 5 s cap);
+- existing durable job retry policy retained at 2 s base / 30 s cap;
+- an independent lease-renewal thread and PostgreSQL connection while work is active;
+- renewal at one third of the configured lease interval;
+- bounded renewal reconnect/query retry with explicit `LeaseLost` versus repeated-renewal-failure classification;
+- cancellation state visible to source verification and at processing/publication boundaries;
+- graceful SIGINT/SIGTERM shutdown that stops new claims and attempts to requeue a still-owned active job;
+- runner tests for idle wait behavior, repeated processing, one-active-job enforcement, long-job renewal, renewal failure, generation loss, restart/reclaim, and active shutdown.
+
+Important cancellation limitation: processing-v1 AVIF encode and filesystem publication remain synchronous. A codec/filesystem call may finish after ownership or shutdown is detected. The runner therefore keeps renewal independent while work is active, checks cancellation at meaningful boundaries, and relies on the existing owner/generation/source/lease-fenced PostgreSQL publication as the authoritative commit point. Deterministic no-overwrite files created before a lost-ownership check remain safe for idempotent retry. Do not claim mid-codec interruption.
+
+No Redis, scheduler weights, CPU quotas, cpusets, load admission, extra worker concurrency, or extra AVIF threads were added.
+
+### Validation status
+
+No correctness or performance result is accepted yet for this feature branch in this state file.
+
+Required before acceptance:
+
+- Rust/Cargo 1.99.x;
+- `cargo fmt --manifest-path src/worker/v2/Cargo.toml -- --check`;
+- `cargo check --locked --manifest-path src/worker/v2/Cargo.toml`;
+- `cargo test --locked --manifest-path src/worker/v2/Cargo.toml` with `GINBAR_TEST_DATABASE_URL` set so PostgreSQL tests actually execute;
+- `cargo clippy --locked --manifest-path src/worker/v2/Cargo.toml --all-targets -- -D warnings`;
+- verify `src/worker/v2/Cargo.lock` is byte-identical to the integrated lockfile;
+- inspect the complete feature diff against `v2` and verify no legacy/unrelated changes;
+- target-host continuous-runner API coexistence/idle-overhead benchmark.
 
 ## Source boundaries
 
@@ -25,8 +71,6 @@ Next milestone work is the long-running production worker loop with lease renewa
 - `src/backend/v2/` — clean v2 Go API/schema/search/bench code.
 - `src/worker/v2/` — clean v2 Rust worker and media pipeline.
 - adjacent non-v2 source remains legacy/reference-only.
-
-`master` must not be modified. Always verify current refs before writes and branch new implementation work from current `v2`.
 
 ## Retained architecture / invariants
 
@@ -50,18 +94,7 @@ Keep unless new evidence justifies a change:
 
 ## Integrated still-image contract
 
-Processing version 1 currently supports:
-
-- JPEG;
-- non-animated PNG;
-- non-animated WebP.
-
-Current intentional terminal/out-of-scope inputs:
-
-- animated PNG/WebP;
-- GIF;
-- AVIF/HEIF input;
-- video.
+Processing version 1 currently supports JPEG, non-animated PNG, and non-animated WebP. Animated PNG/WebP, GIF, AVIF/HEIF input, and video remain terminal/out of scope for this processing version.
 
 Limits/output:
 
@@ -79,43 +112,24 @@ Limits/output:
 - exact size/SHA verification for idempotent reuse;
 - conflicting existing destination bytes are terminal and never overwritten.
 
-The accepted application lockfile is committed at `src/worker/v2/Cargo.lock`. Its measured graph uses the exact validated lock bytes from the final image gate; use `--locked` for worker validation.
+The accepted application lockfile is committed at `src/worker/v2/Cargo.lock`; worker validation must use `--locked` and the runner slice must not change those bytes.
 
-## Current performance decisions
+## Current accepted performance decisions
 
-Stable measurements are consolidated in [`PERFORMANCE.md`](PERFORMANCE.md). Immediate constraints that matter for the next slice:
+Stable measurements remain in [`PERFORMANCE.md`](PERFORMANCE.md). Immediate reference points for the runner gate:
 
-- frontend selection sync p95 stayed below ~0.5 ms through the tested 10,000-post M1 matrix;
-- M2 around-post p95 ranged from 2.277 ms at c1 to 13.712 ms at c32 with zero errors in the final gate;
-- one large image job has little tail-latency impact at low API concurrency but reduces peak HTTP capacity near CPU saturation;
+- M2 around-post p95: 2.277 ms at c1, 2.628 ms at c4, 4.871 ms at c8, 8.443 ms at c16, 13.712 ms at c32;
+- prior single-image overlap p95 deltas: c1 +4.21%, c2 +2.78%, c4 +12.12%, c8 +26.22%;
+- prior c8 loaded absolute p95: 5.888 ms;
+- prior c8 throughput delta: -12.65%;
 - accepted image configuration remains one job / one AVIF encoder thread;
 - do not add scheduler/load-admission complexity until the real continuous runner is measured;
-- there is **no apples-to-apples global v1-v2 benchmark yet**, so do not claim an overall rewrite speedup.
+- there is no apples-to-apples global v1-v2 benchmark yet.
 
-## Repository/documentation consolidation completed
+The pending gate must measure the real continuous runner, including idle CPU/query rate and lease-renewal overhead, rather than infer them from earlier one-shot processing tests.
 
-The rewrite tree/docs were cleaned up without changing v2 product semantics:
+## Remaining M3 work after runner acceptance
 
-- root README now describes v2 rather than the legacy Go/Fiber/React stack;
-- `docs/v2/README.md` is the documentation index;
-- `PERFORMANCE.md` owns stable benchmark history;
-- `PLAN.md` was refreshed from stale pre-implementation status to current M1/M2/M3 progress;
-- `STATE.md` was reduced to operational handoff information;
-- completed M1/M2 execution runbooks moved under `docs/v2/archive/`;
-- tracked legacy build artifact `src/backend/wallium-backend` (~22 MiB) removed and ignored;
-- tracked `src/worker/desktop.ini` removed; common OS metadata is ignored.
-
-Legacy source itself was deliberately retained as reference material while the rewrite remains incomplete.
-
-## Remaining M3 work
-
-- production worker polling/wakeup loop;
-- lease renewal during source verification/codec/filesystem work;
-- cancellation and lost-ownership handling;
-- bounded retry/backoff;
-- graceful shutdown;
-- crash/restart/lease-loss tests;
-- continuous-runner API interference benchmark;
 - video processing;
 - perceptual duplicate detection;
 - regeneration;
@@ -133,24 +147,8 @@ Deferred cleanup/operational items:
 
 Use local/server agents for browser/DevTools, SSH, real PostgreSQL, target-server benchmarks, temporary deployments, or unavailable toolchains.
 
-Default is read-only/execution-only. They must not modify source, SQL, docs, config, commits, branches, deployments, or persistent state without explicit approval for that specific write.
-
-Return one evidence ZIP with exact SHA/worktree state, commands, stdout/stderr, environment versions, raw benchmark/query-plan data, errors, cleanup proof, and concise findings.
+Default is read-only/execution-only. They must not modify source, SQL, docs, config, commits, branches, deployments, or persistent state without explicit approval for that specific write. Target/server evidence must return as one ZIP containing exact SHA/worktree state, commands, stdout/stderr, versions, raw measurements/plans, errors, cleanup proof, and concise findings.
 
 ## Single best next task
 
-Implement and validate the **production worker loop + lease-renewal/cancellation slice** from current `v2`.
-
-Required boundary:
-
-1. claim at most one job at a time;
-2. poll/wake without busy-spinning;
-3. renew lease while source verification, codec, and filesystem work run;
-4. promptly stop/fence publication when ownership is lost, cancellation fires, or shutdown/deadline occurs;
-5. keep DB transactions short and codec work outside transactions;
-6. preserve existing deterministic/idempotent output semantics;
-7. use bounded retry/backoff and graceful shutdown;
-8. test crash/restart, lease expiry/loss, renewal failure, cancellation, and shutdown;
-9. benchmark the real continuous runner against API latency before adding scheduler/admission complexity.
-
-Do not begin video processing until this boundary passes its correctness and performance gate.
+Validate the exact `astra/m3-worker-runner` feature HEAD with Rust/Cargo 1.99.x and disposable PostgreSQL. If and only if correctness passes with database tests actually executing and Cargo.lock unchanged, run the target-host continuous-runner performance gate against `/api/v2/posts/49999/around?radius=30`. Do not integrate into `v2` or start video until that evidence is reviewed.
