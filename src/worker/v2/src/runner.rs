@@ -18,6 +18,8 @@ const DEFAULT_DB_RETRY_MAX: Duration = Duration::from_secs(5);
 const DEFAULT_RENEW_RETRY_BASE: Duration = Duration::from_millis(100);
 const DEFAULT_RENEW_RETRY_MAX: Duration = Duration::from_secs(1);
 const DEFAULT_RENEW_FAILURE_LIMIT: u32 = 3;
+const JOB_RETRY_BASE: Duration = Duration::from_secs(2);
+const JOB_RETRY_MAX: Duration = Duration::from_secs(30);
 const SHUTDOWN_POLL_GRANULARITY: Duration = Duration::from_millis(50);
 
 #[derive(Debug, Clone)]
@@ -486,11 +488,7 @@ where
         message: &str,
     ) -> StepResult {
         let retryable = class == FailureClass::Retryable;
-        let retry_after = retry_delay(
-            lease.attempt,
-            self.settings.db_retry_base,
-            self.settings.db_retry_max,
-        );
+        let retry_after = retry_delay(lease.attempt, JOB_RETRY_BASE, JOB_RETRY_MAX);
         let result = {
             let Some(client) = self.client.as_mut() else {
                 return StepResult::Transient(format!(
