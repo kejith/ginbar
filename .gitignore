@@ -31,9 +31,6 @@ nginx/certs/*.crt
 nginx/certs/*.key
 nginx/certs/*.pem
 
-# ── VSCode settings (personal preferences) ─────────────────────────────────
-.github/
-
 # ── Rust / Cargo ──────────────────────────────────────────────────────────────
 src/worker/target/
 src/worker/Cargo.lock
