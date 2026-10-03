@@ -6,14 +6,20 @@ use ginbar_worker_v2::processing::{
     prepare_claimed_source, FailureClass, ImageProcessor, MediaRoot, MediaType, NeverCancelled,
 };
 use ginbar_worker_v2::publication::{publish_processed, PublishOutcome};
+use ginbar_worker_v2::runner::{
+    PostgresConnectionFactory, RunnerSettings, ShutdownToken, StillImageJobExecutor, WorkerRunner,
+};
 use postgres::{Client, NoTls};
 use std::num::NonZeroU64;
 use std::process::ExitCode;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const DEFAULT_MAX_SOURCE_BYTES: u64 = 512 * 1024 * 1024;
 const RETRY_BASE: Duration = Duration::from_secs(2);
 const RETRY_MAX: Duration = Duration::from_secs(30);
+static TERMINATION_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 fn main() -> ExitCode {
     match run() {
@@ -29,24 +35,55 @@ fn run() -> Result<(), String> {
     let mut args = std::env::args();
     let program = args.next().unwrap_or_else(|| "ginbar-worker-v2".to_owned());
     let command = match (args.next(), args.next()) {
-        (Some(command), None) if command == "claim-once" || command == "process-once" => command,
+        (Some(command), None)
+            if command == "claim-once" || command == "process-once" || command == "run" =>
+        {
+            command
+        }
         _ => {
             return Err(format!(
-                "usage: {program} <claim-once|process-once>\n\n\
+                "usage: {program} <claim-once|process-once|run>\n\n\
                  claim-once claims at most one durable job and intentionally leaves its lease to expire.\n\
-                 process-once claims and processes at most one still-image job; it requires GINBAR_MEDIA_ROOT."
+                 process-once claims and processes at most one still-image job; it requires GINBAR_MEDIA_ROOT.\n\
+                 run starts the production one-job-at-a-time polling worker with lease renewal and graceful shutdown."
             ));
         }
     };
 
     let config = Config::from_env()?;
+    if command == "run" {
+        return run_forever(&config);
+    }
+
     let mut client = Client::connect(&config.database_url, NoTls)
         .map_err(|error| format!("connect PostgreSQL: {error}"))?;
-
     if command == "claim-once" {
         return claim_once(&mut client, &config);
     }
     process_once(&mut client, &config)
+}
+
+fn run_forever(config: &Config) -> Result<(), String> {
+    let media_root_path = std::env::var("GINBAR_MEDIA_ROOT")
+        .map_err(|_| "GINBAR_MEDIA_ROOT is required for run".to_owned())?;
+    let max_source_bytes = parse_max_source_bytes()?;
+    let media_root =
+        MediaRoot::new(&media_root_path).map_err(|error| format!("open media root: {error}"))?;
+    let executor = StillImageJobExecutor::new(media_root, max_source_bytes)?;
+    let settings = RunnerSettings::from_env()?;
+    install_termination_handlers()?;
+
+    let shutdown = ShutdownToken::with_external(&TERMINATION_REQUESTED);
+    let factory = Arc::new(PostgresConnectionFactory::new(config.database_url.clone()));
+    let mut runner = WorkerRunner::new(
+        factory,
+        config.worker_id.clone(),
+        config.lease_ms,
+        settings,
+        shutdown,
+        executor,
+    )?;
+    runner.run()
 }
 
 fn claim_once(client: &mut Client, config: &Config) -> Result<(), String> {
@@ -194,4 +231,41 @@ fn parse_max_source_bytes() -> Result<u64, String> {
         Err(std::env::VarError::NotPresent) => Ok(DEFAULT_MAX_SOURCE_BYTES),
         Err(error) => Err(format!("read GINBAR_WORKER_MAX_SOURCE_BYTES: {error}")),
     }
+}
+
+#[cfg(unix)]
+type SignalHandler = extern "C" fn(i32);
+
+#[cfg(unix)]
+unsafe extern "C" {
+    fn signal(signal: i32, handler: SignalHandler) -> usize;
+}
+
+#[cfg(unix)]
+extern "C" fn termination_handler(_signal: i32) {
+    TERMINATION_REQUESTED.store(true, Ordering::Release);
+}
+
+#[cfg(unix)]
+fn install_termination_handlers() -> Result<(), String> {
+    const SIGINT: i32 = 2;
+    const SIGTERM: i32 = 15;
+    const SIG_ERR: usize = usize::MAX;
+
+    // The handler performs only one atomic store. The production target is Linux,
+    // and no allocation, locking, I/O, or non-signal-safe library call occurs here.
+    let int_result = unsafe { signal(SIGINT, termination_handler) };
+    if int_result == SIG_ERR {
+        return Err("install SIGINT handler".to_owned());
+    }
+    let term_result = unsafe { signal(SIGTERM, termination_handler) };
+    if term_result == SIG_ERR {
+        return Err("install SIGTERM handler".to_owned());
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn install_termination_handlers() -> Result<(), String> {
+    Err("the production worker signal handler currently requires a Unix target".to_owned())
 }
