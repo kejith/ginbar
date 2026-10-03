@@ -32,11 +32,7 @@ struct TestDb {
 impl TestDb {
     fn new() -> Option<Self> {
         let url = env::var("GINBAR_TEST_DATABASE_URL").ok()?;
-        let schema = format!(
-            "ginbar_m3_image_{}_{}",
-            std::process::id(),
-            unique_suffix()
-        );
+        let schema = format!("ginbar_m3_image_{}_{}", std::process::id(), unique_suffix());
         let mut owner = Client::connect(&url, NoTls).expect("connect test database");
         owner
             .batch_execute(&format!(
@@ -188,8 +184,7 @@ fn crash_after_files_before_database_publication_retries_idempotently() {
         &NeverCancelled,
     )
     .unwrap();
-    let mut first_processor =
-        BoundedImageProcessor::new(OutputStore::new(&temp.0).unwrap());
+    let mut first_processor = BoundedImageProcessor::new(OutputStore::new(&temp.0).unwrap());
     let first_output = first_processor
         .process_image(&mut first_source, post_id)
         .unwrap();
@@ -220,8 +215,7 @@ fn crash_after_files_before_database_publication_retries_idempotently() {
         &NeverCancelled,
     )
     .unwrap();
-    let mut retry_processor =
-        BoundedImageProcessor::new(OutputStore::new(&temp.0).unwrap());
+    let mut retry_processor = BoundedImageProcessor::new(OutputStore::new(&temp.0).unwrap());
     let retry_output = retry_processor
         .process_image(&mut retry_source, post_id)
         .unwrap();
