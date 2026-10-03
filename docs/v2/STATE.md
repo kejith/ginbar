@@ -1,7 +1,7 @@
 # Ginbar v2 State / Handoff
 
 Last updated: 2026-10-03
-Phase: M3 image-processing slice — CORRECTNESS/PERFORMANCE ACCEPTED; EXACT LOCKFILE COMMIT + INTEGRATION PENDING
+Phase: M3 image-processing slice — CORRECTNESS/PERFORMANCE ACCEPTED; EXACT LOCK COMMIT PREPARED LOCALLY; LOCKED VALIDATION + PUSH PENDING
 Integration branch: `v2`
 Active feature branch: `astra/m3-image-processing`
 Legacy branch: `master` (read-only for rewrite work)
@@ -14,13 +14,14 @@ This file is the resume point. Read it before `PLAN.md`. Do not rely on chat his
 
 - `master` remains legacy/read-only at `181fa44d79c7b4a1984c1a35795762dd503b3f77`.
 - `v2` remains unchanged by this image slice at `e601c78486d219f97f98e55349209849f79c353f`.
-- The image-processing implementation was branched from that exact `v2` SHA.
+- Remote `astra/m3-image-processing` remains at `e9ae4c0380481d8dfc7819b43b26b19990658d93`.
+- The image-processing implementation was branched from exact `v2` SHA `e601c78486d219f97f98e55349209849f79c353f`.
 - Accepted image-processing source semantics remain commit `e53605838075509800efeaa644319d29e18587f2`.
 - Commits after `e536058...` on the feature branch are state/history-only or transient net-zero repository probes; no image-processing source semantics changed.
 - Do not modify `master`.
-- Do not fast-forward `v2` until the exact validated `Cargo.lock` bytes are committed and a locked correctness check passes on the resulting feature head.
+- Do not fast-forward `v2` until the exact validated `Cargo.lock` commit is pushed to the feature branch and locked correctness passes on that exact resulting head.
 - Worker v2 is under `src/worker/v2`; legacy `src/worker` is reference-only.
-- `.local-agent-results/` remains ignored for local evidence ZIPs.
+- `.local-agent-results/` remains ignored for local evidence ZIPs; a local checkout may use `.git/info/exclude` rather than a tracked ignore change.
 
 ## Integrated milestones / boundaries
 
@@ -143,6 +144,10 @@ The exact graph used by the accepted final measurements is represented by a 40,5
 
 `4B355C9016EF56D71C78D4CFCC347BF0A6FD2F3DBA8E6F36465B6D3EDEDAA74A`
 
+Expected Git blob SHA-1 for those exact bytes:
+
+`9bd2933d1a25f84cb04dc354476a3e6c7cdb0619`
+
 The corrected load-curve run reconstructed this graph from crates.io with:
 
 ```text
@@ -156,7 +161,25 @@ A prior unconstrained fresh resolution changed only `mio 1.2.3 -> 1.2.4`, produc
 
 The exact validated lock bytes are preserved in `m3-image-processing-load-curve-final-20261003T174724Z.zip` as `evidence/Cargo.lock` and `evidence/Cargo.lock.reconstructed`.
 
-Do not hand-reconstruct or normalize this file. Commit the exact bytes and verify SHA-256 before integration.
+### Local-agent lock commit status
+
+User explicitly approved the narrow lockfile write.
+
+The local agent verified the source evidence ZIP SHA-256 `C2432D3B4E38A8ADFC842DE2205903BEE0C31B9A3EC1D26F9AD4DF13CF80DD13`, binary-extracted `evidence/Cargo.lock`, and independently verified:
+
+- size: **40,521 bytes**;
+- SHA-256: `4B355C9016EF56D71C78D4CFCC347BF0A6FD2F3DBA8E6F36465B6D3EDEDAA74A`;
+- Git blob SHA-1: `9bd2933d1a25f84cb04dc354476a3e6c7cdb0619`.
+
+It copied only those bytes into an isolated clone at parent `e9ae4c0380481d8dfc7819b43b26b19990658d93` and created local commit:
+
+`f684fbd747ddd2c3295ccbebe4f12e85a92ba0a1`
+
+That local commit contains exactly one path, `src/worker/v2/Cargo.lock`, with the required hashes. The isolated checkout was clean afterward.
+
+However, the agent stopped before the required `cargo check --locked`, `cargo test --locked`, and `cargo clippy --locked --all-targets -- -D warnings` validation and did **not** push the commit. Therefore this local commit is not yet accepted for integration and is not present on the remote feature branch.
+
+Do not recreate, amend, or regenerate the lock commit unless the local commit is unavailable. Preferred continuation is to validate `f684fbd...` in the existing isolated clone, recheck the remote parent, then push that exact commit if every locked command passes.
 
 ## API coexistence evidence
 
@@ -216,9 +239,14 @@ Do not claim the worker is free: capacity tax and shared-host sensitivity are re
 
 Image-processing source correctness and performance are accepted for integration into `v2` under the limits above.
 
-Integration is pending only because the exact validated `Cargo.lock` must first be committed byte-for-byte and a locked correctness check must pass on that resulting head.
+Integration is pending only on completing the exact lock commit workflow:
 
-The two current transient repository probe add/delete commits have net-zero tree effect and must not be interpreted as product changes.
+1. run Rust 1.99 `cargo check --locked`, `cargo test --locked`, and `cargo clippy --locked --all-targets -- -D warnings` on local commit `f684fbd747ddd2c3295ccbebe4f12e85a92ba0a1`;
+2. re-verify lock size/SHA/Git blob and one-file commit scope after those commands;
+3. verify remote `astra/m3-image-processing` is still parent `e9ae4c0380481d8dfc7819b43b26b19990658d93` and `v2`/`master` are unchanged;
+4. push exactly `f684fbd...` to `astra/m3-image-processing` without force;
+5. return evidence to the primary session;
+6. primary session verifies remote tree, updates this state one final time, then fast-forwards `v2` if no unrelated change appeared.
 
 M3 itself is **not complete** after this image slice. Remaining M3 includes at least:
 
@@ -246,17 +274,17 @@ A local agent must not modify source/docs/config/SQL/commits/branches/deployment
 
 ## Single best next task
 
-Obtain explicit user approval for one narrow local-agent write because this primary environment cannot safely copy the exact 40,521-byte lockfile through the GitHub text wrapper without risking byte transformation.
+Continue the already-approved lockfile operation in the existing isolated clone if available; do **not** create another commit.
 
-Approved write scope should be only:
+Required continuation:
 
-1. fresh worktree/clone at the current `astra/m3-image-processing` head;
-2. copy the exact `evidence/Cargo.lock` bytes from `m3-image-processing-load-curve-final-20261003T174724Z.zip` to `src/worker/v2/Cargo.lock`;
-3. verify SHA-256 is exactly `4B355C9016EF56D71C78D4CFCC347BF0A6FD2F3DBA8E6F36465B6D3EDEDAA74A`;
-4. commit only that file on `astra/m3-image-processing`;
-5. run Rust 1.99 `cargo check --locked`, `cargo test --locked`, and `cargo clippy --locked --all-targets -- -D warnings`;
-6. return one evidence ZIP and exact new commit SHA; do **not** update `v2` or `STATE.md` from the local agent.
+1. check out/verify local commit `f684fbd747ddd2c3295ccbebe4f12e85a92ba0a1` with parent `e9ae4c0380481d8dfc7819b43b26b19990658d93`;
+2. use Rust/Cargo 1.99.x;
+3. run `cargo check --locked`, `cargo test --locked`, and `cargo clippy --locked --all-targets -- -D warnings`;
+4. verify `Cargo.lock` still has size 40,521, SHA-256 `4B355C...AA74A`, and Git blob `9bd293...0619`;
+5. verify the commit changes only `src/worker/v2/Cargo.lock`;
+6. re-fetch refs and require remote feature still equals parent `e9ae4c...`, `v2` equals `e601c784...`, and `master` equals `181fa44d...`;
+7. push the existing local commit normally to `astra/m3-image-processing` if and only if every validation passes;
+8. return one evidence ZIP; do not update `STATE.md` or `v2` from the local agent.
 
-After that evidence returns, the primary session should verify the lock commit/tree, update this state one final time, then fast-forward `v2` to the accepted feature head if no unrelated change has appeared.
-
-Next implementation slice after integration: production worker loop with lease renewal/cancellation, preserving one-job concurrency and benchmarking the real continuous runner before adding any admission/scheduler complexity.
+After that evidence returns, verify and fast-forward the image slice into `v2`. Next implementation slice: production worker loop with lease renewal/cancellation, preserving one-job concurrency and benchmarking the real continuous runner before adding any admission/scheduler complexity.
