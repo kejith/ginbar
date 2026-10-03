@@ -152,7 +152,7 @@ dkr() {
 }
 
 RUST_BASE_IMAGE="rust:1.99.0-bookworm"
-RUST_CI_IMAGE="ginbar-v2-ci-rust:1.99.0"
+RUST_CI_IMAGE="ginbar-v2-ci-rust:1.99.0-nasm"
 POSTGRES_IMAGE="postgres:17.11-alpine"
 GO_IMAGE="golang:1.25.0-bookworm"
 NODE_IMAGE="node:22.20.0-bookworm"
@@ -200,6 +200,9 @@ ensure_rust_image() {
   ensure_image "$RUST_BASE_IMAGE"
   dkr build --tag "$RUST_CI_IMAGE" - <<EOF_RUST_IMAGE
 FROM $RUST_BASE_IMAGE
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends nasm \
+  && rm -rf /var/lib/apt/lists/*
 RUN rustup component add rustfmt clippy
 EOF_RUST_IMAGE
 }
