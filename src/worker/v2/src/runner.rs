@@ -435,7 +435,10 @@ where
         );
 
         let execution = {
-            let client = self.client.as_mut().expect("claim used an initialized client");
+            let client = self
+                .client
+                .as_mut()
+                .expect("claim used an initialized client");
             self.executor
                 .execute(client, &lease, &self.worker_id, &cancellation)
         };
@@ -475,9 +478,7 @@ where
                 FailureClass::Retryable,
                 "lease renewal failed repeatedly",
             ),
-            JobExecution::Failure { class, message } => {
-                self.record_failure(lease, class, &message)
-            }
+            JobExecution::Failure { class, message } => self.record_failure(lease, class, &message),
         }
     }
 
@@ -496,19 +497,15 @@ where
                     lease.id
                 ));
             };
-            JobStore::new(client).fail(
-                lease,
-                &self.worker_id,
-                retryable,
-                retry_after,
-                message,
-            )
+            JobStore::new(client).fail(lease, &self.worker_id, retryable, retry_after, message)
         };
 
         match result {
-            Ok(FailureOutcome::RetryScheduled | FailureOutcome::Terminal | FailureOutcome::LeaseLost) => {
-                StepResult::Worked
-            }
+            Ok(
+                FailureOutcome::RetryScheduled
+                | FailureOutcome::Terminal
+                | FailureOutcome::LeaseLost,
+            ) => StepResult::Worked,
             Err(error) => {
                 self.client = None;
                 StepResult::Transient(format!("record job {} failure: {error}", lease.id))

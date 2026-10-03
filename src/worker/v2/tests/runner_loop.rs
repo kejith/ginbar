@@ -195,7 +195,10 @@ impl JobExecutor for LongExecutor {
         let completed = JobStore::new(client)
             .complete(lease, worker_id)
             .expect("complete long-running job");
-        assert!(completed, "lease renewal did not keep long-running claim alive");
+        assert!(
+            completed,
+            "lease renewal did not keep long-running claim alive"
+        );
         self.shutdown.request();
         JobExecution::Published
     }
@@ -361,7 +364,10 @@ impl JobExecutor for LoseGenerationExecutor {
                 self.shutdown.request();
                 return JobExecution::Cancelled(CancellationReason::LeaseLost);
             }
-            assert!(Instant::now() < deadline, "runner did not observe lost generation");
+            assert!(
+                Instant::now() < deadline,
+                "runner did not observe lost generation"
+            );
             thread::sleep(Duration::from_millis(5));
         }
     }
@@ -496,7 +502,10 @@ impl JobExecutor for ShutdownAwareExecutor {
             if cancellation.reason() == Some(CancellationReason::Shutdown) {
                 return JobExecution::Cancelled(CancellationReason::Shutdown);
             }
-            assert!(Instant::now() < deadline, "active job did not observe shutdown");
+            assert!(
+                Instant::now() < deadline,
+                "active job did not observe shutdown"
+            );
             thread::sleep(Duration::from_millis(5));
         }
     }
@@ -557,7 +566,10 @@ fn wait_for_state(client: &mut Client, job_id: i64, expected: i16) {
         if state == expected {
             return;
         }
-        assert!(Instant::now() < deadline, "job did not reach expected state");
+        assert!(
+            Instant::now() < deadline,
+            "job did not reach expected state"
+        );
         thread::sleep(Duration::from_millis(5));
     }
 }
