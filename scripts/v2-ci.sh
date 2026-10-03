@@ -288,7 +288,7 @@ run_backend_gate() {
   ensure_image "$GO_IMAGE"
 
   local unformatted test_log
-  unformatted="$(go_run bash -lc "find . -type f -name '*.go' -print0 | xargs -0 -r gofmt -l")"
+  unformatted="$(go_run bash -c "find . -type f -name '*.go' -print0 | xargs -0 -r gofmt -l")"
   if [[ -n "$unformatted" ]]; then
     printf '%s\n' "$unformatted" >&2
     fail "backend Go files are not gofmt-formatted"
