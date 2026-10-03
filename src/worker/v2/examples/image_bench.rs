@@ -1,8 +1,6 @@
 use ginbar_worker_v2::image::BoundedImageProcessor;
 use ginbar_worker_v2::output::OutputStore;
-use ginbar_worker_v2::processing::{
-    ImageProcessor, MediaRoot, NeverCancelled, SourceRecord,
-};
+use ginbar_worker_v2::processing::{ImageProcessor, MediaRoot, NeverCancelled, SourceRecord};
 use sha2::{Digest, Sha256};
 use std::env;
 use std::fs;
@@ -52,8 +50,7 @@ fn run() -> Result<(), String> {
             .ok_or_else(|| "benchmark source path has no parent".to_owned())?,
     )
     .map_err(|error| format!("create benchmark source directory: {error}"))?;
-    fs::write(&source_path, &body)
-        .map_err(|error| format!("write benchmark source: {error}"))?;
+    fs::write(&source_path, &body).map_err(|error| format!("write benchmark source: {error}"))?;
 
     let source_record = SourceRecord {
         post_id: 1,
@@ -107,10 +104,8 @@ impl TempRoot {
             .duration_since(UNIX_EPOCH)
             .map_err(|error| format!("read clock: {error}"))?
             .as_nanos();
-        let path = env::temp_dir().join(format!(
-            "ginbar-image-bench-{}-{nonce}",
-            std::process::id()
-        ));
+        let path =
+            env::temp_dir().join(format!("ginbar-image-bench-{}-{nonce}", std::process::id()));
         fs::create_dir_all(&path)
             .map_err(|error| format!("create benchmark temp root: {error}"))?;
         Ok(Self { path })
