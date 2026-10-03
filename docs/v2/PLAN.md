@@ -1,320 +1,247 @@
-# Ginbar v2 Rewrite Plan
+# Ginbar v2 rewrite plan
 
-Status: planning / no v2 implementation started
-Last updated: 2026-09-30
-Rewrite root: `v2`
+Status: **M1 complete; M2 complete; M3 in progress**
+Last consolidated: 2026-10-03
+Integration branch: `v2`
+Legacy branch: `master`
+
+For current state and the next task, read [`STATE.md`](STATE.md) first. Stable benchmark results live in [`PERFORMANCE.md`](PERFORMANCE.md).
 
 ## 1. Branch safety
 
-- `master` is the v1/legacy branch. **Never commit, merge, rebase, force-push, or otherwise modify `master` during the rewrite.**
-- `v2` is the permanent integration/root branch for the rewrite. It was split from `master` at commit `181fa44d79c7b4a1984c1a35795762dd503b3f77`.
-- Implementation work should normally happen on short-lived branches created from the current `v2`, then be reviewed/benchmarked before merging back to `v2`.
-- Never use `master` as an implementation base after the split. Consult v1 code only as behavioral/reference material.
-- If branch context is uncertain, stop writes and verify the current branch/ref first.
+- `master` is legacy/v1. Never commit, merge, rebase, force-push, or otherwise modify it for rewrite work.
+- `v2` is the permanent rewrite integration branch.
+- Normally branch from the current `v2`, validate the smallest coherent slice, then fast-forward reviewed work back into `v2`.
+- Legacy code may be consulted as behavioral/algorithmic reference but is not the default implementation base.
+- Verify branch/ref before every write.
 
 ## 2. Product definition
 
-Ginbar v2 is a clean-slate pr0gramm-style media board. Existing v1 data may be discarded. Preserve the useful product behavior, not the old implementation.
+Ginbar v2 is a clean-slate authenticated pr0gramm-style media board. Existing v1 implementation choices and data are not compatibility constraints unless an external dependency is later identified.
 
-All current features must exist by the end of the rewrite:
+End-state capabilities include:
 
-- accounts; no anonymous posting
-- invitation-only registration initially
-- architecture that can later add passkeys/OIDC/OAuth/email-based identity without redesigning users
-- chronological global media feed
-- responsive equal-square thumbnail grid
-- inline full-width expanded post directly below the thumbnail row containing the selected post
-- canonical `/post/:id` URLs and history navigation
-- deep links reconstruct the feed around the selected post
-- keyboard post navigation using arrows and J/K
-- image/video posts, URL imports and direct uploads
-- AVIF/image optimization, thumbnails, video processing, duplicate detection and regeneration jobs
-- post votes, comment votes and tag votes/metadata behavior where applicable
-- tags; users may add tags, only moderators/admins remove tags
-- `sfw`, `nsfp`, `nsfw`, `secret` content filters with current access semantics
-- search with required/excluded tags and structured predicates such as `score:>=100`
-- nested comments similar to pr0gramm
-- user profiles, roles, admin/moderation tools, imports and jobs
-- private messages, implemented late in the rewrite
+- accounts with no anonymous posting;
+- invitation-only registration initially, with identities designed to add passkeys/OIDC/OAuth/email later without redesigning users;
+- chronological post-ID-descending media feed;
+- upload and URL import;
+- image/video processing, thumbnails, duplicate detection, regeneration;
+- post/comment votes and tag behavior;
+- tags with user add and moderator/admin removal;
+- `sfw`, `nsfp`, `nsfw`, `secret` access semantics;
+- real search grammar with include/exclude tags and predicates such as `score:>=100`;
+- nested comments;
+- profiles, roles, moderation/admin, imports/jobs;
+- private messages late in the rewrite.
 
-## 3. Primary UX invariant
+## 3. Board UX invariant
 
-The board interaction is the defining feature and must drive architecture.
+The board interaction is the primary frontend constraint:
 
-- Grid consumes 100% available width.
-- Thumbnails are equal-size squares.
-- Column count changes responsively; thumbnail size is derived from viewport/container width.
-- Selecting a thumbnail inserts exactly one expanded, full-width post row immediately after that thumbnail's grid row.
-- Selecting another item in the same row replaces expanded content without moving the expanded row.
-- Selecting an item in another row moves the expanded row beneath the new row with minimal visual disturbance.
-- Mobile uses the same inline-row model, not a separate full-screen UI.
-- Videos are constrained to the viewport; images may span multiple screens vertically.
-- Closing a post does not need to restore the exact pre-open scroll position.
-- `←/→` and `J/K` navigate posts. Navigation must remain coherent with browser Back/Forward and `/post/:id`.
+- full-width responsive equal-square thumbnail grid;
+- selecting a post inserts exactly one full-width expanded post below that thumbnail row;
+- same-row selection replaces content in place;
+- cross-row selection moves the expanded row below the new row;
+- same interaction model on mobile;
+- canonical `/post/:id` URLs and direct-link feed reconstruction;
+- coherent Back/Forward history;
+- Arrow keys and J/K navigation;
+- ordering by post ID descending.
 
-The first implementation milestone is a backend-free board benchmark with thousands of fake posts. Do not build the full application until this interaction is demonstrably smooth.
+M1 validated SolidJS + TypeScript + Vite, incremental retention, containment, stable row identity, and no initial virtualization. Keep that architecture until new browser evidence justifies a change.
 
-## 4. Performance is the primary non-functional requirement
+## 4. Performance rules
 
-Every implementation decision must be revisited for architecture-level performance opportunities before accepting local code. Prefer removing work over optimizing work.
+Performance is a primary requirement. Optimize in this order:
 
-Order of optimization preference:
-
-1. eliminate unnecessary work/data/round trips
-2. choose a better algorithm/data model/API boundary
-3. exploit caching/precomputation/streaming/parallelism safely
-4. use a lower-overhead library/runtime primitive
-5. micro-optimize only after profiling identifies a real hotspot
+1. eliminate work/data/round trips;
+2. improve architecture/algorithm/data layout/API boundaries;
+3. cache/precompute/stream/parallelize safely;
+4. use lower-overhead proven primitives;
+5. micro-optimize only after profiling.
 
 Rules:
 
-- Measure before and after meaningful performance changes.
-- Never justify complexity with hypothetical scale alone; record evidence/benchmark rationale.
-- No framework/UI dependency without a concrete benefit that outweighs bundle/runtime cost.
-- No general-purpose component library or animation framework by default.
-- Avoid runtime CSS-in-JS; use plain modern CSS and a small token layer.
-- Keep initial/client route bundles aggressively small and code-split non-critical features.
-- Opening a post must update local UI immediately; never block the expanded shell on a network request.
-- Prefetch adjacent post metadata and selectively prefetch nearby media.
-- Cancel obsolete navigation/data requests.
-- Keep server-state caches bounded; do not build one giant global client store.
-- Avoid whole-board rerenders for a single post/vote/tag/comment update.
-- Use known media dimensions to prevent accidental layout shift.
-- Do not virtualize by reflex. First use incremental loading and CSS containment; add virtualization only if profiling proves retained DOM is the bottleneck and it does not damage inline-row behavior.
-- Primary feed pagination is cursor-based by post ID. No OFFSET pagination for the board.
-- SQL must be bounded, indexed for real query shapes and inspected with `EXPLAIN (ANALYZE, BUFFERS)` for important paths.
-- Static media and frontend assets are served directly by nginx, never proxied through the application without a specific reason.
-- Background media processing must not steal latency from interactive traffic.
+- benchmark performance-sensitive changes when practical;
+- target-server measurements are authoritative for backend/media work;
+- browser timings belong to the browser machine;
+- never claim a speedup without comparable measurements;
+- API hot SQL must be bounded/indexed for real query shapes and checked with `EXPLAIN (ANALYZE, BUFFERS)`;
+- primary feed uses post-ID cursor pagination, never OFFSET;
+- opening a post updates the UI immediately and never waits for network before showing the expanded shell;
+- avoid whole-board rerenders and unbounded caches;
+- known media dimensions should prevent avoidable layout shift;
+- background processing must be explicitly concurrency-limited and measured against interactive latency.
 
-Initial performance targets (benchmarks may tighten them):
-
-- local cached open/next/previous interaction: complete UI state transition within one 60 Hz frame where practical
-- no avoidable main-thread long tasks during normal board navigation
-- no network dependency before visual response to selecting a post
-- API hot paths designed for low single-digit/low tens of milliseconds on the target host under realistic load
-- bounded memory growth during long scrolling/navigation sessions
-- media jobs explicitly concurrency-limited and benchmarked independently from API latency
-
-Performance regression tests/benchmarks are part of feature completion, not optional cleanup.
+Current performance decisions are recorded in `PERFORMANCE.md` rather than duplicated here.
 
 ## 5. Preferred architecture
-
-Keep the proven specialization of the current system, but redesign boundaries cleanly.
 
 ```text
 Browser
   |
   v
-nginx ------------------> immutable/static media on local NVMe
-  |---------------------> built frontend assets
-  `---- /api -----------> Go API
-                            |-- PostgreSQL (authoritative application state)
-                            |-- Redis (ephemeral state / wakeups / cache)
-                            `-- media-job creation
-                                   |
-                                   v
-                              Rust worker
+nginx ----------------------> built frontend assets
+  |-------------------------> immutable/static media on local NVMe
+  `---- /api --------------> Go API/workflows
+                                |
+                                +--> PostgreSQL (authoritative app + durable jobs)
+                                |
+                                `--> optional ephemeral services only when measured
+                                        |
+                                        v
+                                   Rust media worker
 ```
 
 ### Backend
 
-- Go.
-- Keep handlers thin: HTTP parsing/auth/response only.
-- Explicit application/service layer for workflows such as upload -> process -> tag/comment -> release.
-- Domain logic must not be scattered arbitrarily across HTTP handlers, SQL helpers and Redis helpers.
+- Go 1.25 + pgx/v5 + standard `net/http` is the accepted M2 stack.
+- Keep HTTP handlers thin and domain/workflows behind explicit boundaries.
 - PostgreSQL is authoritative.
-- Redis is for ephemeral responsibilities: sessions, short-lived caches, rate limits, vote buffering if benchmarks justify it, and worker/event wakeups.
-- Prefer PostgreSQL-authoritative media jobs claimed with transactional `FOR UPDATE SKIP LOCKED`; Redis may notify/wake workers but should not be the only copy of job state.
-- API compatibility with v1 is not a goal unless an external consumer is later identified.
+- Redis is **not** a baseline dependency. Add it only for an ephemeral responsibility demonstrated by measurements or operational need.
+- Keep PostgreSQL pools small; current accepted cap is 8 until evidence justifies more.
+- Use cancellation/deadlines and bounded concurrency.
 
-### Data model
+### Data/model
 
-- Use numeric immutable foreign keys (`user_id`, etc.), never username as relational identity.
-- Keep public/post ordering by post ID descending unless a concrete requirement changes it.
-- Preserve soft deletion where needed for moderation/audit behavior.
-- Model post processing/release state explicitly.
-- Keep content filter as first-class post metadata while allowing current tag-driven recalculation rules.
-- Design indexes from actual board/search/moderation query shapes.
-
-### Authentication
-
-Invitation-only is a registration policy, not the identity model.
-
-Model users separately from credentials/identities so later authentication providers can be added cleanly. Start with username/password + invite. Password hashing choice must be benchmarked and configured safely for the target host.
-
-### Search
-
-Define a real parser/AST rather than splitting strings ad hoc. Required initial semantics:
-
-- include tags: `cat landscape`
-- exclude tags: `-anime`
-- score predicate: `score:>=100`
-
-Grammar should be extensible without changing the API shape. Compile validated AST to parameterized SQL; never interpolate query syntax into SQL.
+- immutable numeric IDs as relational identity;
+- never username as foreign key;
+- parameterized SQL only;
+- explicit release/moderation/processing state;
+- indexes based on actual query shapes;
+- invitations separate from identity/credentials;
+- real search lexer/parser/AST, not ad-hoc string splitting.
 
 ### Frontend
 
-Initial candidate: SolidJS + TypeScript + Vite, with plain CSS. This is a preferred hypothesis, not dogma. The board prototype is the framework gate: retain Solid only if measurements and implementation quality justify it. Compare another implementation only if the prototype exposes a credible concern.
-
-Frontend rules:
-
-- route/URL state, ephemeral UI state and remote/server state remain conceptually separated
-- no giant application store
-- board rows are first-class layout objects
-- the selected post maps deterministically to a row index
-- expanded post rendering is isolated from unrelated grid items
-- optimistic interaction where correctness permits (votes, lightweight metadata actions)
-- browser history is part of the state model, not bolted on afterward
-- accessibility/keyboard behavior is implemented with the interaction, not retrofitted
+- SolidJS + TypeScript + Vite + plain CSS;
+- separate route, ephemeral UI, and server state;
+- stable row identity and isolated expanded-post updates;
+- optimistic updates where correctness permits;
+- bounded incremental loading/retention before considering virtualization.
 
 ### Media worker
 
-- Rust.
-- Preserve/reevaluate existing image/video expertise: AVIF, thumbnails, ffmpeg, perceptual duplicate detection, regeneration.
-- Reuse algorithms only after reviewing whether v2 can simplify or outperform them.
-- Explicitly cap concurrency/threading; libraries must not freely consume all CPUs.
-- Prefer native/in-process processing when it is measurably faster/reliable; subprocesses are acceptable where they remain the best implementation.
-- Crash recovery/idempotency must be inherent in the job model.
+- Rust;
+- durable PostgreSQL job ownership with generation fencing;
+- filesystem/codec work outside DB transactions;
+- deterministic/idempotent side effects for at-least-once processing;
+- local NVMe media storage;
+- current accepted still-image limit: **one media job at a time, one AVIF encoder thread**;
+- worker loop must renew leases, react to cancellation/lost ownership, and shut down gracefully;
+- video gets its own explicit thread/concurrency benchmark.
 
-## 6. Target host assumptions
+## 6. Target host
 
-Current deployment target (2026-09-30):
+Current target assumptions:
 
-- Ubuntu 24.04 bare metal
-- Intel i7-7700, 4 physical cores / 8 threads, up to 4.2 GHz
-- 64 GiB RAM
-- two ~477 GB NVMe drives in RAID1; measured ~1.7 GB/s sequential write and ~3.3 GB/s sequential read
-- 1 Gbit/s full-duplex NIC
-- host also runs GitLab/game/other services
+- Ubuntu 24.04 bare metal;
+- Intel i7-7700, 4 physical / 8 logical CPUs;
+- ~64 GiB RAM;
+- two ~477 GB NVMe drives in RAID1;
+- 1 Gbit/s full-duplex NIC;
+- host also runs other services.
 
 Implications:
 
-- CPU is more constrained than RAM or local disk.
-- Network will generally bottleneck static media before NVMe throughput.
-- Media encoding must be background-prioritized and concurrency-limited.
-- Initial media-worker target: 1 media job at a time; roughly 2-3 ffmpeg threads for video; image concurrency around 2; download concurrency around 4-8. Benchmark real pipeline before finalizing.
-- Investigate usable Intel Quick Sync H.264/HEVC acceleration separately; ffmpeg listing QSV support does not prove this host/device is usable.
-- Keep PostgreSQL connection pools small initially (roughly 8 max is a starting hypothesis) and increase only from measured connection contention.
+- CPU is more constrained than RAM/NVMe;
+- network generally bottlenecks static media before local NVMe;
+- background codecs must remain bounded;
+- do not reserve cores, add quotas, or add load admission based on intuition: measure the real runner first.
 
 ## 7. Milestones and gates
 
-### M0 - Repository/handoff foundation
+### M1 — board performance prototype — COMPLETE
 
-- create/verify `v2` root
-- add this plan and `STATE.md`
-- add ChatGPT project instructions
-- no product code yet
+Validated responsive grid, inline expanded row, history/navigation, direct links, incremental retention, containment, long scrolling, and frontend framework choice.
 
-Gate: another session can recover exact status and next action from docs alone.
+Record: [`M1.md`](M1.md).
 
-### M1 - Board performance prototype
+### M2 — fresh schema + core Go API — COMPLETE
 
-Backend-free static/fake dataset with thousands of posts.
+Implemented fresh relational model, users/roles/credentials/invitations foundations, posts/media/tags/comments/votes, search AST, cursor feed, around-post reconstruction, durable media jobs, error model, bounded SQL, and shared-host HTTP/query-plan gate.
 
-Implement and benchmark:
+Record: [`M2.md`](M2.md).
 
-- responsive full-width square grid
-- deterministic row grouping
-- inline expanded row
-- same-row and cross-row selection
-- image/video sizing rules
-- `/post/:id` + Back/Forward
-- arrow + J/K navigation
-- incremental loading/retention behavior
-- fast long scrolling
-- CSS containment strategy
+### M3 — media pipeline — IN PROGRESS
 
-Gate: interaction is consistently smooth on desktop and mobile-class emulation; profiling shows no architectural red flags. Decide/lock frontend framework here.
+Integrated:
 
-### M2 - v2 schema + core Go API
+- durable PostgreSQL media-job ownership/retry/recovery;
+- upload/URL ingestion + durable enqueue;
+- source verification;
+- deterministic/generation-fenced DB publication;
+- durable no-overwrite local output publication;
+- still-image JPEG/PNG/WebP decode, orientation, resize, AVIF canonical + thumbnail;
+- crash/idempotency/collision testing;
+- real-media and API-coexistence measurements.
 
-- fresh migrations/schema
-- users/roles/invitations/credentials
-- posts/media metadata/filters/release state
-- tags and tag search AST
-- cursor feed and around-post/deep-link endpoints
-- comments/votes foundations
-- media job table/state machine
-- strict API contracts and error model
+Remaining:
 
-Gate: benchmark representative feed/search/post endpoints and query plans.
+- production long-running worker loop/wakeup policy;
+- lease renewal during long processing;
+- cancellation/lost-ownership handling;
+- graceful shutdown/backoff;
+- video processing;
+- perceptual duplicate detection;
+- regeneration;
+- progress/status UI;
+- production-runner background-load gate.
 
-### M3 - Media pipeline integration
+Gate: crash/restart/lease-loss correctness + real media/video benchmarks + configured background workload must preserve acceptable interactive behavior.
 
-- upload and URL ingestion
-- Rust worker claims durable jobs
-- image/AVIF/thumbnail pipeline
-- video processing
-- perceptual duplicate detection
-- release workflow
-- regeneration jobs
-- progress/status UI
+### M4 — connected core product
 
-Gate: crash/restart tests + real media benchmark + prove background workload does not materially degrade interactive latency under configured limits.
-
-### M4 - Core product UX
-
-- auth/invite registration
-- board connected to API
-- filters
-- search grammar
-- votes
-- tags
-- nested comments
-- profiles
+Auth/invite registration, board connected to API, filters/search, votes, tags, nested comments, profiles.
 
 Gate: end-to-end board performance budgets remain satisfied.
 
-### M5 - Moderation/admin/imports
+### M5 — moderation/admin/imports
 
-- role management
-- tag removal/moderation
-- post/comment moderation
-- imports
-- job/admin observability
+Roles, tag removal/moderation, post/comment moderation, imports, jobs/admin observability.
 
-### M6 - Private messages
+### M6 — private messages
 
-Implement messages only after board/core/admin architecture is stable.
+Implement after core/admin architecture is stable.
 
-### M7 - Production hardening
+### M7 — production hardening
 
-- nginx/static caching and compression
-- process/file limits
-- DB/Redis config based on load tests
-- security review
-- rate limits/abuse controls
-- backup/recovery strategy
-- observability
-- load/performance/regression suite
-- deployment/update procedure
+nginx/static caching, process/file limits, DB tuning from evidence, security review, abuse/rate limits, backups/recovery, observability, deployment/update procedure, and performance regression suite.
 
-## 8. Required engineering workflow
+## 8. Engineering workflow
 
-For each meaningful task:
+For every meaningful task:
 
-1. Read `docs/v2/STATE.md` first, then only relevant sections of this plan.
-2. Verify work is based on `v2`, never `master`.
-3. State the concrete performance/correctness risk being addressed.
-4. Inspect existing v1 code only when it provides useful behavioral or algorithmic evidence.
-5. Check for proven libraries/platform primitives before writing custom infrastructure.
-6. Implement the smallest coherent change.
-7. Test correctness, edge cases and failure/restart behavior where relevant.
-8. Benchmark/profile performance-sensitive code; compare against a baseline.
-9. Reconsider whether a different architecture/algorithm can remove more work.
-10. Update `STATE.md` with exactly what changed, measurements/decisions, unresolved questions and the single best next task.
+1. read `STATE.md` first;
+2. verify branch/ref and base from current `v2`;
+3. inspect relevant code/docs and identify correctness/performance risks;
+4. choose the smallest coherent architecture;
+5. prefer proven primitives over custom infrastructure;
+6. implement;
+7. run targeted correctness checks;
+8. benchmark/profile performance-sensitive work and compare with baseline;
+9. reconsider whether less work or a better boundary wins;
+10. update `STATE.md` with changes, evidence, decisions, unresolved issues, and one next task.
 
-Do not leave critical context only in chat history or commit messages.
+Do not leave critical project memory only in chat history.
 
-## 9. Definition of done for any performance-sensitive feature
+## 9. Local-agent boundary
+
+Use a local agent when this session lacks browser/DevTools, SSH/server, PostgreSQL, deployment, benchmark, or toolchain access.
+
+Default is read-only/execution-only. A local agent must not modify source, SQL, docs, config, commits, branches, deployments, or persistent state without explicit approval for that specific write.
+
+Target/server evidence should return as one ZIP containing exact SHA/worktree status, commands, stdout/stderr, versions, raw measurements/plans, errors, cleanup proof, and concise findings.
+
+## 10. Definition of done for performance-sensitive work
 
 A feature is not done merely because it works. It must also:
 
-- have a clear ownership/boundary in the architecture
-- avoid unnecessary allocations/renders/queries/round trips
-- have appropriate indexes/cache policy/concurrency limits
-- handle cancellation/timeouts/errors correctly
-- have tests for important behavior
-- include a benchmark/profile or explicit reason measurement is not useful
-- not regress established performance budgets
-- update handoff state so the next session can continue immediately
+- have a clear ownership/boundary;
+- avoid unnecessary allocation/render/query/round-trip work;
+- have appropriate indexes/cache/concurrency limits;
+- handle cancellation/timeouts/errors correctly;
+- test important failure/restart behavior;
+- include benchmark/profile evidence or a clear reason measurement is not useful;
+- respect established performance budgets;
+- leave `STATE.md` ready for the next session.
