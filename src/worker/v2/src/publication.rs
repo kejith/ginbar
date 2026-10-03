@@ -9,6 +9,7 @@ WITH owned AS MATERIALIZED (
     SELECT job.id, job.post_id, job.lease_expires_at
     FROM media_jobs AS job
     JOIN media_sources AS source ON source.post_id = job.post_id
+    JOIN posts AS post ON post.id = job.post_id
     WHERE job.id = $1
       AND job.post_id = $2
       AND job.kind = 0
@@ -16,7 +17,9 @@ WITH owned AS MATERIALIZED (
       AND job.claimed_by = $3
       AND job.lease_generation = $4
       AND source.sha256 = $5
-    FOR UPDATE OF job
+      AND post.deleted_at IS NULL
+      AND post.release_state IN (0, 1)
+    FOR UPDATE OF job, post
 ), valid AS MATERIALIZED (
     SELECT id, post_id FROM owned
     WHERE lease_expires_at > clock_timestamp()
