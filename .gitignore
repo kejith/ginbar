@@ -1,5 +1,6 @@
 # ── src/ new rewrite ──────────────────────────────────────────────────────────
 src/backend/ginbar
+src/backend/wallium-backend
 src/backend/tmp/
 src/backend/public/
 src/backend/sessions.sqlite3
@@ -14,13 +15,18 @@ src/frontend/.env.local
 # ── Local AI agent evidence bundles ──────────────────────────────────────────
 .local-agent-results/
 
+# ── OS/editor-generated files ────────────────────────────────────────────────
+desktop.ini
+Thumbs.db
+.DS_Store
+
 # ── Redis snapshot (created in cwd by the Redis server) ──────────────────────
 dump.rdb
 
 # ── pnpm ──────────────────────────────────────────────────────────────────────
 .pnpm-store/
 
-# ── TLS / Cloudflare Origin Certificate (never commit private keys) ───────────
+# ── TLS / Cloudflare Origin Certificate (never commit private keys) ──────────
 nginx/certs/*.crt
 nginx/certs/*.key
 nginx/certs/*.pem
