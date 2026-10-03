@@ -1,12 +1,12 @@
 # Ginbar v2 media worker
 
-The v2 Rust worker owns durable media-job execution. M3 now includes durable lease/fencing, source verification, deterministic durable output publication, and the first concrete still-image processor. Video processing remains deliberately out of scope for this slice.
+The v2 Rust worker owns durable media-job execution. M3 includes durable lease/fencing, source verification, deterministic durable output publication, the first concrete still-image processor, and a candidate long-running polling runner with lease renewal and graceful shutdown. Video processing remains deliberately out of scope for this slice.
 
 ## Durable job ownership
 
 `media_jobs.state` uses `0=pending`, `1=running`, `2=succeeded`, `3=failed`. Each successful claim increments both `attempts` and `lease_generation`. Completion, failure, renewal, and processed-media publication require the same worker ID, lease generation, and an unexpired lease. Lifecycle mutations lock the exact owned row before checking expiry with `clock_timestamp()`.
 
-Processing never runs inside the claim transaction. Initial production concurrency remains one job at a time and there is still no polling loop or Redis dependency.
+Processing never runs inside the claim transaction. Initial production concurrency remains one job at a time and there is still no Redis dependency. The long-running runner polls PostgreSQL when idle and renews the active job lease on a separate PostgreSQL connection while processing is in progress.
 
 ## Source-consumption contract
 
@@ -78,29 +78,55 @@ The processor publishes the thumbnail first and the canonical AVIF second. Only 
 
 An expired/stale lease, source-identity change, deleted/non-releasable post, or conflicting prior media identity returns `LeaseLostOrConflict` without releasing the post or completing the job. No PostgreSQL transaction spans source hashing, decode/encode, or filesystem output work.
 
-## One-shot processing probe
+## Production polling runner
 
-`process-once` claims and processes at most one still-image job end to end. It is intentionally not the production polling loop.
+`run` starts the one-job-at-a-time production runner candidate. It claims one durable job, starts an independent lease heartbeat, processes the job, records the fenced outcome, and immediately claims again after successful work. When no job is available it sleeps for a bounded poll interval instead of busy-spinning.
+
+The heartbeat uses a separate PostgreSQL connection and renews at roughly one third of the configured lease duration. A lost lease generation cancels the active job boundary and prevents stale database publication. Repeated heartbeat connection/query failures are classified separately and become retryable job failures when ownership can still be proven. SIGINT/SIGTERM stop new claims; active processing observes shutdown at cancellation boundaries and attempts to requeue the owned job immediately.
+
+AVIF encoding and durable filesystem publication are synchronous calls in this processing version. They cannot be interrupted in the middle of the call. Cancellation is checked again before the authoritative fenced database commit, so stale work cannot release the post or complete the job; deterministic no-overwrite files created before cancellation remain safe for retry.
+
+```sh
+DATABASE_URL='postgres://...' \
+GINBAR_MEDIA_ROOT='/path/to/media-root' \
+GINBAR_WORKER_ID='media-worker-1' \
+GINBAR_WORKER_LEASE_MS=30000 \
+cargo run --release --locked --manifest-path src/worker/v2/Cargo.toml -- run
+```
+
+Runner tuning variables are optional:
+
+- `GINBAR_WORKER_IDLE_POLL_MS` defaults to 500 ms;
+- `GINBAR_WORKER_DB_RETRY_BASE_MS` defaults to 250 ms;
+- `GINBAR_WORKER_DB_RETRY_MAX_MS` defaults to 5,000 ms;
+- `GINBAR_WORKER_RENEW_RETRY_BASE_MS` defaults to 100 ms;
+- `GINBAR_WORKER_RENEW_RETRY_MAX_MS` defaults to 1,000 ms;
+- `GINBAR_WORKER_RENEW_FAILURE_LIMIT` defaults to 3;
+- `GINBAR_WORKER_MAX_SOURCE_BYTES` defaults to 512 MiB.
+
+Keep the default one-job/one-encoder-thread concurrency unless target-host measurements justify a change.
+
+## One-shot processing probes
+
+`process-once` claims and processes at most one still-image job end to end. It does not renew the lease and remains useful for isolated processing probes.
 
 ```sh
 DATABASE_URL='postgres://...' \
 GINBAR_MEDIA_ROOT='/path/to/disposable/media-root' \
 GINBAR_WORKER_ID='m3-image-probe-1' \
 GINBAR_WORKER_LEASE_MS=300000 \
-cargo run --release --manifest-path src/worker/v2/Cargo.toml -- process-once
+cargo run --release --locked --manifest-path src/worker/v2/Cargo.toml -- process-once
 ```
 
-`GINBAR_WORKER_MAX_SOURCE_BYTES` is optional and defaults to 512 MiB. Use a lease comfortably longer than the measured single-image processing time for target probes; periodic lease renewal around long-running codec work is not implemented in this one-shot command.
+Use a lease comfortably longer than the measured single-image processing time for `process-once`. `claim-once` remains the lease crash/recovery probe: it claims at most one job and exits without completion so lease reclaim can be tested.
 
-`claim-once` remains the lease crash/recovery probe: it claims at most one job and exits without completion so lease reclaim can be tested.
-
-## Target-host codec benchmark
+## Target-host codec and runner benchmark
 
 `examples/image_bench.rs` runs the real verified-source + decode/transform/AVIF/durable-publication path while timing source verification separately from processing. Each iteration uses a fresh post ID so it cannot benchmark deterministic output reuse by accident.
 
 ```sh
-cargo run --release --manifest-path src/worker/v2/Cargo.toml \
+cargo run --release --locked --manifest-path src/worker/v2/Cargo.toml \
   --example image_bench -- /path/to/real-image.jpg 5
 ```
 
-The authoritative gate must run on the target host with real non-production media, record CPU/RSS and exact dependency/tool versions, and compare API p50/p95/p99/max latency and throughput with and without one concurrent worker job using the existing v2 HTTP benchmark harness.
+The runner gate must use the exact CI-green revision on the target host with disposable PostgreSQL/media state and the shared-host workload left in its normal state. Record idle runner CPU/RSS and PostgreSQL query activity, continuous-job throughput/resource use, forced-renewal behavior with a test lease shorter than a long fixture, and API p50/p95/p99/max latency plus throughput with and without the real long-running runner. The accepted worker remains one job and one encoder thread unless those measurements justify a different architecture.
