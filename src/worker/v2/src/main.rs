@@ -81,8 +81,8 @@ fn process_once(client: &mut Client, config: &Config) -> Result<(), String> {
     let media_root_path = std::env::var("GINBAR_MEDIA_ROOT")
         .map_err(|_| "GINBAR_MEDIA_ROOT is required for process-once".to_owned())?;
     let max_source_bytes = parse_max_source_bytes()?;
-    let media_root = MediaRoot::new(&media_root_path)
-        .map_err(|error| format!("open media root: {error}"))?;
+    let media_root =
+        MediaRoot::new(&media_root_path).map_err(|error| format!("open media root: {error}"))?;
     let output_store = OutputStore::new(media_root.root())
         .map_err(|error| format!("open output store: {error}"))?;
 
@@ -170,13 +170,7 @@ fn fail_owned_job(
     let retryable = class == FailureClass::Retryable;
     let retry_after = retry_delay(lease.attempt, RETRY_BASE, RETRY_MAX);
     let outcome = JobStore::new(client)
-        .fail(
-            lease,
-            &config.worker_id,
-            retryable,
-            retry_after,
-            message,
-        )
+        .fail(lease, &config.worker_id, retryable, retry_after, message)
         .map_err(|error| format!("record job {} failure: {error}", lease.id))?;
     match outcome {
         FailureOutcome::RetryScheduled | FailureOutcome::Terminal => Ok(()),
