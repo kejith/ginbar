@@ -23,14 +23,14 @@ pub struct ProcessError {
 }
 
 impl ProcessError {
-    fn retryable(message: impl Into<String>) -> Self {
+    pub fn retryable(message: impl Into<String>) -> Self {
         Self {
             class: FailureClass::Retryable,
             message: message.into(),
         }
     }
 
-    fn terminal(message: impl Into<String>) -> Self {
+    pub fn terminal(message: impl Into<String>) -> Self {
         Self {
             class: FailureClass::Terminal,
             message: message.into(),
