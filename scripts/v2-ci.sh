@@ -57,7 +57,6 @@ resolve_auto_scope() {
   elif ((frontend)); then
     printf 'frontend\n'
   else
-    # The workflow path filter should make this uncommon. Fail safe by checking all.
     printf 'all\n'
   fi
 }
@@ -95,8 +94,6 @@ esac
 
 printf 'v2-ci: sha=%s scope=%s base=%s\n' "$(git rev-parse HEAD)" "$requested_scope" "${base_sha:-none}"
 
-# CI and authoritative target-host performance measurements must not overlap.
-# Local-agent benchmark runs should acquire this same lock before measuring.
 if command -v flock >/dev/null 2>&1; then
   host_gate_lock="${GINBAR_HOST_GATE_LOCK:-/tmp/ginbar-v2-host-gate.lock}"
   exec 9>"$host_gate_lock"
@@ -104,7 +101,21 @@ if command -v flock >/dev/null 2>&1; then
 fi
 
 command -v docker >/dev/null 2>&1 || fail "docker is required"
-docker info >/dev/null 2>&1 || fail "docker daemon is not accessible to user $(id -un)"
+DOCKER=(docker)
+if ! docker info >/dev/null 2>&1; then
+  if command -v sudo >/dev/null 2>&1 && sudo -n docker info >/dev/null 2>&1; then
+    DOCKER=(sudo -n docker)
+  else
+    printf 'v2-ci: docker access diagnostics:\n' >&2
+    id >&2 || true
+    ls -l /var/run/docker.sock >&2 || true
+    fail "docker daemon is not accessible to user $(id -un); grant the dedicated runner account Docker access"
+  fi
+fi
+
+dkr() {
+  "${DOCKER[@]}" "$@"
+}
 
 RUST_BASE_IMAGE="rust:1.99.0-bookworm"
 RUST_CI_IMAGE="ginbar-v2-ci-rust:1.99.0"
@@ -130,8 +141,8 @@ cleanup() {
   local status=$?
   trap - EXIT
   if ((PG_STARTED)); then
-    docker rm -f "$PG_CONTAINER" >/dev/null 2>&1 || true
-    docker network rm "$NETWORK" >/dev/null 2>&1 || true
+    dkr rm -f "$PG_CONTAINER" >/dev/null 2>&1 || true
+    dkr network rm "$NETWORK" >/dev/null 2>&1 || true
   fi
   rm -rf "$TMP_ROOT" >/dev/null 2>&1 || true
   exit "$status"
@@ -142,17 +153,17 @@ trap 'exit 143' TERM
 
 ensure_image() {
   local image="$1"
-  if ! docker image inspect "$image" >/dev/null 2>&1; then
-    docker pull "$image"
+  if ! dkr image inspect "$image" >/dev/null 2>&1; then
+    dkr pull "$image"
   fi
 }
 
 ensure_rust_image() {
-  if docker image inspect "$RUST_CI_IMAGE" >/dev/null 2>&1; then
+  if dkr image inspect "$RUST_CI_IMAGE" >/dev/null 2>&1; then
     return
   fi
   ensure_image "$RUST_BASE_IMAGE"
-  docker build --tag "$RUST_CI_IMAGE" - <<EOF_RUST_IMAGE
+  dkr build --tag "$RUST_CI_IMAGE" - <<EOF_RUST_IMAGE
 FROM $RUST_BASE_IMAGE
 RUN rustup component add rustfmt clippy
 EOF_RUST_IMAGE
@@ -160,8 +171,8 @@ EOF_RUST_IMAGE
 
 start_postgres() {
   ensure_image "$POSTGRES_IMAGE"
-  docker network create --label ginbar.v2.ci=true "$NETWORK" >/dev/null
-  docker run -d --rm \
+  dkr network create --label ginbar.v2.ci=true "$NETWORK" >/dev/null
+  dkr run -d --rm \
     --name "$PG_CONTAINER" \
     --label ginbar.v2.ci=true \
     --network "$NETWORK" \
@@ -174,19 +185,19 @@ start_postgres() {
 
   local attempt
   for attempt in $(seq 1 60); do
-    if docker exec "$PG_CONTAINER" pg_isready -U ginbar_test -d ginbar_test >/dev/null 2>&1; then
+    if dkr exec "$PG_CONTAINER" pg_isready -U ginbar_test -d ginbar_test >/dev/null 2>&1; then
       return
     fi
     sleep 1
   done
-  docker logs "$PG_CONTAINER" >&2 || true
+  dkr logs "$PG_CONTAINER" >&2 || true
   fail "PostgreSQL did not become ready"
 }
 
 DB_URL='postgres://ginbar_test:ginbar_test_ci_only@pg:5432/ginbar_test?sslmode=disable'
 
 rust_run() {
-  docker run --rm \
+  dkr run --rm \
     --network "$NETWORK" \
     -e CARGO_HOME=/cargo-home \
     -e CARGO_TARGET_DIR=/cargo-target \
@@ -220,7 +231,7 @@ run_worker_gate() {
 }
 
 go_run() {
-  docker run --rm \
+  dkr run --rm \
     --network "$NETWORK" \
     -e GINBAR_TEST_DATABASE_URL="$DB_URL" \
     -e GOFLAGS=-mod=readonly \
@@ -256,7 +267,7 @@ run_backend_gate() {
 run_frontend_gate() {
   printf '\n== frontend: Node 22 correctness gate ==\n'
   ensure_image "$NODE_IMAGE"
-  docker run --rm \
+  dkr run --rm \
     -v "$ROOT:/repo:ro" \
     -v "$CACHE_ROOT/npm:/npm-cache" \
     "$NODE_IMAGE" \
