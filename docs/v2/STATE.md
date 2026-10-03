@@ -1,9 +1,8 @@
 # Ginbar v2 State / Handoff
 
 Last updated: 2026-10-03
-Phase: M3 media pipeline integration — worker source-consumption/publication contract FIXED AFTER FAILED GATE; targeted revalidation pending
+Phase: M3 media pipeline integration — worker source-consumption/publication contract PASSED AND INTEGRATED
 Integration branch: `v2`
-Active M3 branch: `astra/m3-worker-processing-contract`
 Legacy branch: `master` (read-only for rewrite work)
 
 ## Read this first
@@ -12,19 +11,14 @@ This file is the resume point. Read it before `PLAN.md`. Do not rely on chat his
 
 ## Branch status
 
-- `master` remains read-only for rewrite work at `181fa44d79c7b4a1984c1a35795762dd503b3f77`.
-- `v2` remains at `a552e96954ec2de42523bb5449a52eff0b216ec8`.
+- `master` remains untouched by rewrite work at `181fa44d79c7b4a1984c1a35795762dd503b3f77`.
 - M1 board benchmark is complete.
 - M2 fresh schema + core Go API is complete and integrated.
 - M3 durable PostgreSQL media-job ownership/recovery boundary is complete and integrated.
 - M3 upload/URL-ingestion + durable-enqueue boundary is complete and integrated.
-- The worker processing-contract slice remains isolated on `astra/m3-worker-processing-contract`, based on exact `v2` tip `a552e96954ec2de42523bb5449a52eff0b216ec8`.
-- The first full worker-processing gate tested exact SHA `4a9a5e1a4296871945146ea15dcfce6b419169ba` and failed on formatting, one Clippy lint, and one real publication invariant defect. All other requested correctness probes, full PostgreSQL tests, query-plan checks, and measurements passed.
-- Corrective commits after that gate:
-  - `0ffebe2b47cb64dccba6995b4d1931b520dc9931` — apply the recorded Rust formatting changes and replace the denied `chunks_exact_to_as_chunks` pattern;
-  - `b027d05624ec1af04c7d3a5c2009bbece1217b11` — prevent ready-media insertion unless the post is currently releasable, locking both job and post before the write;
-  - `2860b5975032bb653789cfbba8bcc02d4f1f6a82` — add committed regression coverage for soft-deleted and non-releasable posts.
-- This slice changes only `src/worker/v2/**` plus this handoff document.
+- M3 Rust worker source-consumption/publication contract is complete, validated, and integrated.
+- `v2` was fast-forwarded through exact validated worker SHA `37ba916fad6e265f8e8ffde7b742533f8c55425a`; this document is a state-only integration update after that fast-forward.
+- Worker v2 lives under `src/worker/v2`; legacy `src/worker` remains reference-only unless explicitly reviewed for reuse.
 - `.local-agent-results/` remains ignored for evidence ZIPs.
 
 ## Retained architecture and validated decisions
@@ -32,167 +26,163 @@ This file is the resume point. Read it before `PLAN.md`. Do not rely on chat his
 Keep unless new evidence contradicts them:
 
 - Go 1.25 + pgx/v5 + standard `net/http` for API/workflows;
-- PostgreSQL authoritative for app/workflow/durable job state;
+- PostgreSQL authoritative for application/workflow/durable job state;
 - Rust worker for media processing;
 - local NVMe for source/media storage;
 - no Redis without measured need;
 - immutable numeric relational IDs;
 - at-least-once processing requires deterministic/idempotent durable side effects;
-- initial production media-worker concurrency target remains one job at a time.
+- initial production media-worker concurrency remains one job at a time;
+- source verification and codec/filesystem work stay outside DB transactions;
+- final publication is fenced by job ownership, lease generation, source identity, post eligibility, and post-lock real-time lease expiry.
 
-The integrated media-job boundary retains readiness-first `FOR UPDATE SKIP LOCKED` claiming, lease-generation fencing, post-lock `clock_timestamp()` expiry checks, bounded retries, and no production polling loop yet.
+The integrated durable-job boundary retains readiness-first `FOR UPDATE SKIP LOCKED` claiming, bounded retries, generation fencing, and no production polling loop yet.
 
 ## Integrated ingestion/enqueue boundary
 
-The prior M3 slice is integrated and validated:
+The prior ingestion slice remains validated:
 
 - upload/URL bytes stage outside DB transactions;
-- `media_sources` records authoritative source storage key, byte size, and SHA-256;
+- `media_sources` stores authoritative source key, byte size, and SHA-256;
 - unreleased post + source + initial kind-0 job are created atomically;
-- URL fetches enforce SSRF restrictions;
+- URL imports enforce SSRF restrictions;
 - source keys use exact `sources/<2 lowercase hex>/<32 lowercase hex>` grammar;
-- ambiguous DB commit preserves source bytes rather than risking a committed row pointing at missing data.
+- ambiguous DB commit preserves source bytes for reconciliation rather than risking a committed row pointing at missing data.
 
-Accepted target baselines from that slice:
+Accepted ingestion baselines:
 
-- 8 MiB source staging durability path: mean **45.1468 ms/op**, **186.06 MB/s**, ~67.6 KiB/op, 32 allocs/op;
+- 8 MiB durable source staging: **45.1468 ms/op**, **186.06 MB/s**, ~67.6 KiB/op, 32 allocs/op;
 - PostgreSQL ingestion CTE c1: **0.348 ms**, **2,870.87 TPS**, zero errors;
 - PostgreSQL ingestion CTE c4: **0.457 ms**, **8,761.36 TPS**, zero errors.
 
-## M3 worker source-consumption / publication contract
+## Integrated worker source-consumption / publication contract
 
-### Scope
+### Source preparation
 
-This slice connects claimed kind-0 jobs to a verified source/processor/publication contract. It deliberately does **not** implement real AVIF/image encoding, ffmpeg/video processing, perceptual duplicate policy, regeneration, a production polling loop, or progress UI.
+`src/worker/v2/src/processing.rs` now provides the validated kind-0 source boundary:
 
-No Go/API/frontend code changes in this slice.
+- load authoritative `media_sources` by immutable post ID;
+- exact source-key grammar validation;
+- canonical shared-root containment checks;
+- reject symlink source files and shard directories;
+- enforce configured maximum source bytes;
+- compare filesystem and DB byte sizes;
+- stream with a fixed 128 KiB buffer while checking cancellation;
+- verify full SHA-256 against authoritative source metadata;
+- sniff actual bytes instead of trusting declared MIME;
+- rewind and pass the same verified file handle to processor dispatch.
 
-### Source loading and verification
+Recognized routing families are JPEG, PNG, GIF, WebP, AVIF/HEIF-family ISO-BMFF images, MP4-family video, and EBML-family video. This is family routing only; concrete codecs still own full parse/decode validation.
 
-`src/worker/v2/src/processing.rs` provides:
+Error classification is explicit: database/filesystem I/O and cancellation are retryable; missing source, unsupported job kind, invalid digest/key/path, integrity mismatch, and unsupported media type are terminal.
 
-- authoritative `media_sources` lookup by immutable `post_id`;
-- `prepare_claimed_source` for claimed kind-0 jobs;
-- exact ingestion-key grammar validation;
-- shared-root canonical containment checks;
-- rejection of symlink source files and shard directories;
-- caller-supplied maximum source-byte bound;
-- filesystem-size vs DB-size verification;
-- fixed 128 KiB streaming buffer;
-- SHA-256 verification with `sha2 = "0.10"`;
-- cancellation checks during full verification read;
-- actual media-family sniffing instead of trusting declared MIME;
-- rewind of the same verified file handle before processor dispatch.
+### Processor boundary and deterministic identity
 
-Recognized routing families are JPEG, PNG, GIF, WebP, AVIF/HEIF-family ISO-BMFF images, MP4-family video, and EBML-family video. This is dispatch classification, not full decoder validation.
+`ImageProcessor` and `VideoProcessor` are explicit traits; no concrete codec is integrated yet.
 
-Error classification remains explicit: PostgreSQL/filesystem I/O and cancellation are retryable; missing source, unsupported job kind, invalid digest/key/path, size/hash mismatch, and unsupported media type are terminal.
-
-### Processor boundaries
-
-`ImageProcessor` and `VideoProcessor` receive a verified, rewound source handle. There are no concrete codec implementations yet.
-
-The verified handle is reused rather than reopened before dispatch. Codec consumption will still read the source after the verification pass; retain measurement evidence before considering a combined verify/decode architecture.
-
-### Deterministic processed-output identity
-
-`processed_output_key` defines:
+Processed output identity is deterministic and versioned:
 
 `media/<post shard>/<post id>/v<processing version>-<source SHA-256>.<format>`
 
-Identity includes immutable post ID, authoritative source digest, processing-contract version, and output format. Future output-file publication must be no-overwrite/idempotent under this identity; a retry may reuse an existing deterministic object only after proving it is the same result.
-
-Concrete output-file staging/fsync/collision handling remains intentionally deferred to the first codec slice.
+Identity binds immutable post ID, verified source digest, processing-contract version, and output format. At-least-once retries therefore have a stable side-effect target. A processing algorithm that changes output semantics must advance the processing version instead of silently reusing incompatible keys.
 
 ### Fenced processed-media publication
 
-`src/worker/v2/src/publication.rs` is the short authoritative DB commit point after durable output-file work.
+`src/worker/v2/src/publication.rs` is the short authoritative commit point after durable output-file work.
 
-The corrected single PostgreSQL statement now:
+The validated single PostgreSQL statement:
 
-1. joins the exact running kind-0 job to its authoritative source **and post**;
-2. requires job ID, post ID, worker ID, lease generation, and source SHA-256 to match;
-3. requires `post.deleted_at IS NULL` and `post.release_state IN (0, 1)` before any media write;
-4. `FOR UPDATE`-locks both the job and post rows;
-5. rechecks lease expiry against `clock_timestamp()` after lock acquisition;
-6. inserts ready `media` (`processing_state = 1`) or accepts an existing row only when deterministic storage key and output SHA-256 are identical;
+1. identifies the exact running kind-0 job by job ID, post ID, worker ID and lease generation;
+2. requires current authoritative `media_sources.sha256` to equal the verified source digest;
+3. requires the post to be undeleted and in releasable state `(0,1)` **before** any media write;
+4. `FOR UPDATE`-locks both job and post;
+5. rechecks lease expiry with `clock_timestamp()` after lock acquisition;
+6. inserts ready `media`, or accepts an existing row only when deterministic storage key and output SHA-256 match;
 7. releases the post only after a ready media row is accepted;
-8. succeeds the fenced job and clears ownership only after media + release succeed.
+8. succeeds the job and clears ownership only after media + release succeed.
 
-Rust-side validation also requires the deterministic output key to embed the verified source digest.
+Rust-side validation additionally requires the deterministic output key to embed the same verified source digest.
 
-An expired/stale lease, source-identity change, deleted/non-releasable post, or conflicting prior media identity must therefore yield `LeaseLostOrConflict` with no new ready media, no release, and no job success. No DB transaction spans source hashing or future codec/filesystem work.
+Rejected stale/expired/source-changed/deleted/non-releasable/conflicting cases leave no unintended ready media, do not release the post, and do not succeed the job.
 
-## First full worker-processing gate — FAIL
+## Worker processing validation history
+
+### First full gate — FAIL
 
 Evidence ZIP: `m3-worker-processing-contract-20261003T011708Z.zip`.
 ZIP SHA-256: `205DF7A3F16E2964B9779E0D36DCCE0E8DB4B199BF5A4C8C62A601FEADA1EB76`.
 Exact tested SHA: `4a9a5e1a4296871945146ea15dcfce6b419169ba`.
-Environment: Ubuntu 24.04.3, Linux 6.8.0-88-generic, Intel i7-7700, Rust 1.99.0, Cargo 1.99.0, PostgreSQL 17.11, ext4 `/dev/md2` mirrored Samsung NVMe. Resolved worker `sha2`: **0.10.9**.
 
-Passed:
+The full gate passed source/path/integrity behavior, full PostgreSQL tests, fencing, query-plan shape, lock-wait expiry, cleanup, and target measurements. It failed on three items:
 
-- exact SHA/base/clean detached-checkout provenance; master unchanged;
-- `cargo check`;
-- no-DB unit tests: 8 passed; expected DB tests skipped only because the DB URL was unset;
-- full PostgreSQL suite: 8 unit + 5 durable job-state + 4 processing-contract tests, all passed and none skipped;
-- predecessor durable-job lock-wait expiry regression;
-- successful publication state semantics and proof source verification was outside a DB transaction;
-- source-identity, wrong-owner, stale-generation, and expired-lease fencing;
-- publication row-lock wait across expiry: 10/10 passes, zero flakes/timeouts/skips;
-- existing-media conflict preservation;
-- source path/symlink/integrity/security probes;
-- byte-sniffing independence from declared MIME;
-- retryable/terminal error classification;
-- bounded publication query plan with no sequential scans;
-- cleanup/restoration with no source/ref/production-state writes.
+- `cargo fmt --check` formatting differences;
+- Rust 1.99 Clippy `chunks_exact_to_as_chunks` denial;
+- a real SQL ordering defect where a soft-deleted post could receive ready `media` before the later release update rejected it.
 
-Failures:
+Corrective commits applied formatting, used `as_chunks::<4>()`, moved post eligibility/locking ahead of media insertion, and added committed deleted/non-releasable regressions.
 
-1. `cargo fmt --check` returned exit 1 with deterministic formatting diffs in `processing.rs` and `tests/processing_contract.rs`.
-2. `cargo clippy --all-targets -- -D warnings` returned exit 101 because Rust 1.99 denies `chunks_exact_to_as_chunks` at the media-brand helper.
-3. A disposable deleted-post probe found a real invariant defect in the pre-fix SQL: `publish_processed` returned conflict and left the post unreleased/job running, but `written_media` had already inserted a ready row. Raw state was `release_state=0 ready_media=1 job_state=1 claimed_by=Some("probe-owner")`.
+### Final targeted gate — PASS
 
-The formatting and Clippy issues were mechanical. The publication defect required a SQL ordering/eligibility correction and committed regression coverage.
+Evidence ZIP: `m3-worker-processing-contract-final-20261003T013900Z.zip`.
+ZIP SHA-256: `14DA7E1C4B8FB5495EFA6D2C1C920FD01CCF724F7441EFE5A928887216238ACB`.
+Exact tested SHA: `37ba916fad6e265f8e8ffde7b742533f8c55425a`.
+Environment: Ubuntu 24.04.3, Linux 6.8.0-88-generic, Intel i7-7700, Rust 1.99.0, Cargo 1.99.0, PostgreSQL 17.11, ext4 on local mirrored NVMe. Resolved production `sha2`: **0.10.9**.
 
-## Target-host measurements from the failed gate
+Verified from raw evidence:
+
+- exact feature SHA, exact `v2` merge base, expected four-file corrective delta, and unchanged `master`;
+- `cargo fmt --check`, `cargo check`, and `cargo clippy --all-targets -- -D warnings` passed;
+- no-DB run: 8 unit tests passed; only DB-backed tests emitted the intentional unset-URL skip markers;
+- PostgreSQL run: 8 unit + 5 durable-job + 5 processing-contract tests passed; zero DB-enabled skips;
+- deleted/non-releasable publication regression: **10/10**, zero failures/flakes/skips/timeouts;
+- publication lock-wait expiry regression: **10/10**, zero failures/flakes/skips/timeouts;
+- predecessor durable-job post-lock expiry regression passed;
+- focused wrong-owner, stale-generation, source-digest-change, already-expired, existing-media-conflict, deleted-post, and success probes all executed and passed;
+- success path produced exactly one ready media row, released the post, succeeded/cleared the job, and confirmed source verification occurred outside a DB transaction;
+- corrected query plan used bounded indexed access and locked job/post eligibility before `written_media`; no unbounded sequential scan appeared;
+- cleanup removed the disposable database/container/network/checkouts/build outputs while leaving repository refs and production state untouched.
+
+Some harness/setup attempts were corrected during the gate (missing Rust components in the first disposable container, PostgreSQL readiness timing, malformed `cargo tree` package syntax, and an initial zero-test benchmark filter). Final evidence files are from the corrected executions; none of those attempts was counted as a product pass.
+
+Decision: the worker source-consumption/publication contract PASSES and is integrated into `v2`.
+
+## Accepted target-host worker baselines
 
 ### Source open + verify + sniff + rewind
 
-Release-mode, warm-page-cache, fixed 128 KiB verification buffer, 15 operations per size:
+Release mode, warm page cache, 128 KiB verification buffer, 15 operations per size:
 
-- 8 MiB: **35.104 ms average**, **227.91 MiB/s**;
-- 64 MiB: **298.757 ms average**, **214.92 MiB/s**;
-- 256 MiB: **1,122.598 ms average**, **228.05 MiB/s**.
+- 8 MiB: **35.104 ms**, **227.91 MiB/s**;
+- 64 MiB: **298.757 ms**, **214.92 MiB/s**;
+- 256 MiB: **1,122.598 ms**, **228.05 MiB/s**.
 
-These remain valid after the correction: the source read/hash/size/path architecture did not change; the only `processing.rs` semantic change is the Clippy-equivalent 4-byte brand iteration helper plus formatting.
+These remain the baseline until source verification architecture materially changes. They measure source preparation only, not decode/encode.
 
-### Pre-fix publication baseline
+### Corrected publication SQL
 
-The exact pre-fix publication statement completed c1 1,000/1,000 with zero errors at **1.419 ms average** and **698.34 TPS**. The pre-fix `EXPLAIN (ANALYZE, BUFFERS)` used bounded index access for job/source/media/post and no sequential scan; measured execution was **0.989 ms** on the one-row plan probe.
+PostgreSQL 17.11, concurrency 1, 1,000 unique successful publications:
 
-**Do not retain these publication numbers as the accepted post-fix baseline.** The corrected statement now joins and locks the post before `written_media`, so both the query plan and c1 publication latency must be remeasured in the targeted revalidation.
+- **1,000/1,000**, zero errors;
+- **1.539 ms average statement latency**;
+- **644.22 TPS**;
+- final state: 1,000 ready media rows, 1,000 released posts, 1,000 succeeded jobs.
 
-## Corrective implementation after failed gate
+The corrected one-row `EXPLAIN (ANALYZE, BUFFERS)` used bounded index paths for job/source/post/media, with no unbounded sequential scan; execution time was **0.949 ms**. Top-level buffers: shared hit=58, read=4, dirtied=11, written=6.
 
-- `processing.rs` now matches the gate-recorded Rust formatting and uses `as_chunks::<4>()` rather than the denied constant-size `chunks_exact(4)` pattern.
-- `publication.rs` now makes post eligibility part of the initial owned set and locks both job and post before ready-media insertion.
-- `processing_contract.rs` is formatted and includes a committed regression that first soft-deletes the post, then separately sets a non-releasable release state; in both cases publication must return conflict while media count stays zero and the job remains running/owned.
-
-No source-verification architecture, media schema, ingestion code, Go/API/frontend code, codec dependency, Redis path, or polling loop changed.
+The pre-fix 1.419 ms / 698.34 TPS measurement is historical only and must not be used as the accepted publication baseline.
 
 ## Remaining observations
 
-- Standard-library canonicalization + symlink checks prevent traversal and ordinary symlink substitution, but are not an `openat2`/`O_NOFOLLOW` race-proof sandbox against a malicious concurrent local filesystem writer. The media tree is service-controlled; escalate only if that threat model changes.
-- Full source SHA-256 verification costs one sequential source read before codec consumption; retain the target measurements above and reassess only with real codec/profile evidence.
-- Concrete output-file no-overwrite publication belongs with the first codec implementation.
-- The ingestion-side source-orphan janitor/reconciliation gap remains open before production ingestion is enabled.
-- Go API and Rust worker still need compatible shared-root UID/GID/permissions in deployment.
+- Concrete output-file staging/fsync/no-overwrite collision handling is not implemented yet; it must accompany the first real codec so DB publication never points at an output that was not durably published first.
+- Standard-library canonicalization + symlink checks are not equivalent to Linux `openat2`/`O_NOFOLLOW` race-proof resolution against a malicious concurrent local filesystem writer. The current media tree is service-controlled; revisit only if that threat model changes.
+- Full source SHA-256 verification costs one sequential read before codec consumption. Do not redesign it without real codec/profile evidence.
+- A process crash between ingestion source publication and authoritative DB commit can leave an unreferenced source file. Orphan reconciliation/janitor remains required before production ingestion is enabled.
+- Deployment must ensure Go API and Rust worker share the media root with compatible UID/GID/permissions.
 
 ## Local-agent evidence workflow
 
-Use isolated/disposable resources and return one ZIP containing exact SHA/status, commands, raw stdout/stderr, environment/tool versions, query plans/measurements, failures, and cleanup/restoration evidence. Preserve remote raw evidence until no longer needed.
+For target-host work, use isolated/disposable resources and return one ZIP with exact SHA/status, commands, raw stdout/stderr, environment/tool versions, measurements, failures, and cleanup/restoration evidence. Preserve raw remote evidence until no longer needed.
 
 ## Single best next task
 
-Run a **targeted execution-only revalidation** on the exact feature-branch SHA after this state commit. Require `cargo fmt --check`, `cargo check`, `cargo clippy --all-targets -- -D warnings`, no-DB tests, and the full PostgreSQL worker suite; run the new deleted/non-releasable publication regression plus the publication lock-wait expiry regression repeatedly; rerun `EXPLAIN (ANALYZE, BUFFERS)` and c1/1,000 latency for the corrected publication SQL because that measured path changed. Do not rerun the expensive 8/64/256 MiB source-verification benchmarks or the already-passed source-path/security probes unless the targeted checks expose a broader source-verification issue. Return one evidence ZIP; only a clean PASS should permit fast-forward integration into `v2`.
+Implement the first real **image-processing slice** on a fresh branch from current `v2`: add deterministic no-overwrite output-file staging/publication with required file/directory durability, then implement a bounded `ImageProcessor` path that fully decodes/validates supported still images and produces the required AVIF/thumbnail output metadata under the integrated deterministic identity. Keep video out of this slice. Add crash/idempotency/collision tests and target-host image codec benchmarks, and measure API latency while one worker job runs so M3 begins validating the requirement that background media work not materially degrade interactive latency.
