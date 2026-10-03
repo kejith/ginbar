@@ -142,7 +142,7 @@ fn png_bytes() -> Vec<u8> {
     let width = 96u32;
     let height = 64u32;
     let mut pixels = vec![0u8; width as usize * height as usize * 4];
-    for (index, pixel) in pixels.chunks_exact_mut(4).enumerate() {
+    for (index, pixel) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let value = (index % 251) as u8;
         pixel.copy_from_slice(&[value, value.wrapping_mul(3), value.wrapping_mul(7), 255]);
     }
