@@ -57,7 +57,8 @@ fn run() -> Result<(), String> {
         return run_forever(&config);
     }
 
-    let mut client = ProductionConnectionFactory::new(&config.database_url, config.lease_ms)?.connect()?;
+    let mut client =
+        ProductionConnectionFactory::new(&config.database_url, config.lease_ms)?.connect()?;
     if command == "claim-once" {
         return claim_once(&mut client, &config);
     }
@@ -361,10 +362,7 @@ mod tests {
     #[test]
     fn statement_timeout_preserves_existing_server_options() {
         assert_eq!(
-            statement_timeout_options(
-                Some("-c lock_timeout=1000"),
-                Duration::from_millis(250)
-            ),
+            statement_timeout_options(Some("-c lock_timeout=1000"), Duration::from_millis(250)),
             "-c lock_timeout=1000 -c statement_timeout=250"
         );
     }
