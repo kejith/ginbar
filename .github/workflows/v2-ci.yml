@@ -24,7 +24,7 @@ concurrency:
 jobs:
   correctness:
     name: correctness
-    runs-on: [self-hosted, Linux, X64, amp-isolated]
+    runs-on: [self-hosted, Linux, X64, amp-ci-vm]
     timeout-minutes: 45
 
     steps:

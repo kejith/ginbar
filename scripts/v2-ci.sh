@@ -12,6 +12,14 @@ fail() {
   exit 1
 }
 
+release_host_gate() {
+  if [[ -n "${HOST_GATE_SSH_PID:-}" ]]; then
+    kill "$HOST_GATE_SSH_PID" 2>/dev/null || true
+    wait "$HOST_GATE_SSH_PID" 2>/dev/null || true
+    HOST_GATE_SSH_PID=""
+  fi
+}
+
 resolve_auto_scope() {
   local base="$1"
   local worker=0 backend=0 frontend=0 shared=0 path
@@ -94,10 +102,36 @@ esac
 
 printf 'v2-ci: sha=%s scope=%s base=%s\n' "$(git rev-parse HEAD)" "$requested_scope" "${base_sha:-none}"
 
+if [[ -n "${GINBAR_HOST_GATE_SSH:-}" ]] && ! command -v flock >/dev/null 2>&1; then
+  fail "flock is required for the remote host gate"
+fi
+
 if command -v flock >/dev/null 2>&1; then
   host_gate_lock="${GINBAR_HOST_GATE_LOCK:-/tmp/ginbar-v2-host-gate.lock}"
-  exec 9>"$host_gate_lock"
-  flock -n 9 || fail "host gate is busy ($host_gate_lock); do not overlap CI and target benchmarks"
+  if [[ -n "${GINBAR_HOST_GATE_SSH:-}" ]]; then
+    host_gate_identity="${GINBAR_HOST_GATE_IDENTITY:-${HOME}/.ssh/ginbar-host-gate}"
+    [[ -r "$host_gate_identity" ]] || fail "host gate SSH identity is unreadable ($host_gate_identity)"
+    command -v ssh >/dev/null 2>&1 || fail "ssh is required for the remote host gate"
+    coproc HOST_GATE_SSH {
+      ssh -T -i "$host_gate_identity" \
+        -o BatchMode=yes \
+        -o ConnectTimeout=15 \
+        -o StrictHostKeyChecking=yes \
+        "$GINBAR_HOST_GATE_SSH"
+    }
+    if ! read -r -t 15 -u "${HOST_GATE_SSH[0]}" host_gate_status; then
+      release_host_gate
+      fail "could not acquire remote host gate ($GINBAR_HOST_GATE_SSH)"
+    fi
+    if [[ "$host_gate_status" != "LOCKED" ]]; then
+      release_host_gate
+      fail "remote host gate returned an unexpected response"
+    fi
+    trap 'release_host_gate' EXIT
+  else
+    exec 9>"$host_gate_lock"
+    flock -n 9 || fail "host gate is busy ($host_gate_lock); do not overlap CI and target benchmarks"
+  fi
 fi
 
 command -v docker >/dev/null 2>&1 || fail "docker is required"
@@ -145,6 +179,7 @@ cleanup() {
     dkr network rm "$NETWORK" >/dev/null 2>&1 || true
   fi
   rm -rf "$TMP_ROOT" >/dev/null 2>&1 || true
+  release_host_gate
   exit "$status"
 }
 trap cleanup EXIT
