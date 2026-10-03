@@ -1,6 +1,6 @@
 # Ginbar v2 state / handoff
 
-Last updated: 2026-10-03
+Last updated: 2026-10-04
 Phase: **M3 media pipeline — still-image processing integrated; production worker loop next**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
@@ -107,6 +107,13 @@ The rewrite tree/docs were cleaned up without changing v2 product semantics:
 
 Legacy source itself was deliberately retained as reference material while the rewrite remains incomplete.
 
+## CI / handoff status
+
+- `astra/v2-self-hosted-ci` contains the isolated self-hosted CI gate targeting `ginbar-ci-vm` / `amp-ci-vm` and the shared host benchmark-lock relay.
+- Full `scope=all` validation passed on GitHub Actions run `37160895027` at commit `ad46a3ed279b9a80f867e76512082dec56ef04a4`.
+- The CI feature branch is not yet integrated into `v2`.
+- Project instructions now require the applicable CI pipeline for the exact revision being handed to the local agent to be green first. Routine formatting, compiler, lint, test, and other correctness failures must be fixed before handoff; infrastructure-blocked CI is a handoff blocker unless the user explicitly authorizes bypass.
+
 ## Remaining M3 work
 
 - production worker polling/wakeup loop;
@@ -133,24 +140,14 @@ Deferred cleanup/operational items:
 
 Use local/server agents for browser/DevTools, SSH, real PostgreSQL, target-server benchmarks, temporary deployments, or unavailable toolchains.
 
+Before any local-agent handoff, require a green applicable CI pipeline for the exact revision being handed off. Do not use the local agent to discover routine correctness failures that CI can catch.
+
 Default is read-only/execution-only. They must not modify source, SQL, docs, config, commits, branches, deployments, or persistent state without explicit approval for that specific write.
 
 Return one evidence ZIP with exact SHA/worktree state, commands, stdout/stderr, environment versions, raw benchmark/query-plan data, errors, cleanup proof, and concise findings.
 
 ## Single best next task
 
-Implement and validate the **production worker loop + lease-renewal/cancellation slice** from current `v2`.
+Integrate the validated **self-hosted v2 CI gate** into `v2`, verify the `v2` pipeline is green, then resume the production worker loop + lease-renewal/cancellation slice.
 
-Required boundary:
-
-1. claim at most one job at a time;
-2. poll/wake without busy-spinning;
-3. renew lease while source verification, codec, and filesystem work run;
-4. promptly stop/fence publication when ownership is lost, cancellation fires, or shutdown/deadline occurs;
-5. keep DB transactions short and codec work outside transactions;
-6. preserve existing deterministic/idempotent output semantics;
-7. use bounded retry/backoff and graceful shutdown;
-8. test crash/restart, lease expiry/loss, renewal failure, cancellation, and shutdown;
-9. benchmark the real continuous runner against API latency before adding scheduler/admission complexity.
-
-Do not begin video processing until this boundary passes its correctness and performance gate.
+Do not begin video processing until the production runner boundary passes its correctness and performance gate.
