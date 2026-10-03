@@ -152,6 +152,8 @@ After coding:
 
 Use a local AI agent when this session lacks browser/DevTools, SSH/server, real PostgreSQL, temporary deployment, server benchmarks, or unavailable toolchains.
 
+Before any handoff to the local agent, the applicable CI pipeline for the exact revision being handed off must be green. Do not hand off code with known formatting, compiler, lint, test, or other correctness-gate failures for the local agent to rediscover. Fix CI failures here first. Only after CI is green should the local agent be used for environment-specific validation, target-host benchmarks, browser/DevTools, SSH/server work, or other capabilities unavailable here. If CI is unavailable or blocked by infrastructure, treat that as a handoff blocker unless the user explicitly authorizes a bypass.
+
 Default is read-only/execution-only. Without specific approval it may inspect, build/test existing code, create disposable worktrees/DBs/services, benchmark/profile, and collect evidence. It must not modify source, SQL, docs, config, commits, branches, deployments, or persistent state without explicit user approval for that specific write.
 
 Prepare deterministic scripts/commands here when practical. Require one evidence ZIP containing exact SHA/worktree state, commands, stdout/stderr, versions, raw measurements/query plans, errors, cleanup/restoration evidence, and concise findings. Preserve remote raw evidence until reviewed.
