@@ -1,51 +1,44 @@
 # Ginbar v2 State / Handoff
 
 Last updated: 2026-10-03
-Phase: M3 image-processing slice — CORRECTNESS/PERFORMANCE ACCEPTED; EXACT LOCK COMMIT PREPARED LOCALLY; REBASE/LOCKED VALIDATION + PUSH PENDING
+Phase: M3 media pipeline — STILL-IMAGE PROCESSING INTEGRATED; PRODUCTION WORKER LOOP NEXT
 Integration branch: `v2`
-Active feature branch: `astra/m3-image-processing`
+Active feature branch: `astra/m3-image-processing` (image slice complete; may be retired after integration)
 Legacy branch: `master` (read-only for rewrite work)
 
 ## Read this first
 
 This file is the resume point. Read it before `PLAN.md`. Do not rely on chat history as project memory.
 
-## Branch safety / status
+## Branch / milestone status
 
-- `master` remains legacy/read-only at `181fa44d79c7b4a1984c1a35795762dd503b3f77`.
-- `v2` remains unchanged by this image slice at `e601c78486d219f97f98e55349209849f79c353f`.
-- The image-processing implementation was branched from exact `v2` SHA `e601c78486d219f97f98e55349209849f79c353f`.
-- Accepted image-processing source semantics remain commit `e53605838075509800efeaa644319d29e18587f2`.
-- Commits after `e536058...` on the feature branch are state/history-only or transient net-zero repository probes; no image-processing source semantics changed.
-- Primary-session state updates have advanced remote `astra/m3-image-processing` beyond `e9ae4c0380481d8dfc7819b43b26b19990658d93` without changing product source. Fetch the exact current remote feature head before any local-agent push.
-- Do not modify `master`.
-- Do not fast-forward `v2` until the exact validated `Cargo.lock` commit is on the remote feature branch and locked correctness passes on that exact resulting head.
-- Worker v2 is under `src/worker/v2`; legacy `src/worker` is reference-only.
-- `.local-agent-results/` remains ignored for local evidence ZIPs; a local checkout may use `.git/info/exclude` rather than a tracked ignore change.
+- `master` is legacy and must remain untouched at `181fa44d79c7b4a1984c1a35795762dd503b3f77`.
+- The still-image processing slice was developed from `v2` base `e601c78486d219f97f98e55349209849f79c353f` and is accepted for integration.
+- M1 board benchmark is complete.
+- M2 fresh schema + core Go API is complete and integrated.
+- M3 durable PostgreSQL media-job claim/retry/recovery is integrated.
+- M3 upload/URL ingestion + durable enqueue is integrated.
+- M3 Rust source-consumption + generation-fenced DB publication is integrated.
+- M3 still-image decode/resize/AVIF/thumbnail + durable no-overwrite file publication is now accepted and integrated.
+- M3 is **not complete**. Remaining work includes the long-running worker loop, lease renewal/cancellation, video processing, duplicate detection, regeneration, progress/status UI, and a production-runner background-load gate.
 
-## Integrated milestones / boundaries
+## Retained architecture / invariants
 
-Already integrated into `v2`:
+Keep unless new evidence contradicts them:
 
-- M1 board benchmark;
-- M2 fresh schema + core Go API;
-- durable PostgreSQL media-job claim/retry/recovery boundary;
-- upload/URL ingestion + durable enqueue boundary;
-- Rust source-consumption + deterministic/fenced DB publication contract.
-
-Retained architecture:
-
-- Go 1.25 + pgx/v5 + standard `net/http`;
-- PostgreSQL authoritative for app/workflow/job state;
+- Go 1.25 + pgx/v5 + standard `net/http` for API/workflows;
+- PostgreSQL authoritative for application state and durable media jobs;
 - Rust media worker;
 - local NVMe media storage;
-- no Redis without measured need;
+- no Redis unless a measured need appears;
 - immutable numeric relational IDs;
-- primary feed uses post-ID cursor pagination;
-- media jobs use PostgreSQL + generation-fenced ownership;
-- filesystem/codec work stays outside DB transactions;
-- final publication is fenced by job owner/generation, source identity, post eligibility, and real-time lease expiry;
-- at-least-once processing requires deterministic/idempotent side effects.
+- primary feed uses post-ID cursor pagination, never OFFSET;
+- durable jobs use PostgreSQL ownership + generation fencing;
+- codec/filesystem work stays outside DB transactions;
+- publication is fenced by owner/generation, source identity, post eligibility, and lease validity;
+- at-least-once processing requires deterministic/idempotent durable side effects;
+- initial still-image worker concurrency remains **one job at a time**;
+- AVIF encoder thread count remains **one** until new measurements justify more.
 
 ## Accepted pre-image baselines
 
@@ -66,71 +59,77 @@ Fenced publication SQL, PostgreSQL 17.11:
 - 1,000/1,000 successful publications;
 - **1.539 ms** average statement latency;
 - **644.22 TPS**;
-- bounded indexed plan; one-row execution **0.949 ms**.
+- bounded/indexed one-row plan: **0.949 ms**.
 
-Validated source/publication evidence: `m3-worker-processing-contract-final-20261003T013900Z.zip`, SHA-256 `14DA7E1C4B8FB5495EFA6D2C1C920FD01CCF724F7441EFE5A928887216238ACB`, tested SHA `37ba916fad6e265f8e8ffde7b742533f8c55425a`.
+Evidence: `m3-worker-processing-contract-final-20261003T013900Z.zip`, SHA-256 `14DA7E1C4B8FB5495EFA6D2C1C920FD01CCF724F7441EFE5A928887216238ACB`, tested SHA `37ba916fad6e265f8e8ffde7b742533f8c55425a`.
 
-## Image-processing implementation
+## Integrated still-image processing contract
 
-### Durable local output publication
+Worker v2 lives under `src/worker/v2`; legacy `src/worker` remains reference-only.
+
+### Durable output publication
 
 `src/worker/v2/src/output.rs`:
 
-- output paths constrained below `media/`;
-- symlink/non-directory components rejected;
-- same-directory `create_new` staging;
-- staged file fully written + file-fsynced;
-- no-overwrite same-filesystem hard-link final publication;
-- containing directory fsync after publish;
-- staging cleanup + second directory fsync;
-- exact size + SHA-256 verification for idempotent reuse;
-- differing bytes at an existing deterministic destination are terminal and never overwritten.
+- confines output below `media/`;
+- rejects symlink/non-directory output path components;
+- uses same-directory `create_new` staging;
+- fully writes + fsyncs staged files;
+- publishes with no-overwrite same-filesystem hard links;
+- fsyncs the containing directory;
+- cleans staging and fsyncs directory again;
+- verifies exact size + SHA-256 for idempotent reuse;
+- treats differing bytes at an existing deterministic destination as terminal and never overwrites them.
 
-Crash tests cover failure after staged-file fsync and after final-directory fsync. Hidden staging orphans remain a future janitor concern.
+Crash tests cover failure after staging fsync and after final-directory fsync. Hidden staging orphans remain future janitor/reconciliation work.
 
 ### Bounded still-image processor
 
-`src/worker/v2/src/image.rs` supports JPEG, non-animated PNG, and non-animated WebP.
+`src/worker/v2/src/image.rs` processing version 1 supports JPEG, non-animated PNG, and non-animated WebP.
 
-Processing version 1 intentionally treats animated PNG/WebP, GIF, AVIF/HEIF input, and video as terminal/out-of-scope.
+Animated PNG/WebP, GIF, AVIF/HEIF input, and video are intentionally terminal/out-of-scope for this processing version.
 
-Current output-affecting contract:
+Output-affecting contract:
 
-- full decode before publication;
+- full decode before durable publication;
 - orientation applied and dimensions revalidated;
 - max input dimension 16,384 px;
 - max decoded pixels 80,000,000;
 - decoder allocation hint 384 MiB;
-- canonical image fits within 1,280 px without upscale;
+- canonical output fits within 1,280 px without upscale;
 - 256x256 center-crop thumbnail;
-- original full decode dropped after main-image downsize;
-- both AVIF outputs encode before either is published;
-- `ravif` speed 10, main quality 75, thumbnail quality 60;
-- explicit AVIF encoder thread count = 1;
-- deterministic `<stem>.thumb.avif` + canonical `.avif`;
-- canonical output SHA-256/size/dimensions feed the already-validated fenced DB publication.
+- full decode dropped after main-image downsize;
+- both AVIF outputs encoded before either is published;
+- `ravif` speed 10;
+- main quality 75;
+- thumbnail quality 60;
+- AVIF encoder threads = 1;
+- deterministic canonical `.avif` + `<stem>.thumb.avif`;
+- canonical SHA-256/size/dimensions feed the already validated fenced DB publication.
 
-Any output-affecting change after integration requires incrementing `PROCESSING_VERSION`.
+Any output-affecting change requires incrementing `PROCESSING_VERSION`.
 
-`process-once` intentionally handles at most one job and is still a validation/execution probe, not the eventual polling/lease-renewing production runner.
+`process-once` handles at most one job and is a validated execution primitive, not the eventual polling/lease-renewing runner.
 
 ## Correctness acceptance
 
-Final correctness evidence: `m3-image-processing-final-20261003T143503Z.zip`, SHA-256 `2DC7980BC81342E770768DD4F460484F422B549E025ACA8D1EAAFABA135E9045`, tested source `e53605838075509800efeaa644319d29e18587f2`.
+Accepted source semantics were established at `e53605838075509800efeaa644319d29e18587f2`; later pre-lock feature commits changed state/history only.
+
+Final correctness evidence: `m3-image-processing-final-20261003T143503Z.zip`, SHA-256 `2DC7980BC81342E770768DD4F460484F422B549E025ACA8D1EAAFABA135E9045`.
 
 Target/toolchain: Ubuntu 24.04.3, Linux 6.8.0-88-generic, Intel i7-7700 (4 physical / 8 logical CPUs), ext4 RAID1 NVMe, PostgreSQL 17.11, Rust/Cargo 1.99.0.
 
-Accepted:
+Accepted results:
 
-- rustfmt/check/Clippy `-D warnings` pass;
-- no-DB tests pass;
-- PostgreSQL-enabled suite pass;
-- explicit image crash/idempotency/collision DB tests pass;
-- release worker + `image_bench` build pass;
-- deterministic DB/filesystem publication + hash checks pass;
-- unrelated existing bytes are never overwritten.
+- rustfmt/check/Clippy `-D warnings`: pass;
+- no-DB tests: pass;
+- PostgreSQL-enabled suite: pass;
+- explicit image crash/idempotency/collision tests: pass;
+- release worker + `image_bench`: pass;
+- deterministic DB/filesystem publication + hash checks: pass;
+- collision/no-overwrite behavior: pass.
 
-Accepted real-media processing medians:
+Real-media processing medians:
 
 - 172x178 JPEG: **79.145 ms**;
 - 10109x4542 JPEG: **1,292.111 ms**, output 1280x575;
@@ -138,155 +137,119 @@ Accepted real-media processing medians:
 - 550x368 WebP: **170.883 ms**;
 - deterministic 8192x8192 PNG: standalone process **1,923.785 ms**, ~370 MiB max RSS.
 
-## Dependency reproducibility
+## Dependency reproducibility / final lock gate
 
-The exact graph used by the accepted final measurements is represented by a 40,521-byte `Cargo.lock` with SHA-256:
+The application lockfile is now committed at `src/worker/v2/Cargo.lock`.
 
-`4B355C9016EF56D71C78D4CFCC347BF0A6FD2F3DBA8E6F36465B6D3EDEDAA74A`
-
-Expected Git blob SHA-1 for those exact bytes:
-
-`9bd2933d1a25f84cb04dc354476a3e6c7cdb0619`
-
-The corrected load-curve run reconstructed this graph from crates.io with:
-
-```text
-cargo generate-lockfile
-cargo update -p mio --precise 1.2.3
-```
-
-and then used `--locked` for check/test/Clippy/build.
-
-A prior unconstrained fresh resolution changed only `mio 1.2.3 -> 1.2.4`, producing lock SHA `00E6C634CCFFBAC6A25DC0CDDBC00A2A58E3FE05AB4AF639412BDAFE9AE362DB`; that was registry-resolution drift, not source drift. This confirms an application lockfile is required.
-
-The exact validated lock bytes are preserved in `m3-image-processing-load-curve-final-20261003T174724Z.zip` as `evidence/Cargo.lock` and `evidence/Cargo.lock.reconstructed`.
-
-### Local-agent lock commit status
-
-User explicitly approved the narrow lockfile write.
-
-The local agent verified the source evidence ZIP SHA-256 `C2432D3B4E38A8ADFC842DE2205903BEE0C31B9A3EC1D26F9AD4DF13CF80DD13`, binary-extracted `evidence/Cargo.lock`, and independently verified:
+Exact accepted bytes:
 
 - size: **40,521 bytes**;
 - SHA-256: `4B355C9016EF56D71C78D4CFCC347BF0A6FD2F3DBA8E6F36465B6D3EDEDAA74A`;
 - Git blob SHA-1: `9bd2933d1a25f84cb04dc354476a3e6c7cdb0619`.
 
-It copied only those bytes into an isolated clone at parent `e9ae4c0380481d8dfc7819b43b26b19990658d93` and created local commit:
+An unconstrained fresh resolution had drifted only `mio 1.2.3 -> 1.2.4`; the committed lock freezes the graph used by the accepted measurements.
 
-`f684fbd747ddd2c3295ccbebe4f12e85a92ba0a1`
+Final pushed lock commit before this state commit:
 
-That local commit contains exactly one path, `src/worker/v2/Cargo.lock`, with the required hashes. The isolated checkout was clean afterward.
+`83dac34f399c52d3b0be7f94cfe7ffb1865edb79`
 
-However, the agent stopped before the required `cargo check --locked`, `cargo test --locked`, and `cargo clippy --locked --all-targets -- -D warnings` validation and did **not** push the commit. Primary-session state commits subsequently advanced the remote feature branch, so `f684fbd...` can no longer be pushed directly as a fast-forward.
+Parent:
 
-Preferred continuation is to preserve the exact lock commit content, fetch the current remote feature head, rebase/cherry-pick the one-file lock change onto that current head without changing its bytes, run the locked gate on the rebased head, then push normally if everything passes. Do not regenerate the lockfile.
+`b6d7164068a9a7c2a6f305bbe4a39f2f765f3f18`
 
-## API coexistence evidence
+That commit changes exactly `src/worker/v2/Cargo.lock`; remote GitHub reports the expected blob SHA above.
 
-### Saturation + scheduler experiments
+Final lock-validation handoff evidence:
 
-Earlier c8 closed-loop measurements showed a real peak-capacity cost from one large image job. Low cgroup weight, a 0.5 CPU quota, and safe cpuset partitioning did not remove that cost; hard quota significantly slowed media processing. `perf` profiling was unavailable because target kernel `perf_event_paranoid=4` and no host security setting was changed.
+- `cargo check --locked`: pass;
+- `cargo test --locked`: pass, **29 tests passed**;
+- `cargo clippy --locked --all-targets -- -D warnings`: pass;
+- Rust/Cargo 1.99.0, Clippy 0.1.99;
+- lock bytes/hash/blob unchanged after tests;
+- pushed without force;
+- `v2` and `master` unchanged during the push;
+- isolated worktree clean.
 
-Those experiments remain useful capacity evidence, but the c8 closed-loop benchmark is effectively a maximum-throughput test. It should not alone force scheduler/admission complexity when absolute API latency remains low.
+Evidence archive reported by the local agent: `m3-image-processing-lock-final-20261003T181052Z.zip`, SHA-256 `64680d382ad787972cfab61162805979201da357bf4313171b724ea064514527`, 14 manifest-listed payloads verified.
 
-### Final load-sensitivity curve — ACCEPT IMAGE-SLICE CONFIGURATION
+## API coexistence / performance decision
 
-Evidence ZIP: `m3-image-processing-load-curve-final-20261003T174724Z.zip`.
-ZIP SHA-256: `C2432D3B4E38A8ADFC842DE2205903BEE0C31B9A3EC1D26F9AD4DF13CF80DD13`.
+Final load-sensitivity evidence: `m3-image-processing-load-curve-final-20261003T174724Z.zip`, SHA-256 `C2432D3B4E38A8ADFC842DE2205903BEE0C31B9A3EC1D26F9AD4DF13CF80DD13`.
 
 Evidence quality:
 
-- embedded manifest verified **823/823** payload files;
-- reconstructed accepted `Cargo.lock` SHA exactly `4B355C...AA74A`;
-- `cargo check --locked`: pass;
-- `cargo test --locked`: pass;
-- `cargo clippy --locked --all-targets -- -D warnings`: pass;
-- five baseline + five loaded primary rounds at each c1/c2/c4/c8;
-- **40/40** primary HTTP rounds valid;
-- **20/20** worker fixtures valid;
-- zero invalid attempts;
-- all HTTP requests successful, zero errors, HTTP 200;
-- all loaded jobs remained active across the measured HTTP interval and then completed successfully;
-- DB/filesystem publication integrity passed for every loaded fixture;
-- cleanup restored all pre-existing container/network/volume/image inventories.
+- manifest verified 823/823 payload files;
+- locked check/test/Clippy passed;
+- five baseline + five worker-overlap rounds at each c1/c2/c4/c8;
+- 40/40 primary HTTP rounds valid;
+- 20/20 worker fixtures valid;
+- zero HTTP errors;
+- DB/filesystem integrity passed for every loaded fixture.
 
-Median baseline -> loaded changes:
+Median baseline -> loaded:
 
 | concurrency | baseline p95 | loaded p95 | p95 change | baseline p99 | loaded p99 | RPS change |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| c1 | 2.329 ms | 2.427 ms | **+4.21%** | 2.576 ms | 2.623 ms | -7.87% |
-| c2 | 2.550 ms | 2.621 ms | **+2.78%** | 2.836 ms | 2.862 ms | -6.03% |
-| c4 | 2.853 ms | 3.199 ms | **+12.12%** | 3.298 ms | 4.420 ms | -4.75% |
-| c8 | 4.665 ms | 5.888 ms | **+26.22%** | 5.693 ms | 7.177 ms | -12.65% |
+| c1 | 2.329 ms | 2.427 ms | +4.21% | 2.576 ms | 2.623 ms | -7.87% |
+| c2 | 2.550 ms | 2.621 ms | +2.78% | 2.836 ms | 2.862 ms | -6.03% |
+| c4 | 2.853 ms | 3.199 ms | +12.12% | 3.298 ms | 4.420 ms | -4.75% |
+| c8 | 4.665 ms | 5.888 ms | +26.22% | 5.693 ms | 7.177 ms | -12.65% |
 
-At c8, median loaded max latency was **10.949 ms** and all 2,000 measured requests per round still succeeded. At c1/c2, p95/p99 impact remained small in absolute and relative terms; c4/c8 show the expected shrinking peak-capacity margin as offered concurrency approaches saturation.
+At c8, median loaded max latency was **10.949 ms** and all measured requests succeeded. Baseline API+PostgreSQL CPU medians were ~1.13, 2.10, 3.86, and 6.16 logical CPUs at c1/c2/c4/c8. Worker CPU remained ~1.12-1.15 logical CPUs and worker wall time ~2.57-2.82 s.
 
-Measured baseline API+PostgreSQL CPU medians were ~1.13, 2.10, 3.86, and 6.16 logical CPUs at c1/c2/c4/c8 respectively. Loaded worker CPU remained ~1.12-1.15 logical CPUs. Worker wall time remained roughly 2.57-2.82 s across points.
+Decision for this image slice:
 
-### Performance decision
+- accept one image job at a time;
+- accept one AVIF encoder thread;
+- do not increase image concurrency to the earlier PLAN hypothesis of ~2 without new measurements;
+- do not add scheduler/load-admission complexity until the real continuous worker exists and can be measured;
+- retain the documented peak-capacity tax as a production/deployment constraint.
 
-For the still-image slice, the configured limit is accepted as:
+## Historical scheduling experiments
 
-- **one media job at a time**;
-- **one AVIF encoder thread**;
-- no automatic increase to the PLAN's earlier image-concurrency≈2 hypothesis without new measurements.
+Unrestricted c8, low cgroup weight, 0.5-CPU quota, and safe cpuset partitioning all showed material peak-capacity interference. Low weight did not help; 0.5 CPU slowed the worker substantially; reserving a physical core had its own large API capacity tax. `perf` profiling was blocked by host `perf_event_paranoid=4`; no host security setting was changed.
 
-Reason: even at the c8 saturation reference, absolute loaded p95/p99 remained ~5.9/7.2 ms with zero errors, within the project's low-single-digit/low-tens hot-path target. The measured tradeoff is reduced peak HTTP capacity (~12.7% RPS at c8), not a catastrophic interactive-latency failure. At lower concurrency the tail-latency effect is substantially smaller.
-
-Do not claim the worker is free: capacity tax and shared-host sensitivity are real and must remain deployment/production-runner constraints. Do not add scheduler/load-admission complexity before the eventual runner is measured under its real behavior.
-
-## Decision / integration status
-
-Image-processing source correctness and performance are accepted for integration into `v2` under the limits above.
-
-Integration is pending only on completing the exact lock commit workflow:
-
-1. fetch current remote `astra/m3-image-processing` head; it will be state-only descendants of `e9ae4c...`;
-2. preserve the exact one-file lock change from local commit `f684fbd747ddd2c3295ccbebe4f12e85a92ba0a1` while rebasing/cherry-picking it onto the current remote feature head;
-3. run Rust 1.99 `cargo check --locked`, `cargo test --locked`, and `cargo clippy --locked --all-targets -- -D warnings` on that rebased head;
-4. re-verify lock size/SHA/Git blob and one-file lock-change scope after those commands;
-5. verify `v2` and `master` are unchanged;
-6. push the rebased feature head normally without force;
-7. return evidence to the primary session;
-8. primary session verifies remote tree, updates this state one final time, then fast-forwards `v2` if no unrelated change appeared.
-
-M3 itself is **not complete** after this image slice. Remaining M3 includes at least:
-
-- long-running worker loop / wakeup policy;
-- lease renewal and cancellation during processing;
-- video processing;
-- duplicate detection;
-- regeneration;
-- progress/status UI;
-- production-level background workload gate for the configured worker behavior.
+These runs are capacity evidence, not justification for speculative image-path micro-optimization.
 
 ## Deferred observations
 
-- Full source SHA-256 verification costs one sequential source read before codec work; do not redesign without profile evidence.
-- Standard-library canonicalization/symlink checks are not `openat2`/`O_NOFOLLOW` race-proof against a malicious local writer; media tree is service-controlled.
-- Ingestion source orphans and processed staging orphans need eventual reconciliation/janitor work.
+- Full source SHA-256 verification costs one sequential read before codec consumption; do not redesign without profiler evidence.
+- Current canonicalization/symlink checks are not `openat2`/`O_NOFOLLOW` race-proof against a malicious concurrent local writer; the media tree is service-controlled.
+- Ingestion source orphans and processed staging orphans need eventual janitor/reconciliation work.
 - Deployment must ensure API and worker share media storage with compatible UID/GID/permissions.
-- Target host CPU is more constrained than RAM/NVMe; video will need its own explicit thread/concurrency benchmark.
+- Video needs its own explicit thread/concurrency and API-interference benchmark.
+
+## Remaining M3 work
+
+- long-running worker polling/wakeup loop;
+- lease renewal while processing;
+- cancellation/lost-ownership handling during long codec work;
+- video processing;
+- perceptual duplicate detection;
+- regeneration jobs;
+- progress/status UI;
+- production-level background workload gate for the configured continuous worker.
 
 ## Local-agent evidence workflow
 
-Execution-only target work remains read-only by default. Return one evidence ZIP with exact SHA/status, commands, raw stdout/stderr, environment/tool versions, measurements, invalid attempts, and cleanup proof. Preserve raw remote evidence until reviewed.
+Use isolated/disposable resources. Local agent is execution/read-only by default and must not modify source/docs/config/SQL/commits/branches/deployments/persistent state without explicit user approval for the specific write.
 
-A local agent must not modify source/docs/config/SQL/commits/branches/deployments/persistent state without explicit user approval for that specific write.
+Return one evidence ZIP with exact SHA/status, commands, stdout/stderr, environment versions, measurements, invalid attempts, and cleanup proof. Preserve raw remote evidence until reviewed.
 
 ## Single best next task
 
-Continue the already-approved lockfile operation; do **not** regenerate the lock or alter any product source.
+Start the **production worker loop + lease-renewal/cancellation slice** from current `v2` after verifying the integration ref.
 
-Required continuation:
+Design the smallest coherent runner around the already integrated one-job processing primitive:
 
-1. preserve/verify local commit `f684fbd747ddd2c3295ccbebe4f12e85a92ba0a1` and its exact lock blob `9bd2933d1a25f84cb04dc354476a3e6c7cdb0619`;
-2. fetch the exact current remote `astra/m3-image-processing` head and verify all remote changes since `e9ae4c...` are docs/state-only;
-3. rebase or cherry-pick only the one-file lock change onto that current remote head, producing one new local feature head without touching `v2` or `master`;
-4. verify the resulting lock size is 40,521 bytes, SHA-256 is `4B355C...AA74A`, Git blob is `9bd293...0619`, and no other path is changed by the lock commit;
-5. use Rust/Cargo 1.99.x and run `cargo check --locked`, `cargo test --locked`, and `cargo clippy --locked --all-targets -- -D warnings` on the rebased head;
-6. re-fetch remote refs and require the remote feature has not moved since step 2, while `v2` remains `e601c784...` and `master` remains `181fa44d...`;
-7. push the rebased feature head normally, without force;
-8. return one evidence ZIP with old/new commit identities, rebase/cherry-pick evidence, locked logs, exact hashes, remote refs, and final clean status; do not update `STATE.md` or `v2` from the local agent.
+1. claim at most one job at a time;
+2. poll/wakeup without busy-spinning;
+3. renew the lease during source verification/codec/filesystem work;
+4. cancel/abort publication promptly when ownership is lost or cancellation/deadline fires;
+5. keep DB transactions short and codec work outside transactions;
+6. preserve deterministic/idempotent output semantics;
+7. use bounded retry/backoff and graceful shutdown;
+8. test crash/restart, lease expiry/loss, renewal failure, cancellation, and shutdown;
+9. benchmark the real continuous runner against API latency before adding scheduler/admission complexity.
 
-After that evidence returns, verify and fast-forward the image slice into `v2`. Next implementation slice: production worker loop with lease renewal/cancellation, preserving one-job concurrency and benchmarking the real continuous runner before adding any admission/scheduler complexity.
+Do not begin video processing until the production runner boundary is validated.
