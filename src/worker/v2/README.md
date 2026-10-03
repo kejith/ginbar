@@ -132,3 +132,5 @@ cargo run --release --locked --manifest-path src/worker/v2/Cargo.toml \
 ```
 
 The runner gate must use the exact CI-green revision on the target host with disposable PostgreSQL/media state and the shared-host workload left in its normal state. Record idle runner CPU/RSS and PostgreSQL query activity, continuous-job throughput/resource use, forced-renewal behavior with a test lease shorter than a long fixture, and API p50/p95/p99/max latency plus throughput with and without the real long-running runner. The accepted worker remains one job and one encoder thread unless those measurements justify a different architecture.
+
+Target-host execution must not modify tracked source, SQL, docs, config, commits, branches, deployments, or persistent application state. Preserve raw evidence and return one bundle under `.local-agent-results/m3-runner-<timestamp>.zip` containing the exact SHA/worktree status, commands, stdout/stderr, environment/tool versions, raw HTTP/resource/PostgreSQL/job-state measurements, errors, cleanup/restoration proof, and a concise `findings.md`.
