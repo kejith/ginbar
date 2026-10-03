@@ -323,11 +323,10 @@ impl JobExecutor for StillImageJobExecutor {
             }
         };
 
-        // The current codec/output primitive is synchronous. Ownership may be lost while
-        // a codec call is running, so re-check before the fenced database publication.
-        // Deterministic no-overwrite output means any already-published bytes are safe to
-        // reuse on retry; the PostgreSQL owner/generation/source/lease fence remains the
-        // authoritative commit point.
+        // AVIF encode and OutputStore publication are synchronous in processing v1.
+        // If ownership is lost during one of those calls, the call may finish before
+        // cancellation is observed. Re-check before the authoritative DB commit; any
+        // deterministic no-overwrite files already created remain safe for retry.
         if let Some(reason) = cancellation.reason() {
             return JobExecution::Cancelled(reason);
         }
@@ -676,9 +675,6 @@ fn heartbeat_loop(
         if stop.wait(next_wait) {
             return;
         }
-        if cancellation.shutdown.is_requested() {
-            return;
-        }
 
         if client.is_none() {
             match factory.connect() {
@@ -823,9 +819,10 @@ mod tests {
         drive_loop(&shutdown, &settings, &waiter, || {
             let call = calls.fetch_add(1, Ordering::Relaxed) + 1;
             if call == 4 {
-                shutdown.request();
+                StepResult::Shutdown
+            } else {
+                StepResult::Transient("injected".to_owned())
             }
-            StepResult::Transient("injected".to_owned())
         })
         .expect("drive retry loop");
 

@@ -15,6 +15,7 @@ const CORE_MIGRATION: &str =
     include_str!("../../../backend/v2/internal/schema/migrations/001_core.sql");
 const LEASE_MIGRATION: &str =
     include_str!("../../../backend/v2/internal/schema/migrations/002_media_job_leases.sql");
+static USER_SEQUENCE: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone)]
 struct TestFactory {
@@ -65,12 +66,13 @@ impl TestDb {
     }
 
     fn insert_job(&mut self, max_attempts: i32) -> i64 {
-        let suffix = unique_suffix();
+        let user_sequence = USER_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let username = format!("r{}-{user_sequence}", std::process::id());
         let user_id: i64 = self
             .owner
             .query_one(
                 "INSERT INTO users (username) VALUES ($1) RETURNING id",
-                &[&format!("runner{suffix}")],
+                &[&username],
             )
             .expect("insert user")
             .get(0);
@@ -396,7 +398,10 @@ fn lost_generation_cancels_active_work_without_stale_completion() {
         )
         .expect("read reclaimed job");
     assert_eq!(row.get::<_, i16>("state"), 1);
-    assert_eq!(row.get::<_, Option<String>>("claimed_by").as_deref(), Some("runner-other"));
+    assert_eq!(
+        row.get::<_, Option<String>>("claimed_by").as_deref(),
+        Some("runner-other")
+    );
     assert_eq!(row.get::<_, i32>("attempts"), 2);
     assert_eq!(row.get::<_, i64>("lease_generation"), 2);
 }
@@ -570,11 +575,4 @@ fn test_settings() -> RunnerSettings {
 
 fn lease_ms(ms: u64) -> NonZeroU64 {
     NonZeroU64::new(ms).expect("test lease duration must be positive")
-}
-
-fn unique_suffix() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .expect("system clock before unix epoch")
-        .as_nanos()
 }
