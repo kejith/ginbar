@@ -61,7 +61,10 @@ impl fmt::Display for SourceLoadError {
         match self {
             Self::Database(error) => write!(formatter, "load media source: {error}"),
             Self::InvalidDigestLength(length) => {
-                write!(formatter, "media source SHA-256 has invalid length {length}")
+                write!(
+                    formatter,
+                    "media source SHA-256 has invalid length {length}"
+                )
             }
         }
     }
@@ -249,8 +252,9 @@ pub struct MediaRoot {
 
 impl MediaRoot {
     pub fn new(root: impl AsRef<Path>) -> Result<Self, ProcessError> {
-        let root = fs::canonicalize(root.as_ref())
-            .map_err(|error| ProcessError::retryable(format!("canonicalize media root: {error}")))?;
+        let root = fs::canonicalize(root.as_ref()).map_err(|error| {
+            ProcessError::retryable(format!("canonicalize media root: {error}"))
+        })?;
         let sources = fs::canonicalize(root.join("sources")).map_err(|error| {
             ProcessError::retryable(format!("canonicalize media source root: {error}"))
         })?;
@@ -278,24 +282,27 @@ impl MediaRoot {
             .parent()
             .ok_or_else(|| ProcessError::terminal("media source key has no shard directory"))?;
 
-        let shard_metadata = fs::symlink_metadata(shard)
-            .map_err(|error| ProcessError::retryable(format!("inspect media source shard: {error}")))?;
+        let shard_metadata = fs::symlink_metadata(shard).map_err(|error| {
+            ProcessError::retryable(format!("inspect media source shard: {error}"))
+        })?;
         if shard_metadata.file_type().is_symlink() || !shard_metadata.is_dir() {
             return Err(ProcessError::terminal(
                 "media source shard must be a real directory",
             ));
         }
 
-        let file_metadata = fs::symlink_metadata(&candidate)
-            .map_err(|error| ProcessError::retryable(format!("inspect media source file: {error}")))?;
+        let file_metadata = fs::symlink_metadata(&candidate).map_err(|error| {
+            ProcessError::retryable(format!("inspect media source file: {error}"))
+        })?;
         if file_metadata.file_type().is_symlink() || !file_metadata.is_file() {
             return Err(ProcessError::terminal(
                 "media source must be a regular non-symlink file",
             ));
         }
 
-        let canonical = fs::canonicalize(&candidate)
-            .map_err(|error| ProcessError::retryable(format!("canonicalize media source file: {error}")))?;
+        let canonical = fs::canonicalize(&candidate).map_err(|error| {
+            ProcessError::retryable(format!("canonicalize media source file: {error}"))
+        })?;
         if !canonical.starts_with(&self.sources) {
             return Err(ProcessError::terminal(
                 "media source path escapes configured source root",
@@ -415,8 +422,8 @@ pub fn prepare_claimed_source(
     if lease.kind != 0 {
         return Err(PrepareError::InvalidJobKind(lease.kind));
     }
-    let source = load_source(client, lease.post_id)?
-        .ok_or(PrepareError::MissingSource(lease.post_id))?;
+    let source =
+        load_source(client, lease.post_id)?.ok_or(PrepareError::MissingSource(lease.post_id))?;
     Ok(media_root.open_verified(&source, max_source_bytes, cancellation)?)
 }
 
@@ -477,7 +484,9 @@ pub fn sniff_media_type(header: &[u8]) -> Option<MediaType> {
         }
         if contains_brand(
             brands,
-            &[b"isom", b"iso2", b"iso5", b"iso6", b"mp41", b"mp42", b"avc1", b"dash"],
+            &[
+                b"isom", b"iso2", b"iso5", b"iso6", b"mp41", b"mp42", b"avc1", b"dash",
+            ],
         ) {
             return Some(MediaType::Video(VideoFormat::Mp4));
         }
@@ -487,7 +496,9 @@ pub fn sniff_media_type(header: &[u8]) -> Option<MediaType> {
 
 fn contains_brand(bytes: &[u8], wanted: &[&[u8; 4]]) -> bool {
     bytes
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .any(|brand| wanted.iter().any(|candidate| brand == candidate.as_slice()))
 }
 
@@ -534,10 +545,7 @@ pub fn processed_output_key(
     ))
 }
 
-pub fn validate_processed_storage_key(
-    storage_key: &str,
-    post_id: i64,
-) -> Result<(), ProcessError> {
+pub fn validate_processed_storage_key(storage_key: &str, post_id: i64) -> Result<(), ProcessError> {
     if post_id <= 0 {
         return Err(ProcessError::terminal("post ID must be positive"));
     }
@@ -547,21 +555,31 @@ pub fn validate_processed_storage_key(
     let key_post = parts.next();
     let file = parts.next();
     if root != Some("media") || parts.next().is_some() {
-        return Err(ProcessError::terminal("invalid processed media storage key"));
+        return Err(ProcessError::terminal(
+            "invalid processed media storage key",
+        ));
     }
     let (Some(shard), Some(key_post), Some(file)) = (shard, key_post, file) else {
-        return Err(ProcessError::terminal("invalid processed media storage key"));
+        return Err(ProcessError::terminal(
+            "invalid processed media storage key",
+        ));
     };
     let expected_shard = format!("{:02x}", (post_id as u64) & 0xff);
     if shard != expected_shard || key_post != post_id.to_string() {
-        return Err(ProcessError::terminal("processed media key does not match post"));
+        return Err(ProcessError::terminal(
+            "processed media key does not match post",
+        ));
     }
     let prefix = format!("v{PROCESSING_VERSION}-");
     let Some(rest) = file.strip_prefix(&prefix) else {
-        return Err(ProcessError::terminal("processed media key has wrong version"));
+        return Err(ProcessError::terminal(
+            "processed media key has wrong version",
+        ));
     };
     let Some((digest, extension)) = rest.rsplit_once('.') else {
-        return Err(ProcessError::terminal("processed media key has no extension"));
+        return Err(ProcessError::terminal(
+            "processed media key has no extension",
+        ));
     };
     if digest.len() != 64 || !is_lower_hex(digest) {
         return Err(ProcessError::terminal(
@@ -666,10 +684,7 @@ mod tests {
 
     #[test]
     fn source_key_requires_exact_ingestion_grammar() {
-        assert!(validate_source_storage_key(
-            "sources/01/0123456789abcdef0123456789abcdef"
-        )
-        .is_ok());
+        assert!(validate_source_storage_key("sources/01/0123456789abcdef0123456789abcdef").is_ok());
         for invalid in [
             "",
             "sources/a/not-hex",
