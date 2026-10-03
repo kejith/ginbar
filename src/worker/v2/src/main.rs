@@ -118,9 +118,7 @@ impl ConnectionFactory for ProductionConnectionFactory {
 }
 
 fn production_db_timeout(lease_ms: NonZeroU64) -> Duration {
-    let timeout_ms = (lease_ms.get() / DB_TIMEOUT_DIVISOR)
-        .max(1)
-        .min(MAX_DB_OPERATION_TIMEOUT_MS);
+    let timeout_ms = (lease_ms.get() / DB_TIMEOUT_DIVISOR).clamp(1, MAX_DB_OPERATION_TIMEOUT_MS);
     Duration::from_millis(timeout_ms)
 }
 
