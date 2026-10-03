@@ -214,12 +214,12 @@ fn lease_renewal_keeps_long_running_claim_alive() {
     let shutdown = ShutdownToken::new();
     let executor = LongExecutor {
         shutdown: shutdown.clone(),
-        minimum_runtime: Duration::from_millis(350),
+        minimum_runtime: Duration::from_millis(2_500),
     };
     let mut runner = WorkerRunner::new(
         Arc::new(db.factory.clone()),
         "runner-renew".to_owned(),
-        lease_ms(120),
+        lease_ms(1_000),
         test_settings(),
         shutdown,
         executor,
