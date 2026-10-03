@@ -1,7 +1,7 @@
 # Ginbar v2 State / Handoff
 
 Last updated: 2026-10-03
-Phase: M3 image-processing slice — FIRST TARGET GATE FAILED; CORRECTIVE PATCH READY FOR REVALIDATION
+Phase: M3 image-processing slice — SECOND CORRECTIVE GATE REVIEWED; FINAL CORRECTNESS / TARGET MEASUREMENT PENDING
 Integration branch: `v2`
 Active feature branch: `astra/m3-image-processing`
 Legacy branch: `master` (read-only for rewrite work)
@@ -20,9 +20,10 @@ This file is the resume point. Read it before `PLAN.md`. Do not rely on chat his
 - M3 Rust worker source-consumption/fenced-publication contract is complete, validated, and integrated.
 - `v2` remains unchanged by the image-processing candidate at `e601c78486d219f97f98e55349209849f79c353f`.
 - `astra/m3-image-processing` was branched from that exact `v2` SHA.
-- First image-processing target gate tested `56ead29cc0f14fabf84469147faa65ecbe508a5f` and FAILED before tests/benchmarks because of formatting and Rust API compile errors.
-- Corrective source/formatting commits are present through `89935e37fef6c10ed3cf3a0379dcb57eae74fc12`; this document is the state-only commit after that corrective head.
-- The corrective head has not yet been compiled/tested/benchmarked. Do not infer a pass.
+- First target gate tested `56ead29cc0f14fabf84469147faa65ecbe508a5f` and failed on formatting plus two Rust API mismatches.
+- Second corrective gate tested `6e1eba20155202841adb3717f224b2266d82627e` on Rust/Cargo 1.99.0. Formatting passed and the no-DB test command returned success, but the gate did not clear because one real Rust 1.99 Clippy lint remained and two requested Cargo commands were malformed by the validation harness/prompt.
+- The demonstrated Rust 1.99 lint and the identical latent occurrence in the DB image test helper are corrected through `a718de413673e7650c188c659fc4627b26eb0d3c`; this document is the state-only commit after that corrective source head.
+- The latest source corrections have not yet been revalidated. Do not merge to `v2` or claim codec/API performance yet.
 - Worker v2 lives under `src/worker/v2`; legacy `src/worker` remains reference-only unless explicitly reviewed for reuse.
 - `.local-agent-results/` remains ignored for evidence ZIPs.
 
@@ -107,13 +108,7 @@ Unit tests inject crashes after staged-file fsync and after final-directory fsyn
 
 ### Bounded still-image processor
 
-`src/worker/v2/src/image.rs` implements `BoundedImageProcessor` for:
-
-- JPEG;
-- non-animated PNG;
-- non-animated WebP.
-
-Animated PNG/WebP, GIF, AVIF/HEIF input, and video are terminal for this processing version rather than silently flattening/partially decoding them. Video remains out of this slice.
+`src/worker/v2/src/image.rs` implements `BoundedImageProcessor` for JPEG, non-animated PNG, and non-animated WebP. Animated PNG/WebP, GIF, AVIF/HEIF input, and video are terminal for this processing version rather than silently flattening/partially decoding them. Video remains out of this slice.
 
 Candidate processing-version-1 constants/behavior:
 
@@ -142,44 +137,56 @@ Any output-affecting change after integration requires advancing `PROCESSING_VER
 Evidence ZIP: `m3-image-processing-20261003T123812Z.zip`.
 ZIP SHA-256: `1153CB218BC4654B0E57252236EBC638C87A02A7A124C3A7B51D6AA6E5EB9322`.
 Exact tested SHA: `56ead29cc0f14fabf84469147faa65ecbe508a5f`.
-Observed merge base: exact `v2` `e601c78486d219f97f98e55349209849f79c353f`.
-Target: Ubuntu 24.04.3, Linux 6.8.0-88-generic, Intel i7-7700, 62 GiB RAM, ext4 `/dev/md2` RAID1 over two NVMe devices.
 
-Important methodology deviation: the disposable build container used **Rust/Cargo 1.94.0**, not the requested 1.99.0. Therefore even a successful result from this run would not have satisfied the intended toolchain gate. The observed source/API failures are still actionable and were corrected; the next successful validation must use Rust 1.99.x.
+The disposable build container used Rust/Cargo 1.94.0 instead of the requested 1.99.0, so it could never satisfy the intended toolchain gate. It still exposed actionable source defects:
 
-Raw evidence showed:
+- rustfmt differences in five candidate files;
+- `E0277`: direct `SubImage<&DynamicImage>` resize type mismatch;
+- `E0599`: `as_rgba` requires `rgb::FromSlice`, not `ComponentSlice`;
+- no tests/benchmarks ran because compilation failed.
 
-- `cargo fmt --check`: FAIL; rustfmt changes were required in `examples/image_bench.rs`, `src/image.rs`, `src/output.rs`, `src/main.rs`, and `tests/image_pipeline.rs`;
-- `cargo check`: FAIL with `E0277` because `SubImage<&DynamicImage>` itself did not satisfy `GenericImageView` at the direct resize call;
-- `cargo check`: FAIL with `E0599` because `as_rgba` is supplied by `rgb::FromSlice`, while the candidate imported `ComponentSlice`;
-- Clippy failed on the same compile errors and rejected the unused `ComponentSlice` import under `-D warnings`;
-- no-DB `cargo test` failed at compilation, so no tests executed;
-- dependency trees succeeded and resolved `image 0.25.10`, `ravif 0.13.0`, `rav1e 0.8.1`, `rgb 0.8.52`, `rayon 1.12.0`, `rayon-core 1.13.0`, `maybe-rayon 0.1.1`, root `sha2 0.10.9`, and transitive `sha2 0.11.0`;
-- generated disposable `Cargo.lock` SHA-256: `4B355C9016EF56D71C78D4CFCC347BF0A6FD2F3DBA8E6F36465B6D3EDEDAA74A`;
-- because the correctness gate failed, no release build, DB-enabled tests, codec/resource benchmarks, API load measurements, or process/thread measurements ran;
-- server cleanup restored all pre-existing services/containers; raw remote evidence was retained by the executor for follow-up.
+Those failures were corrected without changing output semantics/constants. The target filesystem was confirmed as ext4 `/dev/md2` RAID1 over two NVMe devices.
 
-### Corrective patch after failed gate
+## Second corrective target gate — PARTIAL / NOT A PASS
 
-No output semantics/constants were changed.
+Evidence ZIP: `m3-image-processing-corrective-20261003T130603Z.zip`.
+ZIP SHA-256: `C7CBC73C08E6E2F7E44C3FD94B2F91B2FBE0C4AE96EB42C77E6E3E1B2A484652`.
+Exact tested SHA: `6e1eba20155202841adb3717f224b2266d82627e`.
+Expected/observed merge base: `v2` `e601c78486d219f97f98e55349209849f79c353f`.
+Toolchain: `rustc 1.99.0`, `cargo 1.99.0`, `rustfmt 1.10.0-stable`, `cargo clippy 0.1.99`, NASM 2.16.01.
+Target: Ubuntu 24.04.3, Linux 6.8.0-88-generic, Intel i7-7700, ext4 `/dev/md2`.
 
-- `385ec92061920a8751f7931c9e9a161e65dbf3ae`: changed the crop resize to borrow the dereferenced `SubImageInner` (`&*view`), which is the `image 0.25.10` type implementing `GenericImageView`; changed the RGB slice trait import to `rgb::FromSlice`; applied rustfmt changes in `src/image.rs`.
-- `098d1b9b58e94d48d5eb0dcfe9620f73eeccb888`: applied captured rustfmt changes to `examples/image_bench.rs`.
-- `42d416afce7d3e70be3448767101022073fc9a6e`: applied captured rustfmt changes to `src/output.rs`.
-- `b34ac39085da4f67157989b2d8447b1f03690bd6`: applied captured rustfmt changes to `src/main.rs`.
-- `89935e37fef6c10ed3cf3a0379dcb57eae74fc12`: applied captured rustfmt changes to `tests/image_pipeline.rs`.
+Raw evidence establishes:
 
-This primary session has no Rust toolchain, so those corrective commits are inspection-derived and **unvalidated**. Do not merge to `v2` until revalidation passes.
+- `cargo fmt --check`: **PASS**;
+- requested `cargo check --locked=false ...`: harness/prompt error, not a product result — Cargo 1.99 rejects a value for boolean `--locked`, so the crate was not checked by that command;
+- `cargo clippy --all-targets -- -D warnings`: **FAIL** on one demonstrated product lint, `clippy::chunks-exact-to-as-chunks`, at the unit-test PNG helper in `src/image.rs`;
+- normal `cargo test`: command exit 0, with 34 invoked tests returning success and zero ordinary Rust test failures;
+- that no-DB run is **not** evidence that PostgreSQL paths executed: DB-backed tests intentionally return early when `GINBAR_TEST_DATABASE_URL` is absent, and Cargo captures successful-test stderr, so absence of visible skip text does not prove execution;
+- normal `cargo tree`: **PASS**;
+- requested `cargo tree ... -e features`: harness line-ending error, not a product result — the captured command file ended with CRLF and Cargo received `features\r`;
+- generated disposable lockfile SHA-256 again matched the first gate exactly: `4B355C9016EF56D71C78D4CFCC347BF0A6FD2F3DBA8E6F36465B6D3EDEDAA74A`;
+- resolved graph again included `image 0.25.10`, `ravif 0.13.0`, `rav1e 0.8.1`, `rgb 0.8.52`, `rayon 1.12.0`, `rayon-core 1.13.0`, `maybe-rayon 0.1.1`, root `sha2 0.10.9`, and transitive `sha2 0.11.0`;
+- because the gate did not clear, no disposable PostgreSQL stage, release build, codec/resource benchmark, worker runtime/thread measurement, or API interference measurement ran;
+- cleanup removed all run-owned resources and preserved pre-existing services/containers and production state.
+
+### Corrections after second gate
+
+No output-affecting semantics/constants changed.
+
+- `a55ece38f775429e3055237a15beb80c98e0ba94`: unit-test PNG helper changed from `chunks_exact_mut(4)` to Rust 1.99's `as_chunks_mut::<4>()` form required by Clippy `-D warnings`.
+- `a718de413673e7650c188c659fc4627b26eb0d3c`: the DB image-pipeline PNG helper contained the identical pattern; it was changed proactively to `as_chunks_mut::<4>()` so the next `--all-targets` run does not simply fail on the second occurrence after the first is fixed.
+
+The repeated lockfile hash across independent Rust 1.94 and Rust 1.99 target runs is strong evidence that the current resolved graph is stable. Because this worker is a production application/binary and AVIF output is codec-version-sensitive, a committed `Cargo.lock` remains the intended production choice before integration. It is not yet committed on this branch; the next exact-SHA gate must record the generated lock hash and stop if it differs from the accepted evidence hash above.
 
 ## Remaining observations
 
 - The image/output work still exists only on the feature branch; integrated `v2` intentionally remains at the source/processor/fenced-publication boundary.
-- The target evidence confirms ext4 on local mirrored NVMe, but output crash/idempotency tests did not execute because compilation failed.
 - Full source SHA-256 verification still costs one sequential read before codec consumption; do not redesign without profile/codec evidence.
 - Standard-library canonicalization + symlink checks are not equivalent to Linux `openat2`/`O_NOFOLLOW` against a malicious concurrent local filesystem writer; the media tree remains service-controlled.
 - Ingestion source orphans and processed-output staging orphans need eventual janitor/reconciliation work before production enablement.
 - `ravif`/`rav1e` pull Rayon/threading support transitively even though the candidate sets `with_num_threads(Some(1))`; runtime CPU/thread behavior must still be measured.
-- The generated v2 `Cargo.lock` is currently evidence only. Because this worker is an application/binary, committing a lockfile is likely appropriate for reproducible production builds, but make that decision after the corrected Rust 1.99 correctness gate confirms the resolved graph.
+- The one-shot worker does not renew its lease during long codec work; production polling/renewal remains a later M3 concern after this processing path is measured.
 - Deployment must ensure Go API and Rust worker share the media root with compatible UID/GID/permissions.
 
 ## Local-agent evidence workflow
@@ -188,4 +195,15 @@ For target-host work, use isolated/disposable resources and return one ZIP with 
 
 ## Single best next task
 
-Run a **targeted corrective correctness gate first** against the exact current `astra/m3-image-processing` head using Rust/Cargo **1.99.x**: verify exact SHA/merge base, run `cargo fmt --check`, `cargo check`, `cargo clippy --all-targets -- -D warnings`, no-DB tests, dependency trees, and disposable-PostgreSQL full tests. Do not run codec/API benchmarks unless that correctness gate passes. If it passes, continue in the same evidence run with the previously specified real-media codec/resource benchmarks and matched API baseline-vs-one-worker latency/resource measurements, then return one raw evidence ZIP. Integrate into `v2` only after those results are reviewed here and accepted.
+Run one final exact-SHA target-host gate on Rust/Cargo 1.99.x against the current `astra/m3-image-processing` head. Use Linux-native commands without CRLF command-file interpolation:
+
+1. `cargo fmt --manifest-path src/worker/v2/Cargo.toml -- --check`
+2. `cargo check --manifest-path src/worker/v2/Cargo.toml`
+3. `cargo clippy --manifest-path src/worker/v2/Cargo.toml --all-targets -- -D warnings`
+4. no-DB `cargo test --manifest-path src/worker/v2/Cargo.toml`
+5. `cargo tree --manifest-path src/worker/v2/Cargo.toml`
+6. `cargo tree --manifest-path src/worker/v2/Cargo.toml --edges features`
+7. verify generated `Cargo.lock` SHA-256 is `4B355C9016EF56D71C78D4CFCC347BF0A6FD2F3DBA8E6F36465B6D3EDEDAA74A` before continuing;
+8. if all above pass, run the full suite with a disposable PostgreSQL 17 and prove the DB-backed image tests actually execute;
+9. only then build release artifacts and run real JPEG/PNG/WebP codec measurements, the large-valid-image RSS/CPU probe, runtime thread/concurrency observation, and matched API baseline versus one concurrent worker job;
+10. return one raw evidence ZIP for review. Integrate into `v2` only after that evidence is accepted.
