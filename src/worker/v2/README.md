@@ -84,6 +84,8 @@ An expired/stale lease, source-identity change, deleted/non-releasable post, or 
 
 The heartbeat uses a separate PostgreSQL connection and renews at roughly one third of the configured lease duration. A lost lease generation cancels the active job boundary and prevents stale database publication. Repeated heartbeat connection/query failures are classified separately and become retryable job failures when ownership can still be proven. SIGINT/SIGTERM stop new claims; active processing observes shutdown at cancellation boundaries and attempts to requeue the owned job immediately.
 
+Production PostgreSQL connections derive an operation budget from the configured lease: `min(lease / 10, 3 seconds)`, with a 1 ms floor. That value is applied as the socket-level `connect_timeout` and as PostgreSQL `statement_timeout` for every worker connection, including heartbeat connections and the one-shot probes. Existing PostgreSQL `options` are preserved and the worker timeout is appended. The connect timeout applies per socket-level address attempt; the target architecture uses local PostgreSQL, so multi-host failover timing is not part of the current production contract.
+
 AVIF encoding and durable filesystem publication are synchronous calls in this processing version. They cannot be interrupted in the middle of the call. Cancellation is checked again before the authoritative fenced database commit, so stale work cannot release the post or complete the job; deterministic no-overwrite files created before cancellation remain safe for retry.
 
 ```sh
