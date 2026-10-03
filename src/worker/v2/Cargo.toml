@@ -5,5 +5,8 @@ edition = "2021"
 publish = false
 
 [dependencies]
+image = { version = "=0.25.10", default-features = false, features = ["jpeg", "png", "webp"] }
 postgres = "0.19"
+ravif = "=0.13.0"
+rgb = "=0.8.52"
 sha2 = "0.10"
