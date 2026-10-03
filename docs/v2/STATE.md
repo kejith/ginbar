@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-04
-Phase: **M3 media pipeline — still-image processing integrated; production worker loop next**
+Phase: **M3 media pipeline — production runner correctness complete; target-host performance gate next**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -15,9 +15,11 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable architecture/milestone
 - M3 upload/URL ingestion + durable enqueue: **integrated**.
 - M3 source verification + generation-fenced DB publication: **integrated**.
 - M3 still-image JPEG/PNG/WebP -> deterministic AVIF canonical + thumbnail pipeline: **integrated**.
+- Self-hosted v2 CI: **integrated and green on `v2`**.
+- M3 long-running production worker runner: **correctness-gated on feature branch; target-host performance gate pending**.
 - M3 is **not complete**.
 
-Next milestone work is the long-running production worker loop with lease renewal/cancellation/lost-ownership handling. Do not start video before that runner boundary is validated.
+Do not integrate the runner into `v2` or start video until the real continuous-runner target-host gate is accepted.
 
 ## Source boundaries
 
@@ -79,50 +81,87 @@ Limits/output:
 - exact size/SHA verification for idempotent reuse;
 - conflicting existing destination bytes are terminal and never overwritten.
 
-The accepted application lockfile is committed at `src/worker/v2/Cargo.lock`. Its measured graph uses the exact validated lock bytes from the final image gate; use `--locked` for worker validation.
+The accepted application lockfile is committed at `src/worker/v2/Cargo.lock`. Use `--locked` for worker validation.
+
+## Production runner candidate
+
+Branch: `astra/m3-worker-runner-ci`.
+
+The candidate now provides:
+
+- serial one-job-at-a-time claim/process/repeat behavior;
+- bounded idle polling rather than busy spinning;
+- independent PostgreSQL lease heartbeat while processing;
+- renewal at roughly one third of the configured lease;
+- generation/owner/expiry fencing on all authoritative lifecycle mutations;
+- cancellation on lost ownership and repeated renewal failure;
+- bounded DB reconnect and renewal retry backoff;
+- graceful SIGINT/SIGTERM behavior with owned-job requeue where possible;
+- crash/restart lease reclaim semantics;
+- cancellation checks around source verification, processing and before authoritative publication;
+- lease-aware PostgreSQL connection/statement bounds: `min(lease / 10, 3s)`, 1 ms floor;
+- preserved PostgreSQL connection `options`, with worker `statement_timeout` appended.
+
+AVIF encoding and durable filesystem publication are synchronous in processing v1 and cannot be interrupted mid-call. The worker rechecks cancellation before the fenced database commit, so stale work cannot release a post or complete a job. Deterministic no-overwrite files produced before cancellation remain safe for retry.
+
+The PostgreSQL socket connect timeout applies per address attempt. The current production architecture is local PostgreSQL; multi-host failover timing is not part of this runner contract.
+
+## Runner correctness evidence
+
+Current documented candidate code/docs revision before this state-only update:
+
+- `3e20101480a325f6de43b7f3e1ff81d203701622`
+- GitHub Actions run `37163020555`: **success** (`scope=worker`).
+- immediately preceding code revision `96b77a3d8339b0c099d2e4f70388ad0e65917f9d`: **success**, run `37162981139`.
+
+The worker gate covers Rust 1.99 formatting/checking, PostgreSQL-backed tests, Clippy with `-D warnings`, lockfile stability, and clean checkout. Relevant runner coverage includes:
+
+- repeated successful work without overlapping active jobs;
+- idle polling without busy spin;
+- bounded retry backoff;
+- long-running job lease renewal;
+- lost-generation cancellation without stale completion;
+- repeated renewal DB failure classification/requeue;
+- crash/restart reclaim onto the next generation;
+- shutdown during active work and owned-job requeue;
+- lease-derived PostgreSQL timeout configuration and existing-option preservation.
+
+During CI hardening, a 120 ms lease / 350 ms renewal test proved scheduler-sensitive on the self-hosted runner. The test was changed to a 1 s lease with 2.5 s active work: it still requires repeated renewals but gives realistic CI scheduling/DB margin. Production default lease remains 30 s.
 
 ## Current performance decisions
 
-Stable measurements are consolidated in [`PERFORMANCE.md`](PERFORMANCE.md). Immediate constraints that matter for the next slice:
+Stable measurements are consolidated in [`PERFORMANCE.md`](PERFORMANCE.md). Immediate constraints for the runner gate:
 
 - frontend selection sync p95 stayed below ~0.5 ms through the tested 10,000-post M1 matrix;
 - M2 around-post p95 ranged from 2.277 ms at c1 to 13.712 ms at c32 with zero errors in the final gate;
 - one large image job has little tail-latency impact at low API concurrency but reduces peak HTTP capacity near CPU saturation;
 - accepted image configuration remains one job / one AVIF encoder thread;
-- do not add scheduler/load-admission complexity until the real continuous runner is measured;
+- prior synthetic one-image coexistence evidence is not a substitute for a real continuous runner measurement;
+- do not add scheduler/load-admission complexity until the continuous runner is measured;
 - there is **no apples-to-apples global v1-v2 benchmark yet**, so do not claim an overall rewrite speedup.
 
-## Repository/documentation consolidation completed
+## CI / integration status
 
-The rewrite tree/docs were cleaned up without changing v2 product semantics:
+The consolidated self-hosted CI gate is integrated into `v2` at `56bc4845114fd48af5e492c3412fba4296c15baf`.
 
-- root README now describes v2 rather than the legacy Go/Fiber/React stack;
-- `docs/v2/README.md` is the documentation index;
-- `PERFORMANCE.md` owns stable benchmark history;
-- `PLAN.md` was refreshed from stale pre-implementation status to current M1/M2/M3 progress;
-- `STATE.md` was reduced to operational handoff information;
-- completed M1/M2 execution runbooks moved under `docs/v2/archive/`;
-- tracked legacy build artifact `src/backend/wallium-backend` (~22 MiB) removed and ignored;
-- tracked `src/worker/desktop.ini` removed; common OS metadata is ignored.
-
-Legacy source itself was deliberately retained as reference material while the rewrite remains incomplete.
-
-## CI / handoff status
-
-- `astra/v2-self-hosted-ci` contains the isolated self-hosted CI gate targeting `ginbar-ci-vm` / `amp-ci-vm` and the shared host benchmark-lock relay.
-- Full `scope=all` validation passed on GitHub Actions run `37160895027` at commit `ad46a3ed279b9a80f867e76512082dec56ef04a4`.
-- The CI feature branch is not yet integrated into `v2`.
-- Project instructions now require the applicable CI pipeline for the exact revision being handed to the local agent to be green first. Routine formatting, compiler, lint, test, and other correctness failures must be fixed before handoff; infrastructure-blocked CI is a handoff blocker unless the user explicitly authorizes bypass.
+- `v2` run `37162024614` at that exact revision: **success**.
+- CI runs on `ginbar-ci-vm` / `amp-ci-vm` and scopes frontend/backend/worker work automatically.
+- Exact-revision CI must be green before any local/server agent handoff.
+- The runner feature branch is intentionally **not yet integrated into `v2`** because the target-host performance/coexistence gate remains open.
 
 ## Remaining M3 work
 
-- production worker polling/wakeup loop;
-- lease renewal during source verification/codec/filesystem work;
-- cancellation and lost-ownership handling;
-- bounded retry/backoff;
-- graceful shutdown;
-- crash/restart/lease-loss tests;
-- continuous-runner API interference benchmark;
+Immediate runner gate:
+
+- target-host idle runner CPU/RSS and PostgreSQL query activity;
+- continuous still-image job throughput/resource use;
+- forced-renewal behavior using a long fixture and shorter test lease;
+- API p50/p95/p99/max latency and throughput baseline vs continuous runner;
+- cleanup/restoration evidence on the shared host;
+- accept/reject the one-job/one-encoder-thread runner architecture from measured evidence.
+
+After the runner gate is accepted and integrated:
+
 - video processing;
 - perceptual duplicate detection;
 - regeneration;
@@ -148,6 +187,4 @@ Return one evidence ZIP with exact SHA/worktree state, commands, stdout/stderr, 
 
 ## Single best next task
 
-Integrate the validated **self-hosted v2 CI gate** into `v2`, verify the `v2` pipeline is green, then resume the production worker loop + lease-renewal/cancellation slice.
-
-Do not begin video processing until the production runner boundary passes its correctness and performance gate.
+Run the exact CI-green `astra/m3-worker-runner-ci` revision through the target-host continuous-runner gate using disposable PostgreSQL/media state while leaving the shared workload in its normal state. Return the evidence ZIP here for analysis. If the evidence is acceptable, integrate the runner into `v2`, update `PERFORMANCE.md`/`STATE.md`, and only then begin video processing.
