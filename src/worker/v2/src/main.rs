@@ -7,9 +7,9 @@ use ginbar_worker_v2::processing::{
 };
 use ginbar_worker_v2::publication::{publish_processed, PublishOutcome};
 use ginbar_worker_v2::runner::{
-    PostgresConnectionFactory, RunnerSettings, ShutdownToken, StillImageJobExecutor, WorkerRunner,
+    ConnectionFactory, RunnerSettings, ShutdownToken, StillImageJobExecutor, WorkerRunner,
 };
-use postgres::{Client, NoTls};
+use postgres::{Client, Config as PostgresConfig, NoTls};
 use std::num::NonZeroU64;
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,6 +19,8 @@ use std::time::{Duration, Instant};
 const DEFAULT_MAX_SOURCE_BYTES: u64 = 512 * 1024 * 1024;
 const RETRY_BASE: Duration = Duration::from_secs(2);
 const RETRY_MAX: Duration = Duration::from_secs(30);
+const DB_TIMEOUT_DIVISOR: u64 = 10;
+const MAX_DB_OPERATION_TIMEOUT_MS: u64 = 3_000;
 static TERMINATION_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 fn main() -> ExitCode {
@@ -55,8 +57,7 @@ fn run() -> Result<(), String> {
         return run_forever(&config);
     }
 
-    let mut client = Client::connect(&config.database_url, NoTls)
-        .map_err(|error| format!("connect PostgreSQL: {error}"))?;
+    let mut client = ProductionConnectionFactory::new(&config.database_url, config.lease_ms)?.connect()?;
     if command == "claim-once" {
         return claim_once(&mut client, &config);
     }
@@ -74,7 +75,10 @@ fn run_forever(config: &Config) -> Result<(), String> {
     install_termination_handlers()?;
 
     let shutdown = ShutdownToken::with_external(&TERMINATION_REQUESTED);
-    let factory = Arc::new(PostgresConnectionFactory::new(config.database_url.clone()));
+    let factory = Arc::new(ProductionConnectionFactory::new(
+        &config.database_url,
+        config.lease_ms,
+    )?);
     let mut runner = WorkerRunner::new(
         factory,
         config.worker_id.clone(),
@@ -84,6 +88,48 @@ fn run_forever(config: &Config) -> Result<(), String> {
         executor,
     )?;
     runner.run()
+}
+
+#[derive(Debug, Clone)]
+struct ProductionConnectionFactory {
+    config: PostgresConfig,
+}
+
+impl ProductionConnectionFactory {
+    fn new(database_url: &str, lease_ms: NonZeroU64) -> Result<Self, String> {
+        let timeout = production_db_timeout(lease_ms);
+        let mut config = database_url
+            .parse::<PostgresConfig>()
+            .map_err(|error| format!("parse PostgreSQL configuration: {error}"))?;
+        let options = statement_timeout_options(config.get_options(), timeout);
+        config.connect_timeout(timeout);
+        config.options(&options);
+        Ok(Self { config })
+    }
+}
+
+impl ConnectionFactory for ProductionConnectionFactory {
+    fn connect(&self) -> Result<Client, String> {
+        self.config
+            .connect(NoTls)
+            .map_err(|error| format!("connect PostgreSQL: {error}"))
+    }
+}
+
+fn production_db_timeout(lease_ms: NonZeroU64) -> Duration {
+    let timeout_ms = (lease_ms.get() / DB_TIMEOUT_DIVISOR)
+        .max(1)
+        .min(MAX_DB_OPERATION_TIMEOUT_MS);
+    Duration::from_millis(timeout_ms)
+}
+
+fn statement_timeout_options(existing: Option<&str>, timeout: Duration) -> String {
+    let timeout_ms = timeout.as_millis();
+    let statement_timeout = format!("-c statement_timeout={timeout_ms}");
+    match existing.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(existing) => format!("{existing} {statement_timeout}"),
+        None => statement_timeout,
+    }
 }
 
 fn claim_once(client: &mut Client, config: &Config) -> Result<(), String> {
@@ -268,4 +314,58 @@ fn install_termination_handlers() -> Result<(), String> {
 #[cfg(not(unix))]
 fn install_termination_handlers() -> Result<(), String> {
     Err("the production worker signal handler currently requires a Unix target".to_owned())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn production_db_timeout_scales_with_lease_and_caps() {
+        assert_eq!(
+            production_db_timeout(NonZeroU64::new(1).expect("nonzero")),
+            Duration::from_millis(1)
+        );
+        assert_eq!(
+            production_db_timeout(NonZeroU64::new(1_000).expect("nonzero")),
+            Duration::from_millis(100)
+        );
+        assert_eq!(
+            production_db_timeout(NonZeroU64::new(30_000).expect("nonzero")),
+            Duration::from_secs(3)
+        );
+        assert_eq!(
+            production_db_timeout(NonZeroU64::new(300_000).expect("nonzero")),
+            Duration::from_secs(3)
+        );
+    }
+
+    #[test]
+    fn production_connection_factory_bounds_connect_and_statement_time() {
+        let factory = ProductionConnectionFactory::new(
+            "postgresql://localhost/ginbar",
+            NonZeroU64::new(30_000).expect("nonzero"),
+        )
+        .expect("parse production database configuration");
+
+        assert_eq!(
+            factory.config.get_connect_timeout(),
+            Some(&Duration::from_secs(3))
+        );
+        assert_eq!(
+            factory.config.get_options(),
+            Some("-c statement_timeout=3000")
+        );
+    }
+
+    #[test]
+    fn statement_timeout_preserves_existing_server_options() {
+        assert_eq!(
+            statement_timeout_options(
+                Some("-c lock_timeout=1000"),
+                Duration::from_millis(250)
+            ),
+            "-c lock_timeout=1000 -c statement_timeout=250"
+        );
+    }
 }
