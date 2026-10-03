@@ -44,19 +44,21 @@ impl ImageProcessor for BoundedImageProcessor {
         post_id: i64,
     ) -> Result<ProcessedMedia, ProcessError> {
         ensure_supported_still(source)?;
-        let mut image = decode_verified_still(source)?;
+        let image = decode_verified_still(source)?;
         let (decoded_width, decoded_height) = image.dimensions();
         validate_dimensions(decoded_width, decoded_height)?;
 
         let thumbnail = make_square_thumbnail(&image);
         let main = if decoded_width > MAX_OUTPUT_DIMENSION || decoded_height > MAX_OUTPUT_DIMENSION {
-            image.resize(
+            let resized = image.resize(
                 MAX_OUTPUT_DIMENSION,
                 MAX_OUTPUT_DIMENSION,
                 FilterType::Triangle,
-            )
+            );
+            drop(image);
+            resized
         } else {
-            std::mem::take(&mut image)
+            image
         };
         let (width, height) = main.dimensions();
 
@@ -223,13 +225,13 @@ fn make_square_thumbnail(image: &DynamicImage) -> DynamicImage {
     let side = width.min(height);
     let x = (width - side) / 2;
     let y = (height - side) / 2;
-    image
-        .crop_imm(x, y, side, side)
-        .resize_exact(
-            THUMBNAIL_DIMENSION,
-            THUMBNAIL_DIMENSION,
-            FilterType::Triangle,
-        )
+    let view = image.view(x, y, side, side);
+    DynamicImage::ImageRgba8(image::imageops::resize(
+        &view,
+        THUMBNAIL_DIMENSION,
+        THUMBNAIL_DIMENSION,
+        FilterType::Triangle,
+    ))
 }
 
 fn encode_avif(image: &DynamicImage, quality: f32) -> Result<Vec<u8>, ProcessError> {
