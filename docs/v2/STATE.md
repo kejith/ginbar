@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-04
-Phase: **M3 media pipeline — production still-image runner accepted; bounded video probe boundary integrated; video publication next**
+Phase: **M3 media pipeline — compatible-MP4 zero-transcode processor implemented; target-host video gate pending**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -17,12 +17,21 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable architecture/milestone
 - M3 still-image JPEG/PNG/WebP -> deterministic AVIF canonical + thumbnail pipeline: **integrated**.
 - M3 long-running production worker runner with polling, lease renewal, cancellation and graceful shutdown: **accepted and integrated**.
 - M3 bounded video metadata/probe compatibility boundary: **integrated**.
+- M3 compatible-MP4 zero-transcode processor: **implemented on a green feature revision; target-host performance gate required before integration**.
+- Hermetic target worker release-build contract: **integrated**.
 - Self-hosted v2 CI: **integrated**.
 - M3 is **not complete**.
 
-Current integration tip after the video-probe slice: `cf4f40630fec23844a3a2898511840f1a17dc71f`.
+Hermetic worker-build integration commit: `76942cb8f43fa686546f3e87c3bca6ce1cea12d2`.
 
-The video probe slice does **not** yet publish or release video posts. Production job execution still rejects video after verified-source preparation. The next slice is canonical compatible-video publication + thumbnail generation + runner dispatch.
+Current unintegrated video benchmark candidate on `astra/m3-video-passthrough-v2`:
+
+- exact candidate: **`e437e36194013579f3778292d81ddfe0ddf6a138`**;
+- parent/build-contract baseline: `76942cb8f43fa686546f3e87c3bca6ce1cea12d2`;
+- exact full-CI run: **`37223604648`**, success;
+- candidate is exactly one commit ahead of its v2 parent and changes only the seven intended worker source/test files.
+
+Do not integrate the compatible-MP4 feature into `v2` until the target-host video performance/coexistence gate is accepted.
 
 ## Source boundaries
 
@@ -50,7 +59,7 @@ Keep unless new evidence justifies a change:
 - publication remains fenced by owner/generation, source identity, post eligibility and lease validity;
 - at-least-once work requires deterministic/idempotent side effects;
 - media worker concurrency remains **one job at a time**;
-- still-image AVIF encoder threads remain **one**;
+- still-image/video-thumbnail AVIF encoder threads remain **one**;
 - production idle poll = **500 ms**;
 - production lease baseline = **30 s**, heartbeat at roughly one third of lease;
 - PostgreSQL worker connect/statement budget = `min(lease / 10, 3s)`, 1 ms floor;
@@ -85,9 +94,9 @@ The accepted application lockfile is committed at `src/worker/v2/Cargo.lock`; us
 
 The integrated runner provides serial claim/process/repeat behavior, bounded idle polling, an independent PostgreSQL lease heartbeat, lost-ownership cancellation, bounded retry/backoff, graceful SIGINT/SIGTERM handling, crash/restart reclaim and bounded PostgreSQL operations.
 
-AVIF encoding and durable filesystem publication are synchronous in processing version 1 and cannot be interrupted mid-call. Cancellation is rechecked before the fenced database commit; stale work cannot release a post or complete a job.
+AVIF encoding and durable filesystem publication are synchronous in processing version 1. Cancellation is rechecked before the fenced database commit; stale work cannot release a post or complete a job.
 
-Exact target-gated runner revision: `534f9c3add3b4bec4cab405544f7741fa11d1b30`.
+Exact target-gated still-image runner revision: `534f9c3add3b4bec4cab405544f7741fa11d1b30`.
 
 Evidence bundle:
 
@@ -104,64 +113,150 @@ Key accepted evidence:
 - API coexistence: **80,000/80,000 measured requests succeeded**, zero errors;
 - at c8, loaded p95 **4.692 ms** vs **3.947 ms** baseline (**+18.88%**) and throughput **2,406.90** vs **2,667.60 req/s** (**-9.77%**).
 
-Decision: keep the simple PostgreSQL polling/heartbeat architecture, one media job at a time and one still-image encoder thread. No scheduler/wakeup/admission mechanism is justified now. Stable details live in [`PERFORMANCE.md`](PERFORMANCE.md).
+Decision: keep the simple PostgreSQL polling/heartbeat architecture, one media job at a time and one AVIF encoder thread. No scheduler/wakeup/admission mechanism is justified now. Stable details live in [`PERFORMANCE.md`](PERFORMANCE.md).
 
-## Integrated video probe boundary
+## Compatible-MP4 zero-transcode candidate
 
-`src/worker/v2/src/video.rs` establishes the first bounded video-processing contract without enabling publication yet.
+The exact green candidate `e437e36194013579f3778292d81ddfe0ddf6a138` extends the integrated video-probe boundary into actual processing/publication without adding video transcoding.
 
-Architecture decisions:
+### Processing contract
 
-- use the proven external `ffprobe` CLI rather than adding codec/container parsing bindings to Rust;
-- no new Rust dependency or lockfile change for this boundary;
-- subprocess execution uses direct argv, never a shell;
-- stdin is closed, stdout/stderr go to bounded capture files, and the child is polled for cancellation;
-- probe timeout: **10 s**;
-- cancellation/timeout poll interval: **20 ms**;
-- stdout/stderr cap: **64 KiB each**;
-- spawn/I/O failures are retryable; deterministic invalid/unsupported metadata and probe timeout are terminal;
-- source bytes remain authoritative from the existing verified-source SHA/size/sniff boundary.
+Video processing version 1 accepts only a deliberately narrow browser-compatible MP4 path:
 
-Video processing version 1 compatibility policy currently defined by the probe:
-
-- accepted container family for passthrough: **MP4 only**;
+- container must be reported as MP4 by `ffprobe`;
 - exactly one video stream;
-- video codec: **H.264**;
-- pixel format: **8-bit 4:2:0** (`yuv420p` or `yuvj420p`);
-- audio: **AAC or no audio**;
+- video codec **H.264**;
+- pixel format **8-bit 4:2:0** (`yuv420p` or `yuvj420p`);
+- audio **AAC or no audio**;
 - positive finite duration;
-- positive dimensions, max dimension **16,384 px**, max frame pixels **80,000,000**;
-- EBML is recognized but deliberately rejected rather than silently relabeled as WebM;
-- HEVC, 10-bit/other pixel formats, non-AAC MP4 audio and other incompatible inputs explicitly require a future transcode path rather than implicit conversion.
+- coded/display dimensions positive, max dimension **16,384 px**, max frame pixels **80,000,000**;
+- sample aspect ratio must be **1:1** for this version;
+- orthogonal display rotation is accepted and normalized; 90/270-degree rotation swaps reported display width/height;
+- conflicting/non-orthogonal rotation metadata is rejected;
+- EBML/WebM, HEVC, 10-bit/other pixel formats, non-AAC audio and non-square-pixel video remain terminal/out of scope and require a separately defined future path.
 
-This policy is intentionally conservative for a first zero-transcode path. It can be expanded only with browser-compatibility evidence and target-host measurements.
+### Canonical publication
 
-CI evidence for the probe boundary:
+- compatible MP4 bytes are **not transcoded**;
+- canonical key uses the existing post/source-digest/processing-version identity and `.mp4` output format;
+- the source is streamed into same-directory staging rather than buffered in RAM;
+- the stream is re-hashed and re-sized while staging, so source mutation after initial verification is rejected;
+- staging is fsynced, then hard-linked into the final path without overwrite, final directory fsynced, and staging cleaned;
+- an identical existing canonical object is reused after streamed size/SHA verification;
+- conflicting existing bytes are terminal and never overwritten;
+- cancellation is checked during streamed copy and existing-output verification.
 
-- feature branch exact tip `cf4f40630fec23844a3a2898511840f1a17dc71f`: run `37168411203`, **success**;
-- post-integration `v2` at the same exact SHA: run `37168482641`, **success**.
+### Thumbnail path
 
-CI covers Rust 1.99 format/check, all worker/PostgreSQL tests, Clippy with `-D warnings`, lockfile stability and clean checkout. Probe tests cover compatible MP4, no-audio MP4, codec/pixel-format/audio rejection, multiple-video-stream rejection, dimension/pixel limits, duration validation and explicit EBML rejection.
+- one bounded external `ffmpeg` process extracts exactly one PNG frame from the **durable canonical MP4**, not the mutable ingestion path;
+- stdin is closed;
+- process timeout is **20 s**;
+- command polling/cancellation interval remains **20 ms**;
+- decoder/filter/encoder thread limits are explicitly one where FFmpeg exposes them;
+- FFmpeg autorotation remains enabled so display-matrix rotation is applied before scaling;
+- extracted frame is bounded to at most **512x512** and stdout is capped at **4 MiB**;
+- stdout/stderr are drained concurrently into bounded memory, avoiding pipe deadlock and unbounded capture;
+- cancellation/timeout kills and reaps the child;
+- the frame is decoded in Rust and passed through the shared still-image AVIF thumbnail encoder contract, producing deterministic `<stem>.thumb.avif`;
+- the auxiliary thumbnail is durable before generation-fenced DB publication can mark media ready/release the post.
+
+### Runner wiring/fencing
+
+- `MediaJobExecutor` dispatches verified image/video sources while reusing the accepted `WorkerRunner` loop unchanged;
+- the production `run` command uses `MediaJobExecutor` and retains one active media job;
+- `process-once` can process the compatible video path as well as images;
+- cancellation/lost ownership after filesystem work returns cancellation/ownership loss rather than authoritatively publishing stale results;
+- `publish_processed` remains the sole authoritative generation-fenced DB publication path.
+
+### Correctness evidence
+
+Exact candidate: `e437e36194013579f3778292d81ddfe0ddf6a138`.
+
+Exact v2 CI run: `37223604648`, **success**.
+
+The gate covered:
+
+- Rust 1.99 formatting/check;
+- all Rust unit tests;
+- PostgreSQL-backed worker integration tests;
+- Clippy with `-D warnings`;
+- Cargo lockfile stability;
+- clean tracked checkout;
+- the repository-owned hermetic release build used for target-host execution.
+
+The underlying worker test set remains the same already-green compatible-video implementation: 39 library unit tests, 3 worker-binary tests, 2 image-pipeline tests, 5 job-state tests, 5 processing-contract tests, 6 runner-loop tests and 4 video-pipeline tests, with zero required worker-gate failures/skips.
+
+No target-host performance claim has been accepted for this video path yet.
+
+## Hermetic worker release-build contract
+
+The first target-host video gate exposed a build-environment mismatch: CI built the Rust worker in an environment with NASM available, while the handoff attempted a plain host/container Cargo release build without NASM. `rav1e` therefore failed before any benchmark ran.
+
+Blocked target evidence:
+
+- attempted video revision: `e8ad6e1d5f2129a8cd869585068ee6489d4be4a8`;
+- evidence ZIP: `m3-video-gate-20261004T165329Z.zip`;
+- ZIP SHA-256: `2cb1cdd7432b61f3d8a0c7b68ea167986f846079281419d9aa9d3f3c1adb4701`;
+- result: **blocked before benchmarking** because NASM was unavailable for the `rav1e` build;
+- no fixture, database, API, worker or benchmark round ran, so that bundle contains **no video performance result**;
+- disposable state was cleaned, the host gate released, and unrelated workloads were left running.
+
+The permanent fix is integrated at `76942cb8f43fa686546f3e87c3bca6ce1cea12d2`:
+
+- `scripts/v2-worker-build.sh` is the canonical target/release worker build command;
+- it requires Docker access but does **not** require Rust or NASM packages on the host;
+- it uses `rust:1.99.0-bookworm` and installs NASM only inside an ephemeral compiler container;
+- repository source is mounted read-only;
+- Cargo uses `--release --locked`;
+- build scratch state stays inside the disposable container;
+- only the final worker binary is exported to an explicitly supplied path outside the repository;
+- the script rejects outputs inside the repository checkout;
+- no `sudo` path is used;
+- CI watches changes to the script and runs the same target release-build path for worker/build-contract changes.
+
+CI evidence for the build contract:
+
+- pre-integration branch run `37223174438`: **success**;
+- post-integration `v2` run `37223339286`: **success**;
+- video candidate run `37223604648`: **success**, including the same release-build verification.
+
+The first validating run observed Rust 1.99.0, Cargo 1.99.0 and NASM 2.16.01 inside the ephemeral build container and successfully built `rav1e` plus the release worker. The exported worker was 7,108,984 bytes with SHA-256 `470d3f732e3cfda604b0f62b62bc4a94ab218faf0f4ead0065b47e04b908c997` in that run. This proves the build contract, not production performance.
+
+### Handoff rule going forward
+
+Target/local agents must **not** install NASM/Rust packages on the host and must not invent a manual worker build command. For target execution, from the exact detached revision use:
+
+```bash
+bash scripts/v2-worker-build.sh <output-path-outside-repository>
+```
+
+A local-agent handoff is blocked unless exact-revision CI is green **including `Verify target worker release build`**. If this repository-owned command fails on the target, preserve evidence and return the blocker; do not repair the host.
+
+The self-hosted workflow also uses GitHub Actions `runner.temp` for `TMPDIR` and the local host-gate lock, removing its prior invalid dependency on `/tmp` existing on the CI VM.
 
 ## Remaining M3 work
 
-Immediate next slice:
+Immediate next task is the **target-host compatible-video performance/coexistence gate** on exact revision `e437e36194013579f3778292d81ddfe0ddf6a138` using `scripts/v2-worker-build.sh` for the release worker.
 
-1. add deterministic canonical MP4 passthrough publication without buffering the whole video in memory;
-2. generate a bounded 256x256 video thumbnail using an explicitly one-thread external FFmpeg decode path and the existing AVIF thumbnail encoder contract;
-3. dispatch verified image/video sources through one production executor while retaining one active media job;
-4. ensure cancellation kills bounded external video subprocesses and rechecks ownership before fenced publication;
-5. add integration tests for idempotent retry/collision/publication/restart semantics;
-6. run exact-revision CI;
-7. only then hand the exact green revision to the target host for real video codec/probe/thumbnail/resource/API-interference measurements.
+It must measure at minimum:
 
-After the first compatible-video path:
+1. zero-transcode compatible-MP4 publication throughput and exact canonical-byte identity;
+2. thumbnail extraction cost;
+3. worker CPU/RSS and FFmpeg/FFprobe CPU/thread behavior;
+4. lease renewal during a sufficiently long video operation;
+5. cancellation/shutdown/restart fencing behavior;
+6. API baseline versus continuous active video processing at HTTP c1/c2/c4/c8, including p50/p95/p99/max, throughput and zero-error verification;
+7. coexistence with the target host's normal shared workload left running.
 
-- decide from real input/product evidence whether a transcode fallback is necessary and which codec/container it should target;
+Do not integrate the video candidate or add a transcode path before this gate is reviewed.
+
+After an accepted zero-transcode gate:
+
+- record accepted target measurements in [`PERFORMANCE.md`](PERFORMANCE.md);
+- integrate the accepted video worker changes onto current `v2`, rerun exact post-integration CI, and update this state file;
+- only then decide from real product/input evidence whether a transcode fallback is necessary and which exact codec/container contract it should target;
 - add exact WebM/EBML distinction before accepting WebM passthrough;
-- perceptual duplicate detection;
-- regeneration;
-- progress/status UI.
+- later add perceptual duplicate detection, regeneration and progress/status UI.
 
 Deferred cleanup/operational items:
 
@@ -174,12 +269,12 @@ Deferred cleanup/operational items:
 
 Use local/server agents for browser/DevTools, SSH, real PostgreSQL, target-server benchmarks, temporary deployments or unavailable toolchains.
 
-Before any local-agent handoff, require a green applicable CI pipeline for the exact revision being handed off. Do not use the local agent to discover routine correctness failures that CI can catch.
+Before any local-agent handoff, require a green applicable CI pipeline for the exact revision being handed off. For worker target execution, that CI must include the repository-owned hermetic release-build verification. Do not use the local agent to discover routine build/correctness failures that CI can catch.
 
-Default is read-only/execution-only. They must not modify source, SQL, docs, config, commits, branches, deployments or persistent state without explicit approval for that specific write.
+Default is read-only/execution-only. Agents must not modify source, SQL, docs, config, commits, branches, deployments or persistent state without explicit approval for that specific write.
 
 Return one evidence ZIP with exact SHA/worktree state, commands, stdout/stderr, environment versions, raw benchmark/query-plan data, errors, cleanup proof and concise findings.
 
 ## Single best next task
 
-Implement the **zero-transcode compatible-MP4 processor** from current `v2`: deterministic canonical publication plus bounded one-frame thumbnail extraction, then wire it into the accepted runner and validate correctness before any target-host video benchmark.
+Rerun the **read-only/execution-only target-host compatible-MP4 gate** against exact green revision `e437e36194013579f3778292d81ddfe0ddf6a138`, building the worker only through `scripts/v2-worker-build.sh`, return one retained evidence ZIP, then decide here whether the zero-transcode MP4 path is acceptable for integration.
