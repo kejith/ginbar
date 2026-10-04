@@ -1,4 +1,5 @@
 use crate::output::OutputStore;
+use crate::perceptual::gradient_hash;
 use crate::processing::{
     processed_output_key, ImageFormat, ImageProcessor, MediaKind, MediaType, OutputFormat,
     ProcessError, ProcessedMedia, VerifiedSource,
@@ -49,6 +50,7 @@ impl ImageProcessor for BoundedImageProcessor {
         let image = decode_verified_still(source)?;
         let (decoded_width, decoded_height) = image.dimensions();
         validate_dimensions(decoded_width, decoded_height)?;
+        let perceptual_hash = gradient_hash(&image);
 
         let thumbnail_bytes = encode_thumbnail_avif(&image)?;
         let main = if decoded_width > MAX_OUTPUT_DIMENSION || decoded_height > MAX_OUTPUT_DIMENSION
@@ -96,7 +98,7 @@ impl ImageProcessor for BoundedImageProcessor {
             duration_ms: 0,
             byte_size,
             sha256: published.sha256,
-            perceptual_hash: None,
+            perceptual_hash: Some(perceptual_hash),
         })
     }
 }
@@ -162,7 +164,7 @@ fn decode_verified_still(source: &mut VerifiedSource) -> Result<DynamicImage, Pr
     let format = match source.media_type {
         MediaType::Image(ImageFormat::Jpeg) => CodecFormat::Jpeg,
         MediaType::Image(ImageFormat::Png) => CodecFormat::Png,
-        MediaType::Image(ImageFormat::Webp) => CodecFormat::WebP,
+        MediaType::Image(ImageFormat::WebP) => CodecFormat::WebP,
         _ => {
             return Err(ProcessError::terminal(
                 "image format reached decode without still-image support",
@@ -352,6 +354,7 @@ mod tests {
         assert_eq!(first.kind, MediaKind::Image);
         assert_eq!(first.mime_type, "image/avif");
         assert_eq!((first.width, first.height), (48, 32));
+        assert!(first.perceptual_hash.is_some());
 
         let main_bytes = fs::read(root.0.join(&first.storage_key)).unwrap();
         assert!(main_bytes.len() >= 12);
