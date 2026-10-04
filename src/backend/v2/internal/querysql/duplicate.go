@@ -4,18 +4,18 @@ import (
 	"github.com/kejith/ginbar/backend/v2/internal/duplicate"
 )
 
-const exactDuplicateCandidatesSQL = `WITH source AS (
+const exactDuplicateCandidatesSQL = `SELECT m.post_id
+FROM media m
+JOIN posts p ON p.id = m.post_id
+WHERE m.perceptual_hash = (
     SELECT perceptual_hash
     FROM media
     WHERE post_id = $1
       AND processing_state = 1
       AND perceptual_hash IS NOT NULL
 )
-SELECT m.post_id
-FROM source s
-JOIN media m ON m.perceptual_hash = s.perceptual_hash
-JOIN posts p ON p.id = m.post_id
-WHERE m.post_id <> $1
+  AND m.perceptual_hash IS NOT NULL
+  AND m.post_id <> $1
   AND m.processing_state = 1
   AND p.release_state = 1
   AND p.deleted_at IS NULL
