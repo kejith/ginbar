@@ -1,5 +1,5 @@
 use crate::processing::{
-    Cancellation, MediaType, OutputFormat, ProcessError, VideoFormat, VerifiedSource,
+    Cancellation, MediaType, OutputFormat, ProcessError, VerifiedSource, VideoFormat,
 };
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom};
@@ -202,10 +202,7 @@ impl CaptureFile {
         let temp_root = std::env::temp_dir();
         for _ in 0..256 {
             let sequence = CAPTURE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
-            let path = temp_root.join(format!(
-                "{prefix}-{}-{sequence}.tmp",
-                std::process::id()
-            ));
+            let path = temp_root.join(format!("{prefix}-{}-{sequence}.tmp", std::process::id()));
             match OpenOptions::new()
                 .read(true)
                 .write(true)
@@ -284,7 +281,11 @@ fn classify_probe(media_type: MediaType, output: &str) -> Result<VideoMetadata, 
 fn parse_probe_output(output: &str) -> Result<ParsedProbe, ProcessError> {
     let mut parsed = ParsedProbe::default();
 
-    for line in output.lines().map(str::trim).filter(|line| !line.is_empty()) {
+    for line in output
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
         let mut codec_type = None;
         let mut codec_name = None;
         let mut pixel_format = None;
@@ -375,8 +376,8 @@ fn classify_mp4(mut parsed: ParsedProbe) -> Result<VideoMetadata, ProcessError> 
 
     let mut audio_codecs = Vec::with_capacity(parsed.audio_codecs.len());
     for codec in parsed.audio_codecs {
-        let codec = codec
-            .ok_or_else(|| ProcessError::terminal("ffprobe did not report audio codec"))?;
+        let codec =
+            codec.ok_or_else(|| ProcessError::terminal("ffprobe did not report audio codec"))?;
         if codec != "aac" {
             return Err(ProcessError::terminal(format!(
                 "MP4 audio codec {codec} requires transcoding; video processing version 1 accepts AAC or no audio"
@@ -404,9 +405,7 @@ fn classify_mp4(mut parsed: ParsedProbe) -> Result<VideoMetadata, ProcessError> 
 
 fn validate_dimensions(width: i32, height: i32) -> Result<(), ProcessError> {
     if width <= 0 || height <= 0 {
-        return Err(ProcessError::terminal(
-            "video dimensions must be positive",
-        ));
+        return Err(ProcessError::terminal("video dimensions must be positive"));
     }
     if width > MAX_VIDEO_DIMENSION || height > MAX_VIDEO_DIMENSION {
         return Err(ProcessError::terminal(format!(
@@ -435,7 +434,9 @@ fn parse_duration_ms(value: &str) -> Result<i64, ProcessError> {
     }
     let millis = seconds * 1000.0;
     if millis > i64::MAX as f64 {
-        return Err(ProcessError::terminal("video duration exceeds database range"));
+        return Err(ProcessError::terminal(
+            "video duration exceeds database range",
+        ));
     }
     Ok(millis.round() as i64)
 }
@@ -487,8 +488,7 @@ mod tests {
     fn rejects_ambiguous_or_unbounded_video_metadata() {
         let multiple = format!(
             "{}{}",
-            "codec_name=h264|codec_type=video|width=640|height=360|pix_fmt=yuv420p\n",
-            VALID_MP4
+            "codec_name=h264|codec_type=video|width=640|height=360|pix_fmt=yuv420p\n", VALID_MP4
         );
         let error = classify_probe(MediaType::Video(VideoFormat::Mp4), &multiple).unwrap_err();
         assert_eq!(error.class(), FailureClass::Terminal);
@@ -498,7 +498,8 @@ mod tests {
         assert_eq!(error.class(), FailureClass::Terminal);
 
         let too_many_pixels = "codec_name=h264|codec_type=video|width=12000|height=12000|pix_fmt=yuv420p\nduration=1.0\n";
-        let error = classify_probe(MediaType::Video(VideoFormat::Mp4), too_many_pixels).unwrap_err();
+        let error =
+            classify_probe(MediaType::Video(VideoFormat::Mp4), too_many_pixels).unwrap_err();
         assert_eq!(error.class(), FailureClass::Terminal);
     }
 
