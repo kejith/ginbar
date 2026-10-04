@@ -10,7 +10,12 @@ FROM generate_series(1, 1000) AS g;
 
 INSERT INTO posts (author_user_id, content_filter, release_state, score, created_at, released_at)
 SELECT ((g - 1) % 1000) + 1,
-       CASE WHEN g % 20 = 0 THEN 2 WHEN g % 5 = 0 THEN 1 ELSE 0 END,
+       CASE
+           WHEN g = 50000 THEN 0
+           WHEN g % 20 = 0 THEN 2
+           WHEN g % 5 = 0 THEN 1
+           ELSE 0
+       END,
        1,
        ((g * 37) % 801) - 120,
        now() - (100000 - g) * interval '1 second',
