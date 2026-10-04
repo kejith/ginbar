@@ -1,4 +1,4 @@
-use image::{DynamicImage, imageops::FilterType};
+use image::{imageops::FilterType, DynamicImage};
 
 /// Version of the perceptual-hash contract persisted in `media.perceptual_hash`.
 ///
