@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-04
-Phase: **M3 media pipeline — perceptual duplicate-detection candidate implemented; target performance/query-plan evidence pending**
+Phase: **M3 media pipeline — perceptual duplicate processing accepted; duplicate query corrected after target collision evidence; focused query-plan revalidation pending**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -18,8 +18,8 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/architecture
 - M3 compatible-MP4 H.264/AAC zero-transcode canonical publication + deterministic AVIF thumbnail + production runner dispatch: **accepted and integrated**.
 - Hermetic target worker release-build contract: **integrated**.
 - Self-hosted v2 CI: **integrated**.
-- M3 perceptual duplicate detection: **feature candidate implemented on `astra/m3-perceptual-duplicates`; exact-revision CI green; target query-plan/processing-cost evidence required before integration**.
-- M3 remains **in progress**: duplicate candidate validation/integration, regeneration and progress/status UI remain; broader video transcoding is not yet justified or scoped.
+- M3 perceptual duplicate detection: **hashing/processing cost and correctness accepted on target; original exact-match query rejected under a 50,001-row collision bucket; corrected scalar-hash query plus ordered composite index is CI-green and needs one focused target query-plan recheck before integration**.
+- M3 remains **in progress**: duplicate candidate revalidation/integration, regeneration and progress/status UI remain; broader video transcoding is not yet justified or scoped.
 
 ## Current integration commits / validation
 
@@ -42,7 +42,7 @@ The applicable CI gate includes Rust 1.99 format/check/tests/Clippy, PostgreSQL-
 
 Feature branch: `astra/m3-perceptual-duplicates`, branched from `v2` at `ac980f99bf1706557a48eb420d4600b6d20a2f96`.
 
-Current validated candidate head before this state-only commit: `4051dd6a86664809fce98823806f707d0b2947ff`.
+Current validated executable candidate head before this state-only commit: `2cef9a9d309639855a9e5b14cfa19191f40acbe5`.
 
 Key candidate commits:
 
@@ -50,13 +50,18 @@ Key candidate commits:
 - `cc78fa00f01c9568f7cf9479d93d4e574305e4f9` — compute hash from the already-decoded still image and carry it through `ProcessedMedia`;
 - `94436f55d5c3b1a820ab25240e9e5925cd813b45` — PostgreSQL-backed exact-duplicate visibility/boundedness tests on top of the duplicate service/query/store slice;
 - `627f8b4302244f9e45b9b06092aadb0c2a84ebc7` — compute the same hash contract from the already-extracted representative video frame;
-- `4051dd6a86664809fce98823806f707d0b2947ff` — formatting-only correction after the first video-hash CI run.
+- `4051dd6a86664809fce98823806f707d0b2947ff` — formatting-only correction after the first video-hash CI run; exact executable revision used for the first target duplicate gate;
+- `d211518580466c669d852166d3e361af105a60a6` — rewrite duplicate lookup so the source perceptual hash is a scalar subquery rather than a join variable;
+- `82b86a1438068137b2c3e1bb8640f6656ca9e937` — add ordered partial `(perceptual_hash, post_id DESC)` lookup index and drop the now-redundant single-column hash index;
+- `37564a7afa8b64d7729f4a9df0a2a1b58b49b69c` — lock the perceptual lookup migration contract;
+- `2cef9a9d309639855a9e5b14cfa19191f40acbe5` — lock the scalar-source-hash SQL shape that the target recheck must validate.
 
 CI:
 
 - `94436f55d5c3b1a820ab25240e9e5925cd813b45`: run `37231221069`, **success**;
 - `627f8b4302244f9e45b9b06092aadb0c2a84ebc7`: run `37231454607`, **failed only at Rust formatting** before later gates executed;
-- `4051dd6a86664809fce98823806f707d0b2947ff`: run `37231518697`, **success**, including scoped v2 correctness, PostgreSQL-backed tests, `Verify target worker release build`, and clean tracked checkout.
+- `4051dd6a86664809fce98823806f707d0b2947ff`: run `37231518697`, **success**, including scoped v2 correctness, PostgreSQL-backed tests, `Verify target worker release build`, and clean tracked checkout;
+- corrected query/index revision `2cef9a9d309639855a9e5b14cfa19191f40acbe5`: run `37237731218`, **success**, including scoped v2 correctness and clean tracked checkout.
 
 Candidate contract:
 
@@ -80,32 +85,43 @@ Duplicate semantics for this slice:
 - source `NULL` hash returns no candidates;
 - visibility/moderation/release rules remain separate from detection and are not bypassed.
 
-Existing schema was retained: `media.perceptual_hash bigint` plus the partial B-tree `media_phash_idx` already support exact equality. No migration or new service/index technology has been added. This is intentionally provisional until target `EXPLAIN (ANALYZE, BUFFERS)` confirms the current index/query shape, including a deliberately high-collision hash bucket.
-
 Dependency decision: do not add `image_hasher` for this slice. Its established gradient-hash behavior was evaluated, but pulling its wider transitive hashing/DCT dependency set was disproportionate when the current worker already owns the decoded `image` buffer and the required dHash operation is one bounded resize plus 64 comparisons. The algorithm/configuration is documented and locked by focused tests rather than relying on library defaults.
 
-Correctness currently covered by unit/integration/CI tests:
+### Target duplicate gate reviewed
 
-- deterministic hash for identical decoded representative pixels;
-- clearly different opposite-gradient fixtures do not exact-match;
-- equivalent representative pixels use the same hash function;
-- repeated image/video processing is idempotent and yields a hash;
-- image and video both call the same `gradient_hash` contract;
-- PostgreSQL duplicate lookup is bounded and ordered;
-- exact matches can cross image/video media kind;
-- unreleased, deleted, non-ready and disallowed-content-filter candidates are excluded;
-- source `NULL` hash yields no candidates;
-- existing generation/source-digest/lease publication fencing leaves no authoritative media row on stale/conflicting publication;
-- existing image/video processing paths remain green under the full applicable CI gate.
+Evidence package: `m3-perceptual-duplicates-20261004T203424Z.zip`.
 
-Known evidence gap before integration:
+Uploaded archive SHA-256: `4544bcf2afdfdc11fcc53198be38b44de1da92505e0b0ce1ef3fe9de81707344`.
 
-- no accepted target processing-overhead measurements yet;
-- no representative-scale or pathological-collision `EXPLAIN (ANALYZE, BUFFERS)` evidence yet;
-- because low-texture media can share a dHash, the high-collision plan is specifically required before deciding whether the existing single-column partial index is sufficient or a composite index/query adjustment is justified;
-- no public HTTP duplicate endpoint is added in this slice; the backend exposure is an internal bounded service/store boundary until product/API visibility semantics need a route.
+The archive contained **455 manifest-listed files and all 455 matched their SHA-256 values**. The tested baseline was `v2` at `ac980f99bf1706557a48eb420d4600b6d20a2f96`; the tested duplicate executable candidate was `4051dd6a86664809fce98823806f707d0b2947ff`.
 
-Do not integrate the candidate into `v2` until those measurements are reviewed here. Do not automatically rerun the full 80,000-request video coexistence gate unless measured duplicate hashing/query work adds meaningful continuous CPU/DB load; decide from the target cost evidence first.
+Accepted processing/correctness evidence:
+
+- three paired 20-job still-image rounds: median wall time **16.069143 -> 16.288370 s**, about **+1.36%**; median worker CPU time **15.17 -> 15.28 s** and mean CPU **93.236% -> 93.276%**; no meaningful RSS regression;
+- three paired 20-job compatible-video rounds: median wall time **10.977987 -> 10.959615 s**, about **-0.17%**; CPU/RSS effectively unchanged;
+- all six paired canonical/thumbnail output-byte comparisons passed;
+- all warmup/measured jobs succeeded and observed max running jobs stayed one;
+- repeated image/video processing produced deterministic non-null hashes and identical retry output bytes;
+- exact cross-kind image/video candidate lookup worked; source `NULL`, unreleased, deleted, non-ready and disallowed-filter cases were excluded as required.
+
+Decision for hashing/processing: **accept**. The measured still-image delta is small relative to existing encoding work, compatible-video cost is effectively unchanged, correctness passed, and the evidence does not justify an API coexistence rerun.
+
+Representative query evidence for the original SQL was good: the 100k selective dataset used `media_phash_idx`; 30-sample median lookup was **0.171 ms** with p95 **0.533 ms**. No-candidate median was **0.125 ms**, p95 **0.154 ms**.
+
+Pathological collision evidence rejected the original query shape:
+
+- the deliberate bucket held source + 50,000 other media rows with the same hash;
+- visible collision medians were about **19.0 ms** and restrictive-filter medians about **61.8-62.0 ms**;
+- PostgreSQL chose a backward `media_pkey` scan to satisfy `ORDER BY m.post_id DESC LIMIT`, scanning tens of thousands of unrelated media rows instead of bounding work to the matching hash bucket;
+- a temporary diagnostic `(perceptual_hash, post_id DESC)` index alone did **not** fix the plan or timings because the original `WITH source ... JOIN media m ON m.perceptual_hash = s.perceptual_hash` exposed the hash as a join variable rather than a fixed scalar value.
+
+Decision for the original lookup: **reject**. A hot duplicate query must not turn a high-collision value into a near-whole-media-table ordered scan.
+
+The corrected candidate keeps one round trip but changes the source hash to a scalar subquery and replaces the single-column partial hash index with `media_phash_post_idx ON media (perceptual_hash, post_id DESC) WHERE perceptual_hash IS NOT NULL`. The intended plan is a source-row PK lookup plus a candidate scan bounded to one perceptual-hash bucket, with post-ID order supplied by the same index. This correction is CI-green but is **not accepted until target `EXPLAIN (ANALYZE, BUFFERS)` confirms the intended bounded plan on both representative and 50,001-row collision fixtures**.
+
+Do not rerun the processing-cost comparison: the correction changes only Go SQL/schema migration inputs, not hashing or worker processing. Do not rerun the 80,000-request API coexistence gate unless the focused DB recheck unexpectedly shows material continuous database load.
+
+No public HTTP duplicate endpoint is added in this slice; the backend exposure remains an internal bounded service/store boundary until product/API visibility semantics need a route.
 
 ## Retained architecture / invariants
 
@@ -259,7 +275,7 @@ Commit `4830d137d59b57ea4abcd2092e3c9010f7e2683e` codifies post 50000 as SFW in 
 
 ## Remaining M3 work
 
-- finish target validation and integration of the perceptual duplicate-detection candidate;
+- run the focused target query-plan recheck for the corrected perceptual duplicate lookup and integrate only if it is bucket-bounded under both representative and high-collision data;
 - regeneration;
 - progress/status UI;
 - decide whether broader video transcoding is actually required only after concrete input/product evidence defines the needed codec/container contract;
@@ -280,4 +296,4 @@ Before handoff, the applicable CI for the exact revision must be green. Default 
 
 ## Single best next task
 
-Run a **read-only/execution-only target-host perceptual-duplicate gate** for the exact candidate revision after this state update passes CI: compare still-image and compatible-video processing cost against current `v2`, capture separate before/during/after shared-host snapshots, and run `EXPLAIN (ANALYZE, BUFFERS)` plus lookup latency measurements on representative and deliberately high-collision media-hash datasets. Use that evidence to decide whether the existing single-column partial perceptual-hash index/query is sufficient before integrating or changing schema/query shape.
+Run a **read-only/execution-only focused target PostgreSQL recheck** for exact executable revision `2cef9a9d309639855a9e5b14cfa19191f40acbe5`: apply migrations through `004_media_perceptual_hash_lookup.sql` in a disposable PostgreSQL instance, repeat the 100k representative/no-candidate cases and the exact 50,001-row high-collision visible/restrictive-filter cases, and capture `EXPLAIN (ANALYZE, BUFFERS, VERBOSE, SETTINGS)` plus repeated lookup latency. Accept only if work is bounded to the matching perceptual-hash bucket rather than reverting to an ordered scan of unrelated `media` rows. Do not rerun worker processing or the 80,000-request API coexistence gate for this recheck.
