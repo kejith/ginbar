@@ -164,7 +164,7 @@ fn decode_verified_still(source: &mut VerifiedSource) -> Result<DynamicImage, Pr
     let format = match source.media_type {
         MediaType::Image(ImageFormat::Jpeg) => CodecFormat::Jpeg,
         MediaType::Image(ImageFormat::Png) => CodecFormat::Png,
-        MediaType::Image(ImageFormat::WebP) => CodecFormat::WebP,
+        MediaType::Image(ImageFormat::Webp) => CodecFormat::WebP,
         _ => {
             return Err(ProcessError::terminal(
                 "image format reached decode without still-image support",
