@@ -10,6 +10,7 @@ on:
       - '.gitignore'
       - 'go.work'
       - 'scripts/v2-ci.sh'
+      - 'scripts/v2-worker-build.sh'
       - 'src/backend/v2/**'
       - 'src/frontend/**'
       - 'src/worker/v2/**'
@@ -48,6 +49,16 @@ jobs:
           TMPDIR: ${{ runner.temp }}
           GINBAR_HOST_GATE_LOCK: ${{ runner.temp }}/ginbar-v2-host-gate.lock
         run: bash scripts/v2-ci.sh auto "$GINBAR_CI_BASE_SHA"
+
+      - name: Verify target worker release build
+        shell: bash
+        env:
+          GINBAR_CI_BASE_SHA: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          output="${RUNNER_TEMP}/ginbar-worker-v2-${GITHUB_SHA}"
+          bash scripts/v2-worker-build.sh --if-needed "$GINBAR_CI_BASE_SHA" "$output"
+          rm -f "$output"
 
       - name: Verify tracked checkout remained unchanged
         if: always()
