@@ -5,3 +5,4 @@ pub mod output;
 pub mod processing;
 pub mod publication;
 pub mod runner;
+pub mod video;
