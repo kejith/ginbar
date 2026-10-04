@@ -50,7 +50,7 @@ impl ImageProcessor for BoundedImageProcessor {
         let (decoded_width, decoded_height) = image.dimensions();
         validate_dimensions(decoded_width, decoded_height)?;
 
-        let thumbnail = make_square_thumbnail(&image);
+        let thumbnail_bytes = encode_thumbnail_avif(&image)?;
         let main = if decoded_width > MAX_OUTPUT_DIMENSION || decoded_height > MAX_OUTPUT_DIMENSION
         {
             let resized = image.resize(
@@ -67,7 +67,6 @@ impl ImageProcessor for BoundedImageProcessor {
 
         // Encode both objects before creating any durable output. This avoids leaving
         // a canonical object behind merely because the second encode failed.
-        let thumbnail_bytes = encode_avif(&thumbnail, THUMBNAIL_QUALITY)?;
         let main_bytes = encode_avif(&main, MAIN_QUALITY)?;
 
         let main_key = processed_output_key(post_id, &source.sha256, OutputFormat::Avif)?;
@@ -235,6 +234,11 @@ fn make_square_thumbnail(image: &DynamicImage) -> DynamicImage {
         THUMBNAIL_DIMENSION,
         FilterType::Triangle,
     ))
+}
+
+pub(crate) fn encode_thumbnail_avif(image: &DynamicImage) -> Result<Vec<u8>, ProcessError> {
+    let thumbnail = make_square_thumbnail(image);
+    encode_avif(&thumbnail, THUMBNAIL_QUALITY)
 }
 
 fn encode_avif(image: &DynamicImage, quality: f32) -> Result<Vec<u8>, ProcessError> {

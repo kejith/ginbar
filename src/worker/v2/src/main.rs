@@ -1,14 +1,14 @@
 use ginbar_worker_v2::config::Config;
 use ginbar_worker_v2::image::BoundedImageProcessor;
 use ginbar_worker_v2::jobs::{retry_delay, ClaimOutcome, FailureOutcome, JobLease, JobStore};
+use ginbar_worker_v2::media_executor::MediaJobExecutor;
 use ginbar_worker_v2::output::OutputStore;
 use ginbar_worker_v2::processing::{
     prepare_claimed_source, FailureClass, ImageProcessor, MediaRoot, MediaType, NeverCancelled,
 };
 use ginbar_worker_v2::publication::{publish_processed, PublishOutcome};
-use ginbar_worker_v2::runner::{
-    ConnectionFactory, RunnerSettings, ShutdownToken, StillImageJobExecutor, WorkerRunner,
-};
+use ginbar_worker_v2::runner::{ConnectionFactory, RunnerSettings, ShutdownToken, WorkerRunner};
+use ginbar_worker_v2::video::BoundedVideoProcessor;
 use postgres::{Client, Config as PostgresConfig, NoTls};
 use std::num::NonZeroU64;
 use std::process::ExitCode;
@@ -46,7 +46,7 @@ fn run() -> Result<(), String> {
             return Err(format!(
                 "usage: {program} <claim-once|process-once|run>\n\n\
                  claim-once claims at most one durable job and intentionally leaves its lease to expire.\n\
-                 process-once claims and processes at most one still-image job; it requires GINBAR_MEDIA_ROOT.\n\
+                 process-once claims and processes at most one media job; it requires GINBAR_MEDIA_ROOT.\n\
                  run starts the production one-job-at-a-time polling worker with lease renewal and graceful shutdown."
             ));
         }
@@ -71,7 +71,7 @@ fn run_forever(config: &Config) -> Result<(), String> {
     let max_source_bytes = parse_max_source_bytes()?;
     let media_root =
         MediaRoot::new(&media_root_path).map_err(|error| format!("open media root: {error}"))?;
-    let executor = StillImageJobExecutor::new(media_root, max_source_bytes)?;
+    let executor = MediaJobExecutor::new(media_root, max_source_bytes)?;
     let settings = RunnerSettings::from_env()?;
     install_termination_handlers()?;
 
@@ -198,19 +198,20 @@ fn process_once(client: &mut Client, config: &Config) -> Result<(), String> {
         }
     };
 
-    if matches!(source.media_type, MediaType::Video(_)) {
-        let message = "video processing is intentionally out of scope for this M3 slice";
-        fail_owned_job(client, config, &lease, FailureClass::Terminal, message)?;
-        return Err(format!("job {}: {message}", lease.id));
-    }
-
     let started = Instant::now();
-    let mut processor = BoundedImageProcessor::new(output_store);
-    let processed = match processor.process_image(&mut source, lease.post_id) {
+    let mut image_processor = BoundedImageProcessor::new(output_store.clone());
+    let mut video_processor = BoundedVideoProcessor::new(output_store);
+    let processed = match source.media_type {
+        MediaType::Image(_) => image_processor.process_image(&mut source, lease.post_id),
+        MediaType::Video(_) => {
+            video_processor.process_video_cancellable(&mut source, lease.post_id, &NeverCancelled)
+        }
+    };
+    let processed = match processed {
         Ok(processed) => processed,
         Err(error) => {
             fail_owned_job(client, config, &lease, error.class(), &error.to_string())?;
-            return Err(format!("process job {} image: {error}", lease.id));
+            return Err(format!("process job {} media: {error}", lease.id));
         }
     };
     let processing_elapsed = started.elapsed();
@@ -226,7 +227,7 @@ fn process_once(client: &mut Client, config: &Config) -> Result<(), String> {
     {
         PublishOutcome::Published => {
             println!(
-                "processed job={} post={} image_ms={:.3} bytes={} storage_key={}",
+                "processed job={} post={} media_ms={:.3} bytes={} storage_key={}",
                 lease.id,
                 lease.post_id,
                 processing_elapsed.as_secs_f64() * 1000.0,
