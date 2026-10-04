@@ -11,7 +11,7 @@ func TestMigrationSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"001_core.sql", "002_media_job_leases.sql", "003_media_sources.sql"}
+	want := []string{"001_core.sql", "002_media_job_leases.sql", "003_media_sources.sql", "004_media_perceptual_hash_lookup.sql"}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("got %#v want %#v", names, want)
 	}
@@ -56,6 +56,20 @@ func TestMigrationSet(t *testing.T) {
 	} {
 		if !bytes.Contains(sources, required) {
 			t.Fatalf("source migration missing %q", required)
+		}
+	}
+
+	perceptualLookup, err := Migration(names[3])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range [][]byte{
+		[]byte("media_phash_post_idx"),
+		[]byte("(perceptual_hash, post_id DESC)"),
+		[]byte("DROP INDEX media_phash_idx"),
+	} {
+		if !bytes.Contains(perceptualLookup, required) {
+			t.Fatalf("perceptual lookup migration missing %q", required)
 		}
 	}
 }
