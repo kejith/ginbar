@@ -33,7 +33,7 @@ if [[ "${1:-}" == "--if-needed" ]]; then
     should_build=0
     while IFS= read -r path; do
       case "$path" in
-        src/worker/v2/*|scripts/v2-worker-build.sh)
+        src/worker/v2/*|scripts/v2-worker-build.sh|.github/workflows/v2-ci.yml)
           should_build=1
           break
           ;;
