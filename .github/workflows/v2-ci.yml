@@ -45,6 +45,8 @@ jobs:
         shell: bash
         env:
           GINBAR_CI_BASE_SHA: ${{ github.event.before }}
+          TMPDIR: ${{ runner.temp }}
+          GINBAR_HOST_GATE_LOCK: ${{ runner.temp }}/ginbar-v2-host-gate.lock
         run: bash scripts/v2-ci.sh auto "$GINBAR_CI_BASE_SHA"
 
       - name: Verify tracked checkout remained unchanged
