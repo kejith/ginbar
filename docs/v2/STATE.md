@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-05
-Phase: **M3 media pipeline — perceptual duplicate detection accepted; integration into `v2` in progress**
+Phase: **M3 media pipeline — perceptual duplicate detection accepted and integrated**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -15,8 +15,8 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/architecture
 - M3 still-image JPEG/PNG/WebP -> deterministic AVIF canonical + thumbnail processing: **accepted and integrated**.
 - M3 production worker runner, lease renewal, cancellation/recovery and hermetic release build: **accepted and integrated**.
 - M3 compatible-MP4 H.264/AAC zero-transcode publication + deterministic AVIF thumbnail: **accepted and integrated**.
-- M3 perceptual duplicate detection: **accepted after two target gates; ready to integrate into `v2`**.
-- M3 remains **in progress** after duplicate integration: regeneration and progress/status UI remain. Broader video transcoding is still deferred until a concrete product/input requirement defines the codec/container contract.
+- M3 perceptual duplicate detection: **accepted after two target gates and integrated into `v2`**.
+- M3 remains **in progress**: regeneration and progress/status UI remain. Broader video transcoding is still deferred until a concrete product/input requirement defines the codec/container contract.
 
 ## Perceptual duplicate detection — accepted contract
 
@@ -26,12 +26,15 @@ Exact executable candidate validated on target and accepted:
 
 `2cef9a9d309639855a9e5b14cfa19191f40acbe5`
 
+Accepted feature/integration state before this final state-only commit:
+
+`a87036320ad1b3aa9ef07e4acafbb0c87cf67bcb`
+
 Applicable CI:
 
-- workflow run `37237731218`: **success** on exact SHA `2cef9a9d309639855a9e5b14cfa19191f40acbe5`;
-- scoped v2 correctness gate passed;
-- PostgreSQL-backed tests passed;
-- tracked checkout remained clean.
+- feature executable run `37237731218`: **success** on exact SHA `2cef9a9d309639855a9e5b14cfa19191f40acbe5`;
+- post-fast-forward `v2` run `37241640457`: **success** on exact SHA `a87036320ad1b3aa9ef07e4acafbb0c87cf67bcb`;
+- post-integration run passed scoped v2 correctness, PostgreSQL-backed tests, hermetic target-worker release build and clean tracked checkout.
 
 Hash contract:
 
@@ -127,7 +130,7 @@ Plan evidence:
 
 Decision: **accept corrected query/index shape**. The remaining ~65 ms restrictive case is a deliberately pathological 50k-collision bucket whose cost is now bounded by the matching bucket and authoritative visibility checks. Do not denormalize post visibility or add another cache/index solely for this synthetic case. Revisit only if real production collision distributions or a future high-rate public/ingestion duplicate lookup demonstrate material load.
 
-The target agent's canonical local checkout was clean but had a stale local `v2` ref at old commit `38c515afd2862cb6a3b6a6c677c9b34fa210b662`. This did not affect the gate: exact baseline/candidate detached worktrees were used. GitHub `v2` remained `ac980f99bf1706557a48eb420d4600b6d20a2f96` when acceptance was reviewed.
+The target agent's canonical local checkout was clean but had a stale local `v2` ref at old commit `38c515afd2862cb6a3b6a6c677c9b34fa210b662`. This did not affect the gate: exact baseline/candidate detached worktrees were used. GitHub `v2` was verified at `ac980f99bf1706557a48eb420d4600b6d20a2f96` immediately before the fast-forward integration.
 
 ## Retained architecture / invariants
 
@@ -183,4 +186,4 @@ Use local/server agents for browser/DevTools, SSH, real PostgreSQL, target-serve
 
 ## Single best next task
 
-After fast-forward integration of the accepted duplicate slice into `v2`, begin the **M3 regeneration contract** from current `v2`: define the smallest durable regeneration workflow that reuses the existing processing-version identity, PostgreSQL job ownership/generation fencing and deterministic no-overwrite outputs without creating a second media-processing path. Inspect current schema/job/publication boundaries first, then implement and validate the minimal coherent slice.
+Begin the **M3 regeneration contract** from current `v2`: define the smallest durable regeneration workflow that reuses the existing processing-version identity, PostgreSQL job ownership/generation fencing and deterministic no-overwrite outputs without creating a second media-processing path. Inspect current schema/job/publication boundaries first, then implement and validate the minimal coherent slice.
