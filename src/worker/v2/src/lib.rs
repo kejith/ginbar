@@ -3,6 +3,7 @@ pub mod image;
 pub mod jobs;
 pub mod media_executor;
 pub mod output;
+pub mod perceptual;
 pub mod processing;
 pub mod publication;
 pub mod runner;
