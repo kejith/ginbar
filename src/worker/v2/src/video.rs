@@ -1,5 +1,6 @@
 use crate::image::encode_thumbnail_avif;
 use crate::output::OutputStore;
+use crate::perceptual::gradient_hash;
 use crate::processing::{
     processed_output_key, Cancellation, MediaKind, MediaType, NeverCancelled, OutputFormat,
     ProcessError, ProcessedMedia, VerifiedSource, VideoFormat, VideoProcessor,
@@ -296,6 +297,7 @@ impl BoundedVideoProcessor {
                 "video thumbnail frame dimensions {frame_width}x{frame_height} exceed bounded extraction contract"
             )));
         }
+        let perceptual_hash = gradient_hash(&frame);
         let thumbnail_avif = encode_thumbnail_avif(&frame)?;
         if cancellation.is_cancelled() {
             return Err(ProcessError::retryable("video processing cancelled"));
@@ -315,7 +317,7 @@ impl BoundedVideoProcessor {
             duration_ms: metadata.duration_ms,
             byte_size,
             sha256: published.sha256,
-            perceptual_hash: None,
+            perceptual_hash: Some(perceptual_hash),
         })
     }
 }
@@ -1036,6 +1038,7 @@ mod tests {
         assert_eq!(first.kind, MediaKind::Video);
         assert_eq!(first.mime_type, "video/mp4");
         assert_eq!(first.byte_size, body.len() as i64);
+        assert!(first.perceptual_hash.is_some());
         let expected_sha: [u8; 32] = Sha256::digest(body).into();
         assert_eq!(first.sha256, expected_sha);
         assert_eq!(fs::read(root.0.join(&first.storage_key)).unwrap(), body);
