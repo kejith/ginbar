@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-04
-Phase: **M3 media pipeline — production runner correctness complete; target-host performance gate next**
+Phase: **M3 media pipeline — production still-image runner accepted and integrated; video processing next**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -15,11 +15,11 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable architecture/milestone
 - M3 upload/URL ingestion + durable enqueue: **integrated**.
 - M3 source verification + generation-fenced DB publication: **integrated**.
 - M3 still-image JPEG/PNG/WebP -> deterministic AVIF canonical + thumbnail pipeline: **integrated**.
-- Self-hosted v2 CI: **integrated and green on `v2`**.
-- M3 long-running production worker runner: **correctness-gated on feature branch; target-host performance gate pending**.
+- M3 long-running production worker runner with polling, lease renewal, cancellation and graceful shutdown: **accepted and integrated**.
+- Self-hosted v2 CI: **integrated**.
 - M3 is **not complete**.
 
-Do not integrate the runner into `v2` or start video until the real continuous-runner target-host gate is accepted.
+The runner gate is closed. Video processing may now begin, but video must receive its own codec/thread/resource/API-interference measurements before integration.
 
 ## Source boundaries
 
@@ -44,15 +44,20 @@ Keep unless new evidence justifies a change:
 - real search lexer/parser/AST and parameterized SQL;
 - durable jobs use PostgreSQL claim ownership + generation fencing;
 - codec/filesystem work stays outside DB transactions;
-- publication remains fenced by owner/generation, source identity, post eligibility, and lease validity;
+- publication remains fenced by owner/generation, source identity, post eligibility and lease validity;
 - at-least-once work requires deterministic/idempotent side effects;
-- current still-image concurrency = **one job at a time**;
+- still-image concurrency = **one media job at a time**;
 - AVIF encoder threads = **one**;
-- any output-affecting image change requires incrementing `PROCESSING_VERSION`.
+- production idle poll = **500 ms**;
+- production lease baseline = **30 s**, heartbeat at roughly one third of lease;
+- PostgreSQL worker connect/statement budget = `min(lease / 10, 3s)`, 1 ms floor;
+- any output-affecting media change requires a processing-version change rather than silent key reuse.
+
+Do not add Redis wakeups, cgroups, CPU pinning, quotas or worker load admission from current evidence.
 
 ## Integrated still-image contract
 
-Processing version 1 currently supports:
+Processing version 1 supports:
 
 - JPEG;
 - non-animated PNG;
@@ -75,94 +80,97 @@ Limits/output:
 - `ravif` speed 10;
 - main quality 75;
 - thumbnail quality 60;
-- one encoder thread;
 - deterministic canonical `.avif` and `<stem>.thumb.avif`;
 - same-directory staged write + fsync + no-overwrite hard-link publication;
 - exact size/SHA verification for idempotent reuse;
 - conflicting existing destination bytes are terminal and never overwritten.
 
-The accepted application lockfile is committed at `src/worker/v2/Cargo.lock`. Use `--locked` for worker validation.
+The accepted application lockfile is committed at `src/worker/v2/Cargo.lock`; use `--locked` for worker validation.
 
-## Production runner candidate
+## Production runner contract
 
-Branch: `astra/m3-worker-runner-ci`.
+The integrated runner provides:
 
-The candidate now provides:
-
-- serial one-job-at-a-time claim/process/repeat behavior;
-- bounded idle polling rather than busy spinning;
+- serial claim/process/repeat behavior with at most one active media job;
+- bounded idle polling rather than busy spin;
 - independent PostgreSQL lease heartbeat while processing;
-- renewal at roughly one third of the configured lease;
-- generation/owner/expiry fencing on all authoritative lifecycle mutations;
+- owner/generation/expiry fencing on authoritative lifecycle mutations;
 - cancellation on lost ownership and repeated renewal failure;
-- bounded DB reconnect and renewal retry backoff;
+- bounded DB reconnect/renewal retry backoff;
 - graceful SIGINT/SIGTERM behavior with owned-job requeue where possible;
-- crash/restart lease reclaim semantics;
-- cancellation checks around source verification, processing and before authoritative publication;
-- lease-aware PostgreSQL connection/statement bounds: `min(lease / 10, 3s)`, 1 ms floor;
-- preserved PostgreSQL connection `options`, with worker `statement_timeout` appended.
+- crash/restart lease reclaim onto the next generation;
+- cancellation checks during source verification and before authoritative publication;
+- bounded PostgreSQL connect/query operations derived from the lease.
 
-AVIF encoding and durable filesystem publication are synchronous in processing v1 and cannot be interrupted mid-call. The worker rechecks cancellation before the fenced database commit, so stale work cannot release a post or complete a job. Deterministic no-overwrite files produced before cancellation remain safe for retry.
+AVIF encoding and durable filesystem publication are synchronous in processing v1 and cannot be interrupted mid-call. Cancellation is rechecked before the fenced database commit; stale work cannot release a post or complete a job, and deterministic no-overwrite files remain safe for retry.
 
-The PostgreSQL socket connect timeout applies per address attempt. The current production architecture is local PostgreSQL; multi-host failover timing is not part of this runner contract.
+## Runner correctness and integration evidence
 
-## Runner correctness evidence
+Exact worker revision accepted by the target gate and fast-forwarded into `v2`:
 
-Current documented candidate code/docs revision before this state-only update:
+- `534f9c3add3b4bec4cab405544f7741fa11d1b30`.
 
-- `3e20101480a325f6de43b7f3e1ff81d203701622`
-- GitHub Actions run `37163020555`: **success** (`scope=worker`).
-- immediately preceding code revision `96b77a3d8339b0c099d2e4f70388ad0e65917f9d`: **success**, run `37162981139`.
+CI:
 
-The worker gate covers Rust 1.99 formatting/checking, PostgreSQL-backed tests, Clippy with `-D warnings`, lockfile stability, and clean checkout. Relevant runner coverage includes:
+- feature-branch run `37163175288`: **success** on the exact target-gated revision;
+- post-integration `v2` run `37167528287`: **success** on the same exact revision.
 
-- repeated successful work without overlapping active jobs;
-- idle polling without busy spin;
-- bounded retry backoff;
-- long-running job lease renewal;
-- lost-generation cancellation without stale completion;
-- repeated renewal DB failure classification/requeue;
-- crash/restart reclaim onto the next generation;
-- shutdown during active work and owned-job requeue;
-- lease-derived PostgreSQL timeout configuration and existing-option preservation.
+The worker CI gate covers Rust 1.99 formatting/checking, PostgreSQL-backed tests, Clippy with `-D warnings`, lockfile stability and clean checkout. Runner tests include repeated work without overlap, idle waiting, bounded retry, repeated lease renewal, generation loss, renewal DB failures, crash/restart reclaim, shutdown/requeue and lease-derived PostgreSQL timeout configuration.
 
-During CI hardening, a 120 ms lease / 350 ms renewal test proved scheduler-sensitive on the self-hosted runner. The test was changed to a 1 s lease with 2.5 s active work: it still requires repeated renewals but gives realistic CI scheduling/DB margin. Production default lease remains 30 s.
+## Accepted target-host runner gate
 
-## Current performance decisions
+Evidence bundle:
 
-Stable measurements are consolidated in [`PERFORMANCE.md`](PERFORMANCE.md). Immediate constraints for the runner gate:
+- `m3-runner-20261004T001829Z.zip`;
+- SHA-256 `f709ebc3c097e1d4fb88903cbda1dcdb6c90babda4df2ce1058226a66bdd57a3`.
 
-- frontend selection sync p95 stayed below ~0.5 ms through the tested 10,000-post M1 matrix;
-- M2 around-post p95 ranged from 2.277 ms at c1 to 13.712 ms at c32 with zero errors in the final gate;
-- one large image job has little tail-latency impact at low API concurrency but reduces peak HTTP capacity near CPU saturation;
-- accepted image configuration remains one job / one AVIF encoder thread;
-- prior synthetic one-image coexistence evidence is not a substitute for a real continuous runner measurement;
-- do not add scheduler/load-admission complexity until the continuous runner is measured;
-- there is **no apples-to-apples global v1-v2 benchmark yet**, so do not claim an overall rewrite speedup.
+The returned ZIP hash was independently verified before acceptance. Raw HTTP JSON was recomputed independently and matches the supplied comparison table.
 
-## CI / integration status
+Key results:
 
-The consolidated self-hosted CI gate is integrated into `v2` at `56bc4845114fd48af5e492c3412fba4296c15baf`.
+- idle runner: median CPU **0%**, peak **0.91%**, RSS **3,712 KiB**; clean SIGTERM in **30 ms**;
+- forced renewal: 8192x8192 fixture completed in **2.322 s** under a 1 s lease with seven observed expiry values while attempt/generation stayed 1;
+- continuous drain: **2,000/2,000 succeeded**, zero failures/stale running jobs, max running **1**, **1.505 jobs/s**;
+- continuous worker CPU during active jobs: median **93.69%**, peak **99.01%**;
+- continuous worker RSS: median **75,944 KiB**, peak **130,332 KiB**;
+- shutdown during long encode safely requeued without publication/release; restart completed at attempt/generation 2;
+- API coexistence: **80,000/80,000 measured requests succeeded**, zero errors.
 
-- `v2` run `37162024614` at that exact revision: **success**.
-- CI runs on `ginbar-ci-vm` / `amp-ci-vm` and scopes frontend/backend/worker work automatically.
-- Exact-revision CI must be green before any local/server agent handoff.
-- The runner feature branch is intentionally **not yet integrated into `v2`** because the target-host performance/coexistence gate remains open.
+Same-run median baseline -> loaded HTTP results:
+
+| concurrency | p95 | p99 | throughput |
+| ---: | ---: | ---: | ---: |
+| 1 | 2.183 -> 2.283 ms (**+4.57%**) | 2.388 -> 2.548 ms (**+6.70%**) | 563.74 -> 533.11 req/s (**-5.43%**) |
+| 2 | 2.360 -> 2.435 ms (**+3.20%**) | 2.551 -> 2.696 ms (**+5.68%**) | 991.21 -> 960.90 req/s (**-3.06%**) |
+| 4 | 2.625 -> 2.830 ms (**+7.81%**) | 2.894 -> 3.183 ms (**+9.98%**) | 1,753.34 -> 1,688.46 req/s (**-3.70%**) |
+| 8 | 3.947 -> 4.692 ms (**+18.88%**) | 4.833 -> 5.537 ms (**+14.57%**) | 2,667.60 -> 2,406.90 req/s (**-9.77%**) |
+
+At c8 the loaded median max was **7.967 ms** and all requests still succeeded. The measurable peak-capacity cost is accepted; absolute latency remains within the current budget.
+
+Cleanup evidence showed the disposable PostgreSQL container/volume and run tree removed, no benchmark processes remaining, Wallium/unrelated services still running, and the canonical checkout clean.
+
+Stable details are consolidated in [`PERFORMANCE.md`](PERFORMANCE.md).
+
+## Decisions from the runner gate
+
+- keep one media job at a time;
+- keep one AVIF encoder thread;
+- keep the 500 ms PostgreSQL idle poll;
+- keep the 30 s production lease/independent heartbeat model;
+- keep API PostgreSQL pool cap 8;
+- no Redis queue/wakeup dependency;
+- no cgroup/core-pinning/quota/load-admission mechanism;
+- treat CPU interference as a measured capacity trade-off rather than adding complexity without evidence.
 
 ## Remaining M3 work
 
-Immediate runner gate:
+Immediate next work:
 
-- target-host idle runner CPU/RSS and PostgreSQL query activity;
-- continuous still-image job throughput/resource use;
-- forced-renewal behavior using a long fixture and shorter test lease;
-- API p50/p95/p99/max latency and throughput baseline vs continuous runner;
-- cleanup/restoration evidence on the shared host;
-- accept/reject the one-job/one-encoder-thread runner architecture from measured evidence.
+- video processing architecture and first bounded implementation slice;
+- explicit video codec/thread/resource/API-interference benchmark before acceptance.
 
-After the runner gate is accepted and integrated:
+After video:
 
-- video processing;
 - perceptual duplicate detection;
 - regeneration;
 - progress/status UI.
@@ -172,19 +180,18 @@ Deferred cleanup/operational items:
 - ingestion-source and processed-staging orphan reconciliation/janitor;
 - deployment UID/GID/media-storage permissions;
 - stronger `openat2`/`O_NOFOLLOW`-style hardening only if the local media tree threat model changes;
-- explicit video CPU/thread/interference benchmark;
 - v1-v2 apples-to-apples benchmark once equivalent end-to-end behavior exists.
 
 ## Local-agent rule
 
-Use local/server agents for browser/DevTools, SSH, real PostgreSQL, target-server benchmarks, temporary deployments, or unavailable toolchains.
+Use local/server agents for browser/DevTools, SSH, real PostgreSQL, target-server benchmarks, temporary deployments or unavailable toolchains.
 
 Before any local-agent handoff, require a green applicable CI pipeline for the exact revision being handed off. Do not use the local agent to discover routine correctness failures that CI can catch.
 
-Default is read-only/execution-only. They must not modify source, SQL, docs, config, commits, branches, deployments, or persistent state without explicit approval for that specific write.
+Default is read-only/execution-only. They must not modify source, SQL, docs, config, commits, branches, deployments or persistent state without explicit approval for that specific write.
 
-Return one evidence ZIP with exact SHA/worktree state, commands, stdout/stderr, environment versions, raw benchmark/query-plan data, errors, cleanup proof, and concise findings.
+Return one evidence ZIP with exact SHA/worktree state, commands, stdout/stderr, environment versions, raw benchmark/query-plan data, errors, cleanup proof and concise findings.
 
 ## Single best next task
 
-Run the exact CI-green `astra/m3-worker-runner-ci` revision through the target-host continuous-runner gate using disposable PostgreSQL/media state while leaving the shared workload in its normal state. Return the evidence ZIP here for analysis. If the evidence is acceptable, integrate the runner into `v2`, update `PERFORMANCE.md`/`STATE.md`, and only then begin video processing.
+Start the smallest coherent **video-processing boundary** from current `v2`: inspect the existing source-sniffing/publication contracts and legacy behavior only as reference, choose a proven bounded video toolchain, define deterministic output/versioning and cancellation/resource limits, implement correctness tests first, then run the applicable CI before any target-host codec/interference handoff.
