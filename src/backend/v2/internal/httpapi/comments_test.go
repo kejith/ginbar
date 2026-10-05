@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/kejith/ginbar/backend/v2/internal/comment"
+	"github.com/kejith/ginbar/backend/v2/internal/model"
 )
 
 // Keep the shared apiStore satisfying Server's aggregate Store interface for all existing HTTP tests.
@@ -26,7 +27,7 @@ func (s *apiStore) CreateComment(_ context.Context, request comment.CreateReques
 	for _, post := range s.posts {
 		if post.ID == request.PostID {
 			body := request.Body
-			return comment.Comment{ID: 100, PostID: request.PostID, AuthorID: request.UserID, ParentCommentID: request.ParentCommentID, Body: &body, CreatedAt: time.Unix(100, 0).UTC()}, nil
+			return comment.Comment{ID: 100, PostID: request.PostID, AuthorID: request.UserID, ParentCommentID: request.ParentCommentID, Body: &body, UserVote: model.VoteNeutral, CreatedAt: time.Unix(100, 0).UTC()}, nil
 		}
 	}
 	return comment.Comment{}, comment.ErrPostNotFound
@@ -63,14 +64,14 @@ func TestCommentsReadPublicCursorAndUnavailablePost(t *testing.T) {
 	store := &commentAPIStore{apiStore: &apiStore{}, comments: []comment.Comment{{ID: 10, PostID: 42, AuthorID: 7, Body: &body}, {ID: 11, PostID: 42, AuthorID: 8, Body: &body}, {ID: 12, PostID: 42, AuthorID: 9, Body: &body}}}
 	res := httptest.NewRecorder()
 	New(store).Handler().ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/api/v2/posts/42/comments?after=5&limit=2", nil))
-	if res.Code != http.StatusOK || store.lastQuery.PostID != 42 || store.lastQuery.After != 5 || store.lastQuery.Limit != 2 {
+	if res.Code != http.StatusOK || store.lastQuery.PostID != 42 || store.lastQuery.After != 5 || store.lastQuery.Limit != 2 || store.lastQuery.ViewerUserID != 0 {
 		t.Fatalf("status=%d query=%#v body=%s", res.Code, store.lastQuery, res.Body.String())
 	}
 	var page comment.Page
 	if err := json.Unmarshal(res.Body.Bytes(), &page); err != nil {
 		t.Fatal(err)
 	}
-	if len(page.Comments) != 2 || page.NextAfter != 11 || strings.Contains(res.Body.String(), "userVote") {
+	if len(page.Comments) != 2 || page.NextAfter != 11 || !strings.Contains(res.Body.String(), `"userVote":0`) {
 		t.Fatalf("page=%#v body=%s", page, res.Body.String())
 	}
 
@@ -79,6 +80,20 @@ func TestCommentsReadPublicCursorAndUnavailablePost(t *testing.T) {
 	New(store).Handler().ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/api/v2/posts/999/comments", nil))
 	if res.Code != http.StatusNotFound || !strings.Contains(res.Body.String(), `"code":"post_not_found"`) {
 		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
+	}
+}
+
+func TestCommentsReadResolvesAuthenticatedViewer(t *testing.T) {
+	body := "one"
+	base := &apiStore{}
+	store := &commentAPIStore{
+		apiStore: base,
+		comments: []comment.Comment{{ID: 10, PostID: 42, AuthorID: 7, Body: &body, UserVote: model.VoteDown}},
+	}
+	res := httptest.NewRecorder()
+	newAuthTestServer(store).Handler().ServeHTTP(res, authenticatedRequest(base, http.MethodGet, "/api/v2/posts/42/comments?limit=1", ""))
+	if res.Code != http.StatusOK || store.lastQuery.ViewerUserID != 42 || !strings.Contains(res.Body.String(), `"userVote":-1`) {
+		t.Fatalf("status=%d query=%#v body=%s", res.Code, store.lastQuery, res.Body.String())
 	}
 }
 
@@ -96,7 +111,7 @@ func TestCommentCreateAuthOriginValidationAndAuthoritativeResponse(t *testing.T)
 	base := &apiStore{}
 	body := "reply"
 	parent := int64(77)
-	store := &commentAPIStore{apiStore: base, createValue: comment.Comment{ID: 101, PostID: 42, AuthorID: 42, ParentCommentID: &parent, Body: &body, CreatedAt: time.Unix(101, 0).UTC()}}
+	store := &commentAPIStore{apiStore: base, createValue: comment.Comment{ID: 101, PostID: 42, AuthorID: 42, ParentCommentID: &parent, Body: &body, UserVote: model.VoteNeutral, CreatedAt: time.Unix(101, 0).UTC()}}
 	server := newAuthTestServer(store)
 
 	res := httptest.NewRecorder()
@@ -122,8 +137,11 @@ func TestCommentCreateAuthOriginValidationAndAuthoritativeResponse(t *testing.T)
 	if err := json.Unmarshal(res.Body.Bytes(), &created); err != nil {
 		t.Fatal(err)
 	}
-	if created.ID != 101 || created.AuthorID != 42 || created.Body == nil || *created.Body != "reply" {
+	if created.ID != 101 || created.AuthorID != 42 || created.Body == nil || *created.Body != "reply" || created.UserVote != model.VoteNeutral {
 		t.Fatalf("created=%#v", created)
+	}
+	if !strings.Contains(res.Body.String(), `"userVote":0`) {
+		t.Fatalf("created body=%s", res.Body.String())
 	}
 }
 
@@ -169,7 +187,7 @@ func TestCommentCreateUnicodeBodyBoundary(t *testing.T) {
 		{strings.Repeat("😀", comment.MaxBodyCharacters+1), http.StatusBadRequest},
 	} {
 		body := tt.body
-		store.createValue = comment.Comment{ID: 1, PostID: 42, AuthorID: 42, Body: &body}
+		store.createValue = comment.Comment{ID: 1, PostID: 42, AuthorID: 42, Body: &body, UserVote: model.VoteNeutral}
 		payload, err := json.Marshal(createCommentRequest{Body: &body})
 		if err != nil {
 			t.Fatal(err)
