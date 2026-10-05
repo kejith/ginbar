@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/kejith/ginbar/backend/v2/internal/auth"
 	"github.com/kejith/ginbar/backend/v2/internal/feed"
 	"github.com/kejith/ginbar/backend/v2/internal/mediastatus"
 	"github.com/kejith/ginbar/backend/v2/internal/search"
@@ -18,13 +19,31 @@ import (
 type Store interface {
 	feed.Store
 	mediastatus.Store
+	auth.Store
+}
+
+type Config struct {
+	RequestTimeout time.Duration
+	CookieSecure   bool
+	Auth           auth.Config
+}
+
+func DefaultConfig() Config {
+	return Config{
+		RequestTimeout: 3 * time.Second,
+		CookieSecure:   true,
+		Auth:           auth.DefaultConfig(),
+	}
 }
 
 type Server struct {
 	feed           *feed.Service
 	mediaStatus    *mediastatus.Service
+	auth           *auth.Service
 	mux            *http.ServeMux
 	requestTimeout time.Duration
+	cookieSecure   bool
+	sessionTTL     time.Duration
 }
 
 type errorEnvelope struct {
@@ -36,20 +55,43 @@ type apiError struct {
 	Message string `json:"message"`
 }
 
-func New(store Store) *Server { return newServer(store, 3*time.Second) }
+func New(store Store) *Server { return NewWithConfig(store, DefaultConfig()) }
 
-func newServer(store Store, requestTimeout time.Duration) *Server {
+func NewWithConfig(store Store, cfg Config) *Server {
+	defaults := DefaultConfig()
+	if cfg.RequestTimeout <= 0 {
+		cfg.RequestTimeout = defaults.RequestTimeout
+	}
+	if cfg.Auth.PasswordParams == (auth.PasswordParams{}) {
+		cfg.Auth.PasswordParams = defaults.Auth.PasswordParams
+	}
+	if cfg.Auth.SessionTTL <= 0 {
+		cfg.Auth.SessionTTL = defaults.Auth.SessionTTL
+	}
 	s := &Server{
 		feed:           feed.New(store),
 		mediaStatus:    mediastatus.New(store),
+		auth:           auth.New(store, cfg.Auth),
 		mux:            http.NewServeMux(),
-		requestTimeout: requestTimeout,
+		requestTimeout: cfg.RequestTimeout,
+		cookieSecure:   cfg.CookieSecure,
+		sessionTTL:     cfg.Auth.SessionTTL,
 	}
 	s.mux.HandleFunc("GET /healthz", s.health)
 	s.mux.HandleFunc("GET /api/v2/feed", s.listFeed)
 	s.mux.HandleFunc("GET /api/v2/posts/{id}/around", s.aroundPost)
 	s.mux.HandleFunc("GET /api/v2/posts/{id}/media-status", s.postMediaStatus)
+	s.mux.HandleFunc("POST /api/v2/auth/register", s.register)
+	s.mux.HandleFunc("POST /api/v2/auth/login", s.login)
+	s.mux.HandleFunc("POST /api/v2/auth/logout", s.logout)
+	s.mux.Handle("GET /api/v2/auth/me", s.requireAuth(http.HandlerFunc(s.currentUser)))
 	return s
+}
+
+func newServer(store Store, requestTimeout time.Duration) *Server {
+	cfg := DefaultConfig()
+	cfg.RequestTimeout = requestTimeout
+	return NewWithConfig(store, cfg)
 }
 
 func (s *Server) Handler() http.Handler {

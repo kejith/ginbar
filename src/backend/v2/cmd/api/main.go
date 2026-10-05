@@ -36,6 +36,15 @@ func run() error {
 		maxConns = int32(parsed)
 	}
 
+	apiConfig := httpapi.DefaultConfig()
+	if raw := os.Getenv("GINBAR_SESSION_COOKIE_SECURE"); raw != "" {
+		secure, err := strconv.ParseBool(raw)
+		if err != nil {
+			return errors.New("GINBAR_SESSION_COOKIE_SECURE must be a boolean")
+		}
+		apiConfig.CookieSecure = secure
+	}
+
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
@@ -51,7 +60,7 @@ func run() error {
 	}
 	server := &http.Server{
 		Addr:              addr,
-		Handler:           httpapi.New(store).Handler(),
+		Handler:           httpapi.NewWithConfig(store, apiConfig).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       60 * time.Second,
 		WriteTimeout:      10 * time.Second,

@@ -17,6 +17,7 @@ func TestMigrationSet(t *testing.T) {
 		"003_media_sources.sql",
 		"004_media_perceptual_hash_lookup.sql",
 		"005_media_job_regeneration_lookup.sql",
+		"006_auth_sessions.sql",
 	}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("got %#v want %#v", names, want)
@@ -89,6 +90,22 @@ func TestMigrationSet(t *testing.T) {
 	} {
 		if !bytes.Contains(regenerationLookup, required) {
 			t.Fatalf("regeneration lookup migration missing %q", required)
+		}
+	}
+
+	authSessions, err := Migration(names[5])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range [][]byte{
+		[]byte("CREATE TABLE user_sessions"),
+		[]byte("token_hash bytea NOT NULL UNIQUE"),
+		[]byte("user_id bigint NOT NULL REFERENCES users(id)"),
+		[]byte("expires_at timestamptz NOT NULL"),
+		[]byte("revoked_at timestamptz"),
+	} {
+		if !bytes.Contains(authSessions, required) {
+			t.Fatalf("auth sessions migration missing %q", required)
 		}
 	}
 }
