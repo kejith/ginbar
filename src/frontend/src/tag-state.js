@@ -19,3 +19,13 @@ export function canApplyTagSnapshot(
     && responsePostId === requestPostId
     && requestEpoch === activeEpoch;
 }
+
+/**
+ * A transport failure or server error can have an ambiguous mutation outcome.
+ * Deterministic client/auth/not-found failures cannot have applied the mutation.
+ *
+ * @param {number | undefined} status
+ */
+export function shouldReconcileTagMutationFailure(status) {
+  return status === undefined || status >= 500;
+}
