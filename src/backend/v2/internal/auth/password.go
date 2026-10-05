@@ -16,14 +16,15 @@ const (
 	MinPasswordBytes = 12
 	MaxPasswordBytes = 1024
 
-	minArgonMemoryKiB   uint32 = 8 * 1024
-	maxArgonMemoryKiB   uint32 = 256 * 1024
-	maxArgonIterations  uint32 = 10
-	maxArgonParallelism uint8  = 8
-	minSaltBytes               = 16
-	maxSaltBytes               = 64
-	minKeyBytes                = 16
-	maxKeyBytes                = 64
+	minArgonMemoryKiB      uint32 = 8 * 1024
+	maxArgonMemoryKiB      uint32 = 256 * 1024
+	maxArgonIterations     uint32 = 10
+	maxArgonParallelism    uint8  = 8
+	minSaltBytes                  = 16
+	maxSaltBytes                  = 64
+	minKeyBytes                   = 16
+	maxKeyBytes                   = 64
+	maxVerifierEncodedBytes       = 512
 )
 
 var (
@@ -123,6 +124,9 @@ func encodeVerifier(params PasswordParams, salt, key []byte) string {
 }
 
 func parseVerifier(encoded string) (PasswordParams, []byte, []byte, error) {
+	if len(encoded) > maxVerifierEncodedBytes {
+		return PasswordParams{}, nil, nil, ErrMalformedVerifier
+	}
 	parts := strings.Split(encoded, "$")
 	if len(parts) != 6 || parts[0] != "" || parts[1] != "argon2id" {
 		return PasswordParams{}, nil, nil, ErrMalformedVerifier

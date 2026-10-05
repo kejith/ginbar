@@ -69,10 +69,11 @@ func TestMalformedPasswordVerifierFailsSafely(t *testing.T) {
 		"$argon2id$v=18$m=8192,t=1,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAA",
 		"$argon2id$v=19$m=999999999,t=1,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAA",
 		"$argon2id$v=19$m=8192,t=1,p=1$%%%$%%%",
+		strings.Repeat("A", maxVerifierEncodedBytes+1),
 	} {
 		ok, err := VerifyPassword("correct horse battery staple", verifier)
 		if ok || !errors.Is(err, ErrMalformedVerifier) {
-			t.Fatalf("verifier %q: ok=%v err=%v", verifier, ok, err)
+			t.Fatalf("verifier length=%d: ok=%v err=%v", len(verifier), ok, err)
 		}
 	}
 }
