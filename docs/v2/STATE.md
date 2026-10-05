@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-05
-Phase: **M4 connected core product in progress; post voting accepted, browser/SQL-gated and integrated**
+Phase: **M4 connected core product in progress; nested comments read/create implemented and CI/SQL-gated, browser acceptance pending**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -17,144 +17,165 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - connected board/API/session boundary: **accepted and integrated**;
   - search-connected board: **accepted and integrated**;
   - post voting: **accepted, SQL/browser-gated and integrated**;
-  - nested comments read/create, comment voting, tag mutations and profiles remain.
+  - nested comments read/create: **implemented, correctness/SQL-gated; browser acceptance pending**;
+  - comment voting, tag mutations and profiles remain.
 
-## M4 post voting — accepted and integrated
+Remote GitHub `v2` remains authoritative. At the start of the nested-comment slice it was:
 
-Feature branch: `astra/m4-post-voting`, branched from GitHub `v2` at:
+`3c7fcb9ed2f6815203bdd038c46d08e4ad2916fe` — `docs(v2): record integrated post voting`
 
-`a1043990f4deafb4ba19a84877fdd61fe015236e`
+The nested-comment work is isolated on `astra/m4-nested-comments`; neither `v2` nor `master` has been changed by this slice yet.
 
-Reviewed feature history:
+## M4 nested comments read/create — candidate awaiting browser acceptance
 
-- `146e6afc3d9b1afde122728814ffbacf9aded5a1` — `feat(v2): add authenticated post voting`
-- `e1c5d1f65e72a81615164bc6445bcdc2d8218381` — exact executable candidate; test-fixture correction only
-- `9b584bd937c7bcc812a10ed7509b7f73c5569cd7` — documentation-only candidate record
-- `c0469996b7c3a7385f2d8796b65ec12cf6e8ba6d` — accepted gate/state record and integrated head
+Feature branch: `astra/m4-nested-comments`, branched from `v2` at:
+
+`3c7fcb9ed2f6815203bdd038c46d08e4ad2916fe`
+
+Executable/test history:
+
+- `511297ddfe700ca5d2f4565f481c588754fed73c` — `feat(v2): add nested comment read and create`;
+- `cb645fbc60fbeb96e26ab228609c679951eea4fa` — `test(v2): retain comment SQL plan evidence`;
+- `58675b286afcc18a3e1f72de2d5f8f55d2ce8a4f` — exact executable candidate; test-boundary hardening only.
 
 Exact executable candidate:
 
-`e1c5d1f65e72a81615164bc6445bcdc2d8218381`
+`58675b286afcc18a3e1f72de2d5f8f55d2ce8a4f`
 
-Exact-candidate CI run `37313953385`: **success**. It matched the executable SHA and completed the scoped v2 correctness gate, PostgreSQL-backed Go tests, frontend validation/tests/build, worker checks, target-worker release-build verification and clean tracked-checkout verification.
+Exact-candidate `v2 CI` run `37333980699`: **success**.
 
-An earlier executable `146e6afc3d9b1afde122728814ffbacf9aded5a1` failed CI run `37313602695` only because two PostgreSQL test fixture usernames exceeded the existing username-length constraint. Production code did not change; the bounded fixture correction produced the accepted executable above.
+The run checked out the exact SHA and completed the all-scope gate: Rust worker correctness, Go vet/tests with real PostgreSQL, frontend Node tests/typecheck/build, target-worker release-build verification and clean tracked-checkout verification. Frontend validation reported 28/28 tests passing, TypeScript `tsc --noEmit` passing and the Vite production build passing.
 
-### Accepted implementation boundary
+An earlier candidate run `37333164893` failed only because the SQL-plan test required `posts_pkey`; PostgreSQL correctly selected the smaller partial `posts_feed_released_idx` for the released-post lookup. The query itself was bounded/index-backed. The assertion was corrected to accept the justified released-post index and to retain full `EXPLAIN (ANALYZE, BUFFERS)` output. Backend follow-up run `37333626472` succeeded before the final all-scope run above.
 
-- `PUT /api/v2/posts/:id/vote` is an authenticated same-origin mutation with explicit requested state `-1`, `0` or `+1`.
-- PostgreSQL remains authoritative; no Redis/cache/write-behind voting path was introduced.
-- The mutation is one transaction: lock the released/nondeleted post row, read the user's current vote after that lock, delete/upsert `post_votes`, derive score delta as `newVote-currentVote`, update `posts.score`, and commit.
-- The post row lock serializes competing score mutations on one post. Existing vote indexes and constraints are reused; no schema migration was needed.
-- Repeating an explicit requested state is idempotent. The frontend maps clicking the active direction to neutral.
-- Feed and around resolve optional viewer identity once through the existing session boundary and expose `userVote` in the same bounded query. Signed-out reads return literal neutral state without joining `post_votes`.
-- Optimistic UI updates mutate only the retained post state. Expanded state continues to derive from that same retained object rather than a duplicate post copy.
-- Per-post mutation queues preserve server request order; sequence numbers prevent stale responses from overwriting newer intent.
-- Latest failures roll back to the last confirmed authoritative state; a 401 also transitions the UI auth state to signed out.
-- Voting a retained post does not trigger feed/around reloads and does not alter search `q`, canonical `/post/:id`, Back/Forward, Arrow/J/K navigation, stable row identity or the 960-post retention architecture.
-- Comment voting, tag mutations, comments, profiles, moderation/admin, uploads and Redis remain out of this slice.
+### Candidate API and domain contract
+
+- Public read endpoint: `GET /api/v2/posts/:id/comments?after=<comment-id>&limit=<n>`.
+- Authenticated same-origin create endpoint: `POST /api/v2/posts/:id/comments` with `body` and optional numeric `parentCommentId`.
+- Retrieval uses immutable comment-ID cursor pagination in ascending ID order; no `OFFSET` and no per-comment/N+1 SQL.
+- Default page size is 100; maximum page size is 200. The store fetches `limit+1` rows to derive `nextAfter`.
+- Ascending immutable-ID pagination starts at the oldest comment. Because a reply necessarily receives an ID after its parent, any reply returned on a later page has had its parent returned on the same or an earlier page; the cursor shape does not create detached replies.
+- A valid released/nondeleted post with no comments returns an explicit empty comments array; unavailable/nonexistent posts return 404 semantics.
+- Comment response identity uses immutable numeric `id`, `postId`, `authorId` and optional `parentCommentId`.
+- No viewer comment-vote state exists in this slice and `comment_votes` is untouched.
+- Deleted comments remain structural tombstones: identity, parent relation, score and timestamp remain available while body is omitted; existing descendants therefore retain hierarchy.
+- Replying to a deleted parent is rejected as `409 parent_comment_deleted`.
+- Missing and cross-post parents are both rejected as `404 parent_comment_not_found`; cross-post parent existence is not exposed.
+- Comment bodies are not trimmed or rewritten. The service requires valid UTF-8 and 1–10,000 Unicode code points, matching the schema character-length boundary.
+- Creation returns the authoritative inserted comment.
+
+### PostgreSQL query shape
+
+No schema migration or new index was added. Existing `comments_post_idx`, `comments_parent_idx`, post/comment primary keys and the released-post partial index are sufficient for the implemented query shapes.
+
+Comment read is one bounded query:
+
+- released/nondeleted post is established in the same SQL statement as the comment page;
+- a bounded lateral subquery reads `comments` by `post_id`, `id > cursor`, `ORDER BY id ASC`, `LIMIT limit+1`;
+- the valid-post/empty-comments case is distinguishable without a redundant post-existence round trip.
+
+Comment creation is one data-modifying CTE:
+
+- target released/nondeleted post is validated and `FOR SHARE` locked;
+- optional parent is looked up by immutable comment primary key and `FOR SHARE` locked;
+- parent status distinguishes valid, missing/cross-post and deleted;
+- insertion happens only from the validated CTE and returns the authoritative row;
+- there is no read-then-write validation race or extra application round trip.
+
+### SQL-plan evidence retained by CI
+
+`TestCommentSQLPlansStayBoundedAndIndexed` seeds realistic competing data before running `EXPLAIN (ANALYZE, BUFFERS)`: 5,000 unrelated post rows, 20,000 comments on a noise post and 20,000 comments on the target post.
+
+Final green-plan evidence establishes:
+
+- comment read uses `posts_feed_released_idx` and `comments_post_idx`;
+- read work is bounded to 101 comment rows for the tested page (`limit+1`);
+- only a small in-memory sort is present for the bounded result; no external/temp spill;
+- creation validation uses `posts_feed_released_idx` and `comments_pkey`;
+- no large-table sequential scan on `comments` is attributable to the new API;
+- no unbounded sort or temp spill is present;
+- execution was sub-millisecond in the CI fixture (approximately 0.28 ms read and 0.63 ms create in the retained final run), which is boundedness evidence only and not a speedup claim.
 
 ### Correctness coverage
 
-Green exact-candidate coverage includes:
+The exact green candidate covers at minimum:
 
-- all six transitions: `0 -> +1`, `0 -> -1`, `+1 -> 0`, `-1 -> 0`, `+1 -> -1`, `-1 -> +1`, with exact score deltas;
-- repeated explicit-state idempotence;
-- nonexistent post;
-- unauthenticated and cross-origin mutation rejection;
-- malformed, missing, null and out-of-range vote values;
-- two users voting on one post;
-- concurrent mixed mutations with `posts.score == baseScore + SUM(post_votes.value)`;
-- authenticated feed/around returning viewer vote;
-- signed-out feed/around returning neutral viewer vote;
-- retained auth/search/feed/around/media/worker suites.
+- empty valid post comment list versus unavailable/unreleased post;
+- deterministic ascending comment ordering;
+- cursor/page boundaries and `nextAfter`;
+- multiple nesting levels and siblings;
+- deleted-parent tombstone preservation;
+- top-level authenticated creation;
+- nested reply creation;
+- authoritative returned post/user/parent/body/score identity;
+- nonexistent parent;
+- cross-post parent rejection;
+- deleted-parent reply rejection;
+- invalid/nonexistent post;
+- signed-out create rejection;
+- cross-origin create rejection before mutation;
+- malformed post IDs, cursor/limit values, JSON, unknown fields and payloads;
+- Unicode body boundary: 10,000 code points accepted, 10,001 rejected;
+- no comment-vote viewer state added;
+- 20,000-level frontend nesting projection without recursive traversal;
+- child-before-parent input still attaches correctly in the tree helper;
+- existing auth/feed/search/post-vote/media/worker suites remain green.
 
-## Accepted SQL/browser gate
+### Frontend ownership and rendering
 
-Evidence package:
+- Comment server state belongs to the selected expanded-post experience only; it is not added to the retained 960-post board array or a global comment store.
+- `ExpandedPost` keeps its existing media/meta/vote/media-status behavior and mounts one `Comments` child beneath it.
+- Comment reads start after the expanded shell is mounted; selection does not await comment I/O.
+- Read and create requests use `AbortController` plus post/epoch guards, preventing stale responses from injecting into a newly selected/reopened post.
+- A one-pass `id -> comment` and `parent -> children` index builds the visible tree; iterative stack traversal avoids recursive rendering limits and repeated whole-list rescans.
+- Missing-parent rows are surfaced explicitly rather than silently reparented; under the API cursor invariant they should not occur during normal loading.
+- Creation is deliberately non-optimistic: submit waits for the authoritative server row, then merges it by immutable ID into visible comment state.
+- Top-level creation and reply creation share a bounded composer. Deleted/orphan rows do not expose reply controls.
+- Signed-out users can read comments; create/reply UI is unavailable with a sign-in note.
+- Comment activity does not mutate the retained post object and should not require feed/around refreshes.
+
+### Browser acceptance still required before integration
+
+Do not integrate this candidate until isolated browser/DevTools evidence establishes:
+
+- selecting a post shows the expanded shell immediately while comment retrieval is deliberately delayed;
+- multiple nested levels and siblings render under the correct parents;
+- a top-level create appears from the authoritative response;
+- a reply appears under the correct parent;
+- failed creation shows a clear error and does not corrupt the visible tree;
+- changing selection while a comment read is pending cannot inject the old post's comments into the new post;
+- closing and reopening is coherent;
+- Back/Forward and Arrow/J/K navigation remain coherent;
+- searched-board `q` remains unchanged through comment activity;
+- comment reads/creates cause no feed/around request merely to refresh an already-retained post;
+- comment updates do not remount unrelated board rows;
+- Long Task/update-scope evidence remains acceptable;
+- retained post count/order/uniqueness and the 960-post cap remain unchanged;
+- signed-out comment reads work and signed-out create/reply controls remain unavailable.
+
+Decision so far: **implementation and SQL/correctness gate accepted; browser acceptance pending**. No cache layer, speculative index, virtualization, comment voting or frontend state framework is justified by current evidence.
+
+## M4 post voting — accepted and integrated
+
+Post voting remains closed and integrated. Accepted executable candidate:
+
+`e1c5d1f65e72a81615164bc6445bcdc2d8218381`
+
+Accepted feature head integrated into `v2`:
+
+`c0469996b7c3a7385f2d8796b65ec12cf6e8ba6d`
+
+Exact-candidate CI run `37313953385`: **success**. Post-fast-forward `v2 CI` run `37321333276`: **success**.
+
+Accepted evidence package:
 
 `m4-post-voting-20261005T133638Z.zip`
 
-Independently validated SHA-256:
+SHA-256:
 
 `4cf5c5839e7cfc427465821600bcf08a3bb56e9b5a22dbdead4fd185ca396b14`
 
-Archive integrity passed. The package contains raw SQL plans, browser traces/results, CI metadata, commands, versions and cleanup proof. Exact tested executable: `e1c5d1f65e72a81615164bc6445bcdc2d8218381`.
-
-### SQL-plan evidence
-
-Disposable fixture: 100,000 posts, 100,000 media rows, 200,000 post-vote rows, 1,000 users.
-
-- authenticated first feed page: 61 rows, execution **0.188 ms**, index-backed `posts_pkey` + `media_pkey` + `post_votes_user_idx`;
-- authenticated old-cursor feed: 61 rows, execution **0.136 ms**, same bounded/index-backed shape with `id < 50000`;
-- authenticated around post 49999: 61 rows, execution **0.577 ms**; only 25–28 kB in-memory quicksorts, no spill; posts/media/votes remain index-backed;
-- post-row lock: `posts_pkey`, execution **0.016 ms**;
-- current-vote lookup: `post_votes_user_idx`, execution **0.005 ms**;
-- upsert conflict arbiter: `post_votes_pkey`, execution **0.146 ms**;
-- score update: `posts_pkey`, execution **0.119 ms**;
-- no large-table sequential scans, temp spills or unbounded row growth attributable to viewer vote state.
-
-These numbers establish boundedness/regression acceptance only; they are not a performance-improvement claim.
-
-### Browser evidence
-
-The isolated browser/API/nginx/PostgreSQL gate established:
-
-- all six vote transitions correct in DOM and database;
-- optimistic change visible about 250 ms after click while a deliberately delayed 1,200 ms response was pending, followed by authoritative reconciliation;
-- intentional HTTP 500 mutation failure rolled back to the last confirmed state and surfaced an error;
-- rapid up-then-down produced two mutation requests and ended at the last intent without stale-response corruption;
-- vote state survived select-away-and-return;
-- searched-board voting preserved `q=score:>=35`;
-- Back/Forward and Arrow/J/K remained coherent;
-- canonical `/post/40` path/query remained unchanged by voting;
-- authenticated feed and around exposed the current viewer vote;
-- signed-out reads returned neutral `userVote`, signed-out mutation returned 401 without score change, and vote buttons were disabled;
-- warmed voting added **0 feed requests / 0 around requests**, **0 row mounts / 0 row unmounts**, and Long Tasks remained **0 -> 0**;
-- retained state stayed ordered/unique and within the 960-post bound.
-
-One raw browser check initially reported `expandedScore=4041`; this was a harness regex artifact that concatenated `#40` and `41 points`. The same raw record contained coherent score fields and a dedicated re-probe confirmed expanded/thumbnail equality (`40 == 40`). No application defect was found.
-
-The acceptance runtime/databases/worktree were cleaned up and the canonical tracked checkout was clean. No production data/state was used.
-
-Decision: **accept M4 post voting**. The SQL shapes are bounded/index-backed, mutation/concurrency coverage is sufficient, optimistic/failure/rapid-action behavior is correct, and the frontend preserves accepted board update-scope invariants. No additional cache layer, index, frontend store or architecture change is justified by the evidence.
-
-## Integration verification
-
-The accepted head was non-force fast-forwarded on remote `v2`:
-
-`a1043990f4deafb4ba19a84877fdd61fe015236e -> c0469996b7c3a7385f2d8796b65ec12cf6e8ba6d`
-
-Integration evidence package:
-
-`m4-integration-20261005T140027Z.zip`
-
-Independently validated SHA-256:
-
-`b1b73e6848a92813ed7f947e3a0de29b733e6486ea182ad9b91957980a58dab8`
-
-Archive integrity passed with 22 entries. Raw evidence confirms:
-
-- immediately before the write, remote `v2` was exactly `a1043990f4deafb4ba19a84877fdd61fe015236e`;
-- `merge-base --is-ancestor` old `v2` -> accepted head returned exit 0;
-- the range contained exactly the four reviewed commits `146e6af`, `e1c5d1f`, `9b584bd`, `c046999`;
-- exact push command was `git push origin c0469996b7c3a7385f2d8796b65ec12cf6e8ba6d:refs/heads/v2`;
-- push exited 0 as a normal non-force fast-forward;
-- post-push remote `v2` resolved exactly to `c0469996b7c3a7385f2d8796b65ec12cf6e8ba6d`;
-- no other ref, tracked source/docs/SQL/config, commit, tag, deployment or persistent application/database state was modified by the integration agent;
-- canonical tracked status was clean after the operation.
-
-Post-fast-forward `v2 CI` run `37321333276`: **success**.
-
-- `head_branch=v2`;
-- `head_sha=c0469996b7c3a7385f2d8796b65ec12cf6e8ba6d`;
-- event `push`;
-- job `correctness` (`111800855878`) succeeded;
-- all eight job steps succeeded, including exact checkout, scoped v2 correctness gate, target worker release-build verification and clean tracked-checkout verification.
-
-Remote GitHub `v2` is authoritative. The integration agent intentionally left its unrelated local `refs/heads/v2` divergence untouched.
-
-Integration decision: **post voting is fully integrated and the M4 post-voting slice is closed**.
+The accepted boundary remains: authenticated same-origin `PUT /api/v2/posts/:id/vote`, PostgreSQL-authoritative transaction with post-row locking, explicit `-1/0/+1` state, feed/around viewer vote in the existing bounded query, optimistic retained-post-only UI state, per-post ordered mutation queues and no feed/around refresh for voting. Browser evidence established all vote transitions, rollback on failure, rapid-action ordering, signed-out semantics, search/history/navigation coherence, zero warmed feed/around refreshes, zero unrelated row mount/unmount activity and retained-state invariants.
 
 ## Retained M4 board/auth/search decisions
 
@@ -193,21 +214,24 @@ Keep these accepted boundaries unless new evidence requires change:
 
 ## Deferred work
 
-Do not pull these into the next slice without a concrete requirement:
+Do not pull these into the current comment-read/create gate:
 
-- comment voting before comment read/create exists on v2;
+- comment voting;
+- tag mutations or profiles;
+- moderation/admin or uploads;
+- Redis synchronization, WebSockets/event streams or a large frontend store;
+- virtualization without evidence;
 - broader video transcoding or exact WebM/EBML acceptance;
 - media orphan/janitor hardening;
 - deployment UID/GID/media-storage permissions;
 - stronger filesystem hardening if the media-tree threat model changes;
 - auth abuse/rate limits and KDF admission controls before production-hardening evidence requires them;
-- virtualization, Redis synchronization, event streams or a large frontend store;
 - v1-v2 end-to-end speedup claims before an apples-to-apples benchmark exists.
 
 ## Unresolved issues
 
-No unresolved correctness, SQL-plan, browser-performance or integration blocker remains from the post-voting slice.
+The nested comment candidate has no known correctness or SQL-plan blocker. **Browser/DevTools acceptance is the remaining gate before integration.**
 
 ## Single best next task
 
-Begin the **M4 nested comments read/create slice** from current GitHub `v2`. Add bounded/indexed retrieval for the selected post using the existing `comments(post_id, id)` and parent indexes, authenticated comment creation using immutable numeric user/post/parent IDs with strict parent-post validation, and nested SolidJS rendering that preserves immediate post selection, search/history/navigation, stable board rows and the 960-post retention boundary. Keep comment voting out of this slice; add it only after the v2 comment read/create path is accepted and browser-gated.
+Run the isolated **M4 nested comments browser/DevTools acceptance gate** against exact executable `58675b286afcc18a3e1f72de2d5f8f55d2ce8a4f`, retain raw evidence in one `.local-agent-results/` ZIP, inspect that evidence here, then either fix/re-gate any defect or record acceptance and prepare a reviewed non-force fast-forward into `v2`. Keep comment voting out until this read/create slice is accepted and integrated.
