@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-05
-Phase: **M4 connected core product in progress; nested comments read/create accepted, integration pending**
+Phase: **M4 connected core product in progress; nested comments read/create accepted, browser/SQL-gated and integrated**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -17,10 +17,10 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - connected board/API/session boundary: **accepted and integrated**;
   - search-connected board: **accepted and integrated**;
   - post voting: **accepted, SQL/browser-gated and integrated**;
-  - nested comments read/create: **accepted after SQL/CI/browser gates; integration pending**;
+  - nested comments read/create: **accepted, SQL/browser-gated and integrated**;
   - comment voting, tag mutations and profiles remain.
 
-## M4 nested comments read/create — accepted, integration pending
+## M4 nested comments read/create — accepted and integrated
 
 Verified GitHub `v2` base:
 
@@ -101,6 +101,26 @@ The temporary API/proxy processes, disposable schema and detached worktree were 
 
 Decision: **accept M4 nested comments read/create**. The implementation is bounded and indexed, browser behavior preserves existing board/navigation/update-scope invariants, stale-request and delayed-read/create races are handled correctly, and no additional cache, global store, index or virtualization layer is justified by the evidence.
 
+### Integration verification
+
+Accepted history was non-force fast-forwarded on remote `v2`:
+
+`3c7fcb9ed2f6815203bdd038c46d08e4ad2916fe -> 19cacdd9999e2af08767942fa9d71bc2dbd5d5e6`
+
+The range was a pure fast-forward and contained the exact executable plus documentation-only gate/state commits. No merge commit or force update was used.
+
+Post-fast-forward `v2 CI` run `37339584913`, job `111862933910`: **success**.
+
+- `head_branch=v2`;
+- `head_sha=19cacdd9999e2af08767942fa9d71bc2dbd5d5e6`;
+- exact checkout and SHA verification succeeded;
+- scoped correctness gate succeeded;
+- target-worker release-build verification succeeded;
+- tracked checkout remained clean;
+- all job steps completed successfully.
+
+Integration decision: **nested comments read/create is fully integrated and the M4 slice is closed**.
+
 ## M4 post voting — accepted and integrated
 
 Exact executable candidate:
@@ -168,9 +188,8 @@ Do not pull these into the next slice without a concrete requirement:
 
 ## Unresolved issues
 
-- Nested comments read/create is accepted but not yet integrated into remote `v2`.
-- No unresolved correctness, SQL-plan, browser-performance or architecture blocker remains for the accepted slice.
+No unresolved correctness, SQL-plan, browser-performance, integration or architecture blocker remains from the nested comments read/create slice.
 
 ## Single best next task
 
-Fast-forward the accepted nested-comments branch into current remote `v2` without force, verify post-fast-forward `v2 CI`, then record the integration result here. After integration is closed, begin the **M4 comment voting** slice on current `v2` without broadening into tag mutations or profiles.
+Begin the **M4 comment voting** slice from current GitHub `v2`. Add authenticated explicit-state comment voting with PostgreSQL-authoritative score consistency and bounded/indexed viewer-vote reads, then connect it to the existing nested comment UI without introducing feed/around reloads, board-row remounts, a global comment store, Redis, tag mutations or profiles. Preserve the accepted comments pagination/tree/stale-request behavior and browser-gate the slice before integration.
