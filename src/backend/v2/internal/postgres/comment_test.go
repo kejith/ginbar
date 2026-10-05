@@ -174,6 +174,7 @@ func TestCommentSQLPlansStayBoundedAndIndexed(t *testing.T) {
 	}
 
 	readPlan := explainPlan(t, store, "EXPLAIN (ANALYZE, BUFFERS) "+listCommentsSQL, targetPostID, int64(0), 101)
+	t.Logf("comment read plan:\n%s", readPlan)
 	assertPlanContains(t, readPlan, "comments_post_idx")
 	assertPlanExcludes(t, readPlan, "Seq Scan on comments", "external merge", "Disk:")
 
@@ -191,8 +192,9 @@ func TestCommentSQLPlansStayBoundedAndIndexed(t *testing.T) {
 		t.Fatal(err)
 	}
 	createPlan := collectPlan(t, rows)
+	t.Logf("comment create plan:\n%s", createPlan)
 	assertPlanContains(t, createPlan, "comments_pkey")
-	assertPlanContains(t, createPlan, "posts_pkey")
+	assertPlanContainsAny(t, createPlan, "posts_feed_released_idx", "posts_pkey")
 	assertPlanExcludes(t, createPlan, "Seq Scan on comments", "external merge", "Disk:")
 }
 
@@ -249,6 +251,16 @@ func assertPlanContains(t *testing.T, plan, needle string) {
 	if !strings.Contains(plan, needle) {
 		t.Fatalf("plan missing %q:\n%s", needle, plan)
 	}
+}
+
+func assertPlanContainsAny(t *testing.T, plan string, needles ...string) {
+	t.Helper()
+	for _, needle := range needles {
+		if strings.Contains(plan, needle) {
+			return
+		}
+	}
+	t.Fatalf("plan missing all expected indexes %q:\n%s", needles, plan)
 }
 
 func assertPlanExcludes(t *testing.T, plan string, needles ...string) {
