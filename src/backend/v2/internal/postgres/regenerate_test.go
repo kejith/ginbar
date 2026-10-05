@@ -58,12 +58,12 @@ func readyRegenerationFixture(t *testing.T, store *Store, username string, jobSt
 	}
 	if _, err := store.pool.Exec(ctx, `
 		UPDATE media_jobs
-		SET state = $1,
-		    attempts = CASE WHEN $1 = 0 THEN 0 ELSE 1 END,
+		SET state = $1::smallint,
+		    attempts = CASE WHEN $1::smallint = 0 THEN 0 ELSE 1 END,
 		    claimed_at = NULL,
 		    claimed_by = NULL,
 		    lease_expires_at = NULL,
-		    last_error = CASE WHEN $1 = 3 THEN 'previous failure' ELSE NULL END
+		    last_error = CASE WHEN $1::smallint = 3 THEN 'previous failure' ELSE NULL END
 		WHERE id = $2
 	`, jobState, created.JobID); err != nil {
 		t.Fatal(err)
