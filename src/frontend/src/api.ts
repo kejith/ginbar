@@ -42,6 +42,17 @@ export interface PostVoteResult {
   vote: PostVote;
 }
 
+export interface TagItem {
+  id: number;
+  name: string;
+}
+
+export interface TagSnapshot {
+  postId: number;
+  tags: TagItem[];
+  canRemove: boolean;
+}
+
 export interface Comment {
   id: number;
   postId: number;
@@ -147,6 +158,45 @@ export async function setPostVote(postId: number, vote: PostVote): Promise<PostV
       body: JSON.stringify({ vote }),
     }),
     "post vote",
+  );
+}
+
+export async function fetchPostTags(postId: number, signal?: AbortSignal): Promise<TagSnapshot> {
+  return parseJSON<TagSnapshot>(
+    await fetch(`/api/v2/posts/${postId}/tags`, {
+      signal,
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    }),
+    "post tags",
+  );
+}
+
+export async function addPostTag(postId: number, name: string, signal?: AbortSignal): Promise<TagSnapshot> {
+  return parseJSON<TagSnapshot>(
+    await fetch(`/api/v2/posts/${postId}/tags`, {
+      method: "POST",
+      signal,
+      credentials: "same-origin",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ name }),
+    }),
+    "add post tag",
+  );
+}
+
+export async function removePostTag(postId: number, tagId: number, signal?: AbortSignal): Promise<TagSnapshot> {
+  return parseJSON<TagSnapshot>(
+    await fetch(`/api/v2/posts/${postId}/tags/${tagId}`, {
+      method: "DELETE",
+      signal,
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    }),
+    "remove post tag",
   );
 }
 
