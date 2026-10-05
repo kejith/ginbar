@@ -230,7 +230,10 @@ fn regeneration_keeps_ready_media_authoritative_until_success() {
     );
 
     let released_at: String = client
-        .query_one("SELECT released_at::text FROM posts WHERE id=$1", &[&post_id])
+        .query_one(
+            "SELECT released_at::text FROM posts WHERE id=$1",
+            &[&post_id],
+        )
         .expect("released at")
         .get(0);
     requeue(&mut client, job_id);
