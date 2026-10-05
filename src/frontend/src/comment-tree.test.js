@@ -22,6 +22,14 @@ test("buildCommentRows preserves nested sibling order", () => {
   ]);
 });
 
+test("children attach even when input order is child before parent", () => {
+  const rows = buildCommentRows([comment(2, 1), comment(1)]);
+  assert.deepEqual(rows.map((row) => [row.comment.id, row.depth, row.orphaned]), [
+    [1, 0, false],
+    [2, 1, false],
+  ]);
+});
+
 test("deleted parents remain structural nodes", () => {
   const rows = buildCommentRows([comment(1, null, true), comment(2, 1)]);
   assert.equal(rows.length, 2);

@@ -43,6 +43,16 @@ func TestListNormalizesLimitAndBuildsCursor(t *testing.T) {
 	}
 }
 
+func TestListNormalizesNilCommentsToEmptySlice(t *testing.T) {
+	page, err := New(&testStore{}).List(context.Background(), Query{PostID: 7})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Comments == nil || len(page.Comments) != 0 {
+		t.Fatalf("comments=%#v", page.Comments)
+	}
+}
+
 func TestListDefaultAndMaximumLimits(t *testing.T) {
 	for _, tt := range []struct {
 		name  string
