@@ -11,6 +11,7 @@ import type { Accessor, Component } from "solid-js";
 
 import Comments from "./Comments";
 import MediaStatus from "./MediaStatus";
+import Tags from "./Tags";
 import {
   APIError,
   fetchAround,
@@ -1024,6 +1025,7 @@ const ExpandedPost: Component<ExpandedPostProps> = (props) => {
             <Show when={props.voteError()}>
               {(message) => <p class="vote-error" role="alert">{message()}</p>}
             </Show>
+            <Tags postId={post().id} canAdd={props.canVote} />
             <MediaStatus postId={post().id} />
             <button type="button" onClick={props.onClose}>Close</button>
           </aside>
