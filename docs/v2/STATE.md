@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-05
-Phase: **M3 media pipeline complete and integrated; begin M4 connected core product**
+Phase: **M4 connected core product in progress; auth/session candidate CI-green, target auth gate pending**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -12,7 +12,7 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
 - M1 board performance prototype: **complete and integrated**.
 - M2 fresh PostgreSQL schema + core Go API: **complete and integrated**.
 - M3 media pipeline: **complete for the accepted v2 scope and integrated**.
-- M4 connected core product: **next**.
+- M4 connected core product: **in progress; authentication/session foundation implemented on a feature branch and awaiting target-host KDF/query-plan acceptance evidence**.
 
 M3 accepted scope now includes:
 
@@ -27,6 +27,62 @@ M3 accepted scope now includes:
 - authoritative coarse media progress/status exposure plus bounded selected-post polling UI.
 
 Broader video transcoding, exact WebM/EBML acceptance and operational orphan/janitor hardening remain deferred until concrete product/production requirements justify them; they do not block the accepted M3 gate.
+
+## M4 authentication/session foundation — candidate awaiting target gate
+
+Feature branch: `astra/m4-auth-session`, branched from `v2` at `24aba0cda53641f7ef1cf107bbe7611b1803fca6`.
+
+CI-green executable candidate:
+
+`33d72e7b5d56fe9bf8608b305984d4e150646fd5`
+
+Relevant commits:
+
+- `fd72a4069859dda718d677c080dc67ff4677cf0c` — invitation registration, Argon2id password credentials, opaque PostgreSQL sessions, auth HTTP boundary, migration `006_auth_sessions.sql`, focused service/store/HTTP/security/concurrency tests and deterministic KDF benchmarks;
+- `33d72e7b5d56fe9bf8608b305984d4e150646fd5` — align the Go workspace dependency graph with `x/text`'s required `x/sync v0.22.0` so readonly CI does not attempt to create `go.work.sum`.
+
+Applicable CI:
+
+- run `37256793597` on `fd72a4069859dda718d677c080dc67ff4677cf0c`: **failed before Go tests** because the readonly workspace needed the selected `golang.org/x/sync v0.22.0` checksum; Rust regression coverage had already passed and the tracked checkout remained clean;
+- run `37256998256` on `33d72e7b5d56fe9bf8608b305984d4e150646fd5`: **success**, including scoped Go 1.25 formatting/vet/PostgreSQL-backed correctness, migration-triggered Rust regression checks, hermetic target-worker release build and clean tracked checkout.
+
+Implemented contract:
+
+- immutable numeric `users.id` remains relational identity; username is not an authorization/foreign-key identity;
+- existing credential kind `0` is used as the initial password credential slot; existing user status `0` is treated as active/default according to the M2 schema semantics; `user_identities` remains independent for later OIDC/OAuth/passkey/email identities;
+- no baseline ordinary-user role is created because current schema/product semantics do not require one;
+- passwords use `golang.org/x/crypto/argon2` Argon2id with a self-describing verifier containing algorithm/version/parameters/salt/hash; password input is bounded to 12-1024 bytes before KDF work and stored verifier parameters are bounded before allocation/work;
+- current provisional Argon2id default is 64 MiB memory, one iteration, parallelism one, 16-byte random salt and 32-byte output; this is **not accepted until target-host measurement**;
+- registration validates cheap request bounds, hashes the invitation token with SHA-256, performs an indexed availability precheck, hashes the password outside the transaction, then transactionally locks/revalidates the invitation with `FOR UPDATE`, creates the user and kind-0 credential, claims the invitation by numeric user ID and commits atomically;
+- raw passwords, invitation tokens and session tokens are never persisted by the implemented boundaries; stable API errors do not echo supplied secrets or stored verifiers;
+- concurrent claims of one invitation have at most one winner; concurrent case-insensitive duplicate usernames have at most one winner; credential-creation failure rolls back both the user and invitation claim;
+- sessions use 32 cryptographically random bytes encoded as an opaque base64url cookie token; PostgreSQL stores only SHA-256 of the raw token, numeric `user_id`, creation, absolute expiry and optional revocation;
+- session expiry is fixed at 30 days initially; authenticated lookup is read-only and performs no last-seen/sliding-expiry write; multiple independent sessions are allowed;
+- migration `006_auth_sessions.sql` adds `user_sessions` with a unique 32-byte token-hash index; no speculative user/session indexes or Redis cache were added;
+- session resolution is one bounded token-hash lookup joined to the minimal active user fields; logout authoritatively marks the presented session revoked and is idempotent for absent/malformed/already-revoked sessions;
+- browser endpoints are `POST /api/v2/auth/register`, `POST /api/v2/auth/login`, `POST /api/v2/auth/logout` and authenticated `GET /api/v2/auth/me`; the current-user response contains only numeric ID and username;
+- reusable HTTP auth middleware performs one session resolution and stores an immutable numeric principal in request context; resource-specific authorization remains a domain-service concern;
+- production cookies are `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/` with explicit expiry/max-age; `GINBAR_SESSION_COOKIE_SECURE` is a development/test-only practical override while secure remains the default;
+- auth POSTs require same-origin `Origin` metadata; reverse-proxy scheme is derived from nginx's existing `X-Forwarded-Proto` boundary; SameSite remains defense in depth;
+- auth JSON request bodies are capped at 4096 bytes and reject unknown fields before expensive work;
+- nonexistent usernames return the same public invalid-credentials shape but intentionally do not run a dummy Argon2 hash in this slice, avoiding an attacker-controlled KDF path before rate-limit/abuse policy is designed and measured;
+- existing unauthenticated feed/media-status read behavior remains unchanged; this slice does not connect board mutations, uploads, votes, tags, comments, full profiles, moderation/admin, private messages, Redis or JWT infrastructure.
+
+Focused tests cover password verifier round-trip/random salt/malformed verifier/input bounds; invitation state and rollback; case-insensitive duplicate and same-invitation concurrency; session token hashing, independent sessions, expiry, revocation, user status and non-mutating lookup; cookie attributes; origin/CSRF policy; bounded HTTP bodies; stable unauthorized semantics; and secret non-echo behavior. Existing M1-M3 applicable regression checks remain green in CI.
+
+Prepared deterministic target KDF benchmarks cover hash cost, verify cost, parallel verification pressure and parameter candidates `32MiB-t2`, `64MiB-t1`, `64MiB-t2`, and `128MiB-t1`.
+
+### Pending target acceptance gate
+
+No target-host KDF benchmark or realistic auth SQL query-plan evidence has been accepted yet. This is required before integration because Argon2 cost is hardware-sensitive and session lookup will become request-path hot.
+
+Target evidence must measure the exact CI-green candidate (or a later exact CI-green revision with only documented state changes), including:
+
+- hash/registration and verify/login Argon2 cost, CPU behavior, peak/representative memory, and parallel verification pressure on the shared i7-7700-class target;
+- `EXPLAIN (ANALYZE, BUFFERS)` for production-shaped session token-hash resolution, username/password-credential lookup and invitation token lookup/lock against realistic row counts;
+- evidence that the unique session token-hash index, existing case-insensitive username index and existing invitation token-hash index bound the intended hot paths without request-path writes or sequential scans.
+
+Do not weaken KDF parameters merely for throughput. If target measurements justify changing the provisional default, change it here, rerun applicable CI and repeat the exact target measurement before acceptance. No broader API coexistence benchmark is required unless the KDF measurements show material interactive concurrency risk.
 
 ## M3 progress/status — accepted and integrated
 
@@ -134,6 +190,4 @@ Use local/server agents for browser/DevTools, SSH, real PostgreSQL, target bench
 
 ## Single best next task
 
-Begin **M4 authenticated identity/session + invitation-registration boundary** from current `v2`.
-
-Inspect the M2 users/roles/credentials/invitations schema and current HTTP boundaries first. Implement the smallest coherent authentication/session architecture that supports invitation-only registration now while keeping user identity independent from credentials so passkeys/OIDC/OAuth/email can be added later without redesigning users. Do not connect the full board, votes, tags or comments in the same slice. Validate password/session security parameters on the target host if the chosen primitive has hardware-sensitive cost.
+Run the **target-host M4 authentication KDF + PostgreSQL auth query-plan gate** against the exact CI-green `astra/m4-auth-session` revision produced by this state update, then return the retained evidence ZIP for review here. Do not integrate the auth slice into `v2` until that evidence is reviewed and the password parameters/query shapes are accepted.
