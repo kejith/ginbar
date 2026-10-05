@@ -12,6 +12,7 @@ import (
 
 	"github.com/kejith/ginbar/backend/v2/internal/auth"
 	"github.com/kejith/ginbar/backend/v2/internal/comment"
+	"github.com/kejith/ginbar/backend/v2/internal/commentvote"
 	"github.com/kejith/ginbar/backend/v2/internal/feed"
 	"github.com/kejith/ginbar/backend/v2/internal/mediastatus"
 	"github.com/kejith/ginbar/backend/v2/internal/postvote"
@@ -24,6 +25,7 @@ type Store interface {
 	auth.Store
 	postvote.Store
 	comment.Store
+	commentvote.Store
 }
 
 type Config struct {
@@ -46,6 +48,7 @@ type Server struct {
 	auth           *auth.Service
 	postVote       *postvote.Service
 	comments       *comment.Service
+	commentVote    *commentvote.Service
 	mux            *http.ServeMux
 	requestTimeout time.Duration
 	cookieSecure   bool
@@ -80,6 +83,7 @@ func NewWithConfig(store Store, cfg Config) *Server {
 		auth:           auth.New(store, cfg.Auth),
 		postVote:       postvote.New(store),
 		comments:       comment.New(store),
+		commentVote:    commentvote.New(store),
 		mux:            http.NewServeMux(),
 		requestTimeout: cfg.RequestTimeout,
 		cookieSecure:   cfg.CookieSecure,
@@ -91,6 +95,7 @@ func NewWithConfig(store Store, cfg Config) *Server {
 	s.mux.HandleFunc("GET /api/v2/posts/{id}/media-status", s.postMediaStatus)
 	s.mux.HandleFunc("GET /api/v2/posts/{id}/comments", s.listComments)
 	s.mux.Handle("POST /api/v2/posts/{id}/comments", s.requireAuth(http.HandlerFunc(s.createComment)))
+	s.mux.Handle("PUT /api/v2/posts/{id}/comments/{commentId}/vote", s.requireAuth(http.HandlerFunc(s.setCommentVote)))
 	s.mux.Handle("PUT /api/v2/posts/{id}/vote", s.requireAuth(http.HandlerFunc(s.setPostVote)))
 	s.mux.HandleFunc("POST /api/v2/auth/register", s.register)
 	s.mux.HandleFunc("POST /api/v2/auth/login", s.login)
