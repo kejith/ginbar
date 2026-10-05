@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 	"unicode/utf8"
+
+	"github.com/kejith/ginbar/backend/v2/internal/model"
 )
 
 const (
@@ -23,20 +25,22 @@ var (
 )
 
 type Comment struct {
-	ID              int64     `json:"id"`
-	PostID          int64     `json:"postId"`
-	AuthorID        int64     `json:"authorId"`
-	ParentCommentID *int64    `json:"parentCommentId"`
-	Body            *string   `json:"body,omitempty"`
-	Score           int32     `json:"score"`
-	CreatedAt       time.Time `json:"createdAt"`
-	Deleted         bool      `json:"deleted"`
+	ID              int64          `json:"id"`
+	PostID          int64          `json:"postId"`
+	AuthorID        int64          `json:"authorId"`
+	ParentCommentID *int64         `json:"parentCommentId"`
+	Body            *string        `json:"body,omitempty"`
+	Score           int32          `json:"score"`
+	UserVote        model.PostVote `json:"userVote"`
+	CreatedAt       time.Time      `json:"createdAt"`
+	Deleted         bool           `json:"deleted"`
 }
 
 type Query struct {
-	PostID int64
-	After  int64
-	Limit  int
+	PostID       int64
+	After        int64
+	Limit        int
+	ViewerUserID int64
 }
 
 type Page struct {
@@ -66,6 +70,9 @@ func (s *Service) List(ctx context.Context, q Query) (Page, error) {
 	}
 	if q.After < 0 {
 		return Page{}, fmt.Errorf("comment cursor must not be negative")
+	}
+	if q.ViewerUserID < 0 {
+		return Page{}, fmt.Errorf("viewer user id must not be negative")
 	}
 	q.Limit = normalizeLimit(q.Limit)
 	comments, err := s.store.ListComments(ctx, q)
