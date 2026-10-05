@@ -49,6 +49,7 @@ export interface Comment {
   parentCommentId: number | null;
   body?: string;
   score: number;
+  userVote: PostVote;
   createdAt: string;
   deleted: boolean;
 }
@@ -56,6 +57,12 @@ export interface Comment {
 export interface CommentPage {
   comments: Comment[];
   nextAfter?: number;
+}
+
+export interface CommentVoteResult {
+  commentId: number;
+  score: number;
+  vote: PostVote;
 }
 
 interface AuthResponse {
@@ -179,6 +186,27 @@ export async function createComment(
       body: JSON.stringify({ body, ...(parentCommentId === undefined ? {} : { parentCommentId }) }),
     }),
     "comment",
+  );
+}
+
+export async function setCommentVote(
+  postId: number,
+  commentId: number,
+  vote: PostVote,
+  signal?: AbortSignal,
+): Promise<CommentVoteResult> {
+  return parseJSON<CommentVoteResult>(
+    await fetch(`/api/v2/posts/${postId}/comments/${commentId}/vote`, {
+      method: "PUT",
+      signal,
+      credentials: "same-origin",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ vote }),
+    }),
+    "comment vote",
   );
 }
 
