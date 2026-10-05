@@ -135,6 +135,24 @@ button { font: inherit; }
 .tag-list { display: flex; flex-wrap: wrap; gap: 0.4rem; }
 .tag-list span { padding: 0.2rem 0.4rem; background: #20262e; font-size: 0.78rem; }
 
+.media-status {
+  margin: 0;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid #3d4654;
+  background: #191f27;
+  color: #d9dee5;
+  font-size: 0.82rem;
+}
+
+.media-status--failed {
+  border-color: #765353;
+  background: #261b1d;
+}
+
+.media-status--unavailable {
+  color: #aeb6c1;
+}
+
 .load-sentinel {
   height: 1px;
   contain: strict;

@@ -11,11 +11,18 @@ import (
 	"time"
 
 	"github.com/kejith/ginbar/backend/v2/internal/feed"
+	"github.com/kejith/ginbar/backend/v2/internal/mediastatus"
 	"github.com/kejith/ginbar/backend/v2/internal/search"
 )
 
+type Store interface {
+	feed.Store
+	mediastatus.Store
+}
+
 type Server struct {
 	feed           *feed.Service
+	mediaStatus    *mediastatus.Service
 	mux            *http.ServeMux
 	requestTimeout time.Duration
 }
@@ -29,13 +36,19 @@ type apiError struct {
 	Message string `json:"message"`
 }
 
-func New(store feed.Store) *Server { return newServer(store, 3*time.Second) }
+func New(store Store) *Server { return newServer(store, 3*time.Second) }
 
-func newServer(store feed.Store, requestTimeout time.Duration) *Server {
-	s := &Server{feed: feed.New(store), mux: http.NewServeMux(), requestTimeout: requestTimeout}
+func newServer(store Store, requestTimeout time.Duration) *Server {
+	s := &Server{
+		feed:           feed.New(store),
+		mediaStatus:    mediastatus.New(store),
+		mux:            http.NewServeMux(),
+		requestTimeout: requestTimeout,
+	}
 	s.mux.HandleFunc("GET /healthz", s.health)
 	s.mux.HandleFunc("GET /api/v2/feed", s.listFeed)
 	s.mux.HandleFunc("GET /api/v2/posts/{id}/around", s.aroundPost)
+	s.mux.HandleFunc("GET /api/v2/posts/{id}/media-status", s.postMediaStatus)
 	return s
 }
 
@@ -76,9 +89,8 @@ func (s *Server) listFeed(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) aroundPost(w http.ResponseWriter, r *http.Request) {
-	postID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
-	if err != nil || postID <= 0 {
-		writeError(w, http.StatusBadRequest, "invalid_post_id", "post id must be a positive integer")
+	postID, ok := parsePostID(w, r)
+	if !ok {
 		return
 	}
 	radius, err := optionalPositiveInt(r.URL.Query().Get("radius"))
@@ -101,6 +113,32 @@ func (s *Server) aroundPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func (s *Server) postMediaStatus(w http.ResponseWriter, r *http.Request) {
+	postID, ok := parsePostID(w, r)
+	if !ok {
+		return
+	}
+	status, err := s.mediaStatus.Public(r.Context(), postID)
+	if errors.Is(err, mediastatus.ErrPostNotFound) {
+		writeError(w, http.StatusNotFound, "post_not_found", "post not found")
+		return
+	}
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, status)
+}
+
+func parsePostID(w http.ResponseWriter, r *http.Request) (int64, bool) {
+	postID, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil || postID <= 0 {
+		writeError(w, http.StatusBadRequest, "invalid_post_id", "post id must be a positive integer")
+		return 0, false
+	}
+	return postID, true
 }
 
 func writeServiceError(w http.ResponseWriter, r *http.Request, err error) {
