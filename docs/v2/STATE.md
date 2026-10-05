@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-05
-Phase: **M4 connected core product in progress; connected board browser gate accepted, integration pending**
+Phase: **M4 connected core product in progress; connected board/API/session boundary accepted and integrated**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -14,10 +14,10 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
 - M3 media pipeline: **complete for the accepted v2 scope and integrated**.
 - M4 connected core product: **in progress**.
   - authentication/session foundation: **accepted, target-gated and integrated**;
-  - connected board/API/session boundary: **browser-gated and accepted; fast-forward to `v2` pending**;
+  - connected board/API/session boundary: **accepted, browser-gated and integrated**;
   - filters/search, votes, tags, nested comments and profiles remain.
 
-## M4 connected board/API/session boundary — accepted
+## M4 connected board/API/session boundary — accepted and integrated
 
 Feature branch: `astra/m4-connected-board`, branched from `v2` at `6019dcabce1df1823bc5fa5352f4a26f2ddf945b`.
 
@@ -26,6 +26,12 @@ Exact executable candidate:
 `e24105598e5c5440625126e29b29bd95201db5c1`
 
 Exact-candidate CI run `37261434103`: **success**, including 17/17 frontend tests, strict TypeScript checking, Vite production build, applicable worker-build verification and clean tracked checkout.
+
+Accepted feature/evidence head fast-forwarded into `v2`:
+
+`e2e202f2870c43903ad51cd0167d4712b318934b`
+
+Post-fast-forward `v2` CI run `37265717474`: **success**, including the scoped v2 correctness gate, applicable worker-build verification and clean tracked checkout.
 
 Browser evidence package:
 
@@ -151,4 +157,4 @@ Use local/server agents for browser/DevTools, SSH, real PostgreSQL, target bench
 
 ## Single best next task
 
-After the accepted connected-board branch is fast-forwarded into current `v2` and post-integration CI is green, begin the next M4 slice from that exact `v2`: connect the existing search grammar to the real board with explicit query/route state, using the current `q` feed/around contract for include/exclude tags and score predicates. Preserve immediate selection, canonical post history, bounded 960-post retention and direct-link reconstruction under search context; do not add votes/tags/comments in the same slice. Browser-test query changes, direct links, Back/Forward and retention before proceeding to authenticated mutations.
+Begin the next M4 slice from current `v2`: connect the existing search grammar to the real board with explicit query/route state, using the current `q` feed/around contract for include/exclude tags and score predicates. Preserve immediate selection, canonical post history, bounded 960-post retention and direct-link reconstruction under search context; do not add votes/tags/comments in the same slice. Browser-test query changes, direct links, Back/Forward and retention before proceeding to authenticated mutations.
