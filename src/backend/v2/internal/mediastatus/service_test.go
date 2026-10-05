@@ -86,10 +86,10 @@ func TestDeriveMediaStatusLifecycle(t *testing.T) {
 			failureMsg: "Replacement processing failed; existing media is still available.",
 		},
 		{
-			name:      "successful publication is ready",
-			snapshot:  Snapshot{PostID: 9, ReleaseState: releasedPostState, MediaReady: true, Job: &JobSnapshot{State: JobStateSucceeded, Attempts: 1, MaxAttempts: 5}},
-			phase:     PhaseReady,
-			usable:    true,
+			name:     "successful publication is ready",
+			snapshot: Snapshot{PostID: 9, ReleaseState: releasedPostState, MediaReady: true, Job: &JobSnapshot{State: JobStateSucceeded, Attempts: 1, MaxAttempts: 5}},
+			phase:    PhaseReady,
+			usable:   true,
 		},
 		{
 			name:     "released imported media without job is ready",
