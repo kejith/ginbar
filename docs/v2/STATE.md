@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-05
-Phase: **M3 media pipeline — regeneration accepted and integrated; progress/status remains**
+Phase: **M3 media pipeline — progress/status candidate implemented; target status-query plan gate pending**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -17,7 +17,56 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/architecture
 - M3 compatible-MP4 H.264/AAC zero-transcode publication + deterministic AVIF thumbnail: **accepted and integrated**.
 - M3 perceptual duplicate detection: **accepted after two target gates and integrated into `v2`**.
 - M3 regeneration: **accepted and integrated into `v2`**.
-- M3 remains **in progress**: progress/status exposure/UI remains. Broader video transcoding is still deferred until a concrete product/input requirement defines the codec/container contract.
+- M3 progress/status exposure/UI is implemented on feature branch `astra/m3-progress-status`; exact candidate `ba3265910ed7ede38e08e925a7cbdc0b63fdc9ef` has applicable CI green. Integration is pending one target-server PostgreSQL `EXPLAIN (ANALYZE, BUFFERS)` gate for the selected-post status read.
+- Broader video transcoding remains deferred until a concrete product/input requirement defines its codec/container contract.
+
+## Progress/status — candidate pending target plan gate
+
+Feature branch: `astra/m3-progress-status`, branched from `v2` at `4e547d1d06f862950ff820897b12e401291c0bec`.
+
+Exact executable candidate awaiting target query-plan evidence:
+
+`ba3265910ed7ede38e08e925a7cbdc0b63fdc9ef`
+
+Relevant commits:
+
+- `640171e2e07a42257a851d2fb844049d1157e81c` — authoritative media-status domain/store/API boundary plus reusable Solid status/polling UI;
+- `d3552bcec0fd3bc99a3373f81f26b308e50a0db9` — gofmt-only correction for the status service;
+- `9a8903f34c39d1a5ccaae4addd1ca3494c752df6` — gofmt-only correction for status tests;
+- `ba3265910ed7ede38e08e925a7cbdc0b63fdc9ef` — frontend coverage for bounded retry polling; no production behavior change from the initial feature commit.
+
+Contract and architecture:
+
+- status is derived directly from authoritative `media_jobs`, post release/deletion state and ready media publication; there is no event table, progress table, SSE, WebSocket, Redis pub/sub, Kafka, second worker or synchronization process;
+- user-visible phases are coarse and truthful: `waiting`, `processing`, `retrying`, `failed`, `ready`; no fabricated numeric percentage exists;
+- initial ingestion and regeneration are distinguished by whether last-known-good released media is already usable;
+- released regeneration keeps authoritative media visible while replacement processing is waiting/running/retrying and after terminal failure;
+- terminal regeneration failure returns a safe message stating that existing media remains available; raw `last_error` is never exposed;
+- running status is based on an active lease; an expired non-final running lease derives as retrying and an expired max-attempt lease derives as failed, matching durable reclaim semantics without mutating ownership;
+- superseded generation does not require a separate status stream because regeneration reuses the same authoritative kind-0 job row and stale work remains fenced by the existing generation/ownership/source/post-state publication rules;
+- the current v2 HTTP API has no authentication, so `GET /api/v2/posts/{id}/media-status` exposes status only for already-released, non-deleted posts with ready media; unreleased initial-ingestion/deleted/non-visible posts return the same `404 post_not_found` shape to avoid existence leakage;
+- initial-ingestion status is still derived and PostgreSQL-tested behind the internal service boundary so M4 can expose it only after authenticated owner/visibility semantics exist;
+- status is not embedded into normal feed responses, so unused status adds zero normal-feed SQL/query cost;
+- the frontend helper/component polls one relevant selected post every 2 seconds only while status is `waiting`, `processing` or `retrying`; it stops on `failed`, `ready`, 404, post change or unmount and uses `AbortController` cleanup;
+- the reusable component is intentionally not mounted into the synthetic M1 benchmark `App.tsx`; M4 is where the real authenticated board/API replaces that harness, so this slice does not add throwaway network work or alter the accepted board benchmark surface.
+
+SQL/read shape:
+
+- one post lookup reads release/deletion state, checks ready media with `EXISTS`, and uses a lateral `ORDER BY id DESC LIMIT 1` lookup for the latest kind-0 `media_jobs` row;
+- the latest-job lookup is aligned with existing `media_jobs_post_kind_id_idx (post_id, kind, id DESC)` from migration `005_media_job_regeneration_lookup.sql`;
+- the read uses no row lock, performs no lease/job mutation, does not select raw `last_error`, and does no media decode/processing;
+- PostgreSQL-backed tests verify latest-kind-0 selection and that the status read does not change the job row's `updated_at`/lease state.
+
+Applicable CI:
+
+- all-scope run `37247908516` on `640171e2e07a42257a851d2fb844049d1157e81c`: Rust worker unit/PostgreSQL/regeneration/runner/video tests and clippy passed; the run then stopped at `gofmt` for the two new Go status files before backend compile/tests or frontend validation;
+- backend run `37248297712`: **success** on `9a8903f34c39d1a5ccaae4addd1ca3494c752df6`, including Go formatting, `go vet ./...`, PostgreSQL-backed `go test -v -count=1 ./...`, applicable hermetic worker release-build check and clean tracked checkout;
+- frontend run `37248392896`: **success** on exact candidate `ba3265910ed7ede38e08e925a7cbdc0b63fdc9ef`, including all 11 Node tests, `tsc --noEmit`, Vite production build, applicable worker-build skip because inputs were unchanged, and clean tracked checkout;
+- `d3552bcec0fd3bc99a3373f81f26b308e50a0db9` had only the remaining test-file gofmt failure; no correctness failure was exposed.
+
+Performance decision so far:
+
+No normal-feed query, request count or current M1 board rendering behavior changes. The current synthetic board does not mount the status component, so no browser performance gate is justified for this feature-branch candidate. The selected-post status read can become a repeated 2-second query while media work is unresolved, so target-server `EXPLAIN (ANALYZE, BUFFERS)` evidence is required before integration. `PERFORMANCE.md` is unchanged until that evidence is accepted.
 
 ## Regeneration — accepted contract
 
@@ -218,7 +267,7 @@ Do not add broader video transcoding until a concrete required input/browser/pro
 
 ## Remaining M3 work
 
-- progress/status exposure and UI built from durable job state;
+- accept the target query-plan evidence for the progress/status lookup and integrate the slice if it is bounded/indexed as designed;
 - decide whether broader video transcoding is required only from concrete product/input evidence;
 - exact WebM/EBML acceptance remains deferred until container distinction and browser-compatibility behavior are explicit.
 
@@ -235,4 +284,4 @@ Use local/server agents for browser/DevTools, SSH, real PostgreSQL, target-serve
 
 ## Single best next task
 
-Implement the **M3 progress/status exposure and UI** on top of the authoritative durable `media_jobs` state and existing ingestion/regeneration lifecycle. Define the smallest bounded status API needed by the frontend, then add UI that reflects pending/running/retry/failure/success without introducing SSE, WebSockets, Redis pub/sub or a parallel progress/event system.
+Run the **target-server disposable-PostgreSQL `EXPLAIN (ANALYZE, BUFFERS)` gate for the exact status query at executable SHA `ba3265910ed7ede38e08e925a7cbdc0b63fdc9ef`**, return one retained evidence ZIP, then use that evidence to decide whether the M3 progress/status slice is acceptable for fast-forward integration.
