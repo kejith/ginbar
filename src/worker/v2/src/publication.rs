@@ -33,15 +33,15 @@ WITH owned AS MATERIALIZED (
     ON CONFLICT (post_id) DO UPDATE
     SET kind = EXCLUDED.kind,
         processing_state = 1,
+        storage_key = EXCLUDED.storage_key,
         mime_type = EXCLUDED.mime_type,
         width = EXCLUDED.width,
         height = EXCLUDED.height,
         duration_ms = EXCLUDED.duration_ms,
         byte_size = EXCLUDED.byte_size,
+        sha256 = EXCLUDED.sha256,
         perceptual_hash = EXCLUDED.perceptual_hash,
         updated_at = clock_timestamp()
-    WHERE media.storage_key = EXCLUDED.storage_key
-      AND media.sha256 = EXCLUDED.sha256
     RETURNING post_id
 ), released AS (
     UPDATE posts AS post

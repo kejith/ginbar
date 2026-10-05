@@ -11,7 +11,13 @@ func TestMigrationSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"001_core.sql", "002_media_job_leases.sql", "003_media_sources.sql", "004_media_perceptual_hash_lookup.sql"}
+	want := []string{
+		"001_core.sql",
+		"002_media_job_leases.sql",
+		"003_media_sources.sql",
+		"004_media_perceptual_hash_lookup.sql",
+		"005_media_job_regeneration_lookup.sql",
+	}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("got %#v want %#v", names, want)
 	}
@@ -70,6 +76,19 @@ func TestMigrationSet(t *testing.T) {
 	} {
 		if !bytes.Contains(perceptualLookup, required) {
 			t.Fatalf("perceptual lookup migration missing %q", required)
+		}
+	}
+
+	regenerationLookup, err := Migration(names[4])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range [][]byte{
+		[]byte("media_jobs_post_kind_id_idx"),
+		[]byte("(post_id, kind, id DESC)"),
+	} {
+		if !bytes.Contains(regenerationLookup, required) {
+			t.Fatalf("regeneration lookup migration missing %q", required)
 		}
 	}
 }
