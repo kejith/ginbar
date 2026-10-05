@@ -9,53 +9,39 @@ import {
 } from "solid-js";
 import type { Accessor, Component } from "solid-js";
 
+import MediaStatus from "./MediaStatus";
 import {
-  INITIAL_POSTS,
-  LOAD_CHUNK,
-  POST_COUNT,
-  columnsForWidth,
-  extendRange,
-  extendRangeToIndex,
-  makeFakePosts,
-  nextPostIndex,
-  pathForPost,
-  postIdFromPath,
-  rangeAroundIndex,
-  rowIndexForPostIndex,
-  rowRangeForIndexRange,
-} from "./board-model.js";
+  APIError,
+  fetchAround,
+  fetchCurrentUser,
+  fetchFeed,
+  type CurrentUser,
+  type PostSummary,
+} from "./api";
+import {
+  FEED_PAGE_SIZE,
+  MAX_RETAINED_POSTS,
+  aroundRadiusForColumns,
+  mediaPath,
+  mergePostWindows,
+  thumbnailStorageKey,
+} from "./board-data.js";
+import { columnsForWidth, pathForPost, postIdFromPath } from "./board-model.js";
 
-interface FakePost {
-  id: number;
-  kind: "image" | "video";
-  width: number;
-  height: number;
-  score: number;
-  tags: string[];
-}
-
-interface IndexRange {
-  start: number;
-  end: number;
-}
+type HistoryMode = "push" | "replace" | "none";
+type WindowDirection = "older" | "newer";
+type BenchmarkPattern = "same-row" | "cross-row";
+type RouteStatus = "idle" | "loading" | "not-found" | "error";
+type AuthState =
+  | { status: "loading" }
+  | { status: "signed-out" }
+  | { status: "signed-in"; user: CurrentUser }
+  | { status: "unavailable" };
 
 interface ViewportAnchor {
   element: HTMLElement;
   top: number;
 }
-
-interface PrependAnchorProbe {
-  beforeRange: IndexRange;
-  afterRange: IndexRange;
-  beforeTop: number | null;
-  shiftedTop: number | null;
-  afterTop: number | null;
-  correctionPx: number;
-}
-
-type HistoryMode = "push" | "replace" | "none";
-type LoadMode = "extend" | "center";
-type BenchmarkPattern = "same-row" | "cross-row";
 
 interface SelectionTiming {
   syncMs: number;
@@ -83,22 +69,18 @@ interface BenchmarkStats {
 
 interface BenchmarkSnapshot {
   columns: number;
-  logicalRange: IndexRange;
+  retainedPosts: number;
   renderedRows: number;
   thumbnails: number;
   domNodes: number;
   rowMounts: number;
   rowUnmounts: number;
   longTasks: number;
+  hasNewer: boolean;
+  hasOlder: boolean;
+  selectedId: number | null;
+  routeStatus: RouteStatus;
   heapBytes: number | null;
-}
-
-interface MatrixResult {
-  requestedPosts: number;
-  snapshot: BenchmarkSnapshot;
-  sameRow: BenchmarkSummary;
-  crossRow: BenchmarkSummary;
-  invariants: InvariantResult;
 }
 
 interface InvariantResult {
@@ -108,24 +90,19 @@ interface InvariantResult {
 
 declare global {
   interface Window {
-    __ginbarM1?: {
+    __ginbarM4?: {
       select(id: number): void;
-      retain(count: number): Promise<BenchmarkSnapshot>;
-      prepend(): Promise<PrependAnchorProbe>;
+      loadOlder(): Promise<void>;
+      loadNewer(): Promise<void>;
       run(pattern: BenchmarkPattern, iterations?: number): Promise<BenchmarkSummary>;
-      runMatrix(iterations?: number): Promise<MatrixResult[]>;
       snapshot(): BenchmarkSnapshot;
       assertInvariants(): InvariantResult;
       resetStats(): void;
       stats(): Readonly<BenchmarkStats>;
+      ids(): number[];
     };
   }
 }
-
-const posts = makeFakePosts() as FakePost[];
-const postIndexById = new Map(posts.map((post, index) => [post.id, index]));
-const fakeMedia =
-  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1600' height='1000' viewBox='0 0 1600 1000'%3E%3Crect width='1600' height='1000' fill='%23171a1f'/%3E%3Cpath d='M0 850 430 420l260 260 250-310 660 630H0z' fill='%232b313b'/%3E%3C/svg%3E";
 
 const percentile = (samples: number[], fraction: number) => {
   if (samples.length === 0) return 0;
@@ -143,28 +120,29 @@ const summarize = (samples: SelectionTiming[]): BenchmarkSummary => {
   };
 };
 
-const settleFrames = (count = 2) =>
-  new Promise<void>((resolve) => {
-    let remaining = Math.max(1, count);
-    const step = () => {
-      remaining -= 1;
-      if (remaining === 0) resolve();
-      else requestAnimationFrame(step);
-    };
-    requestAnimationFrame(step);
-  });
-
 const App: Component = () => {
   let boardElement!: HTMLDivElement;
   let topSentinelElement!: HTMLDivElement;
   let bottomSentinelElement!: HTMLDivElement;
   let rowMounts = 0;
   let rowUnmounts = 0;
-  let prependPromise: Promise<PrependAnchorProbe> | null = null;
+  let routeSequence = 0;
+  let windowEpoch = 0;
+  let routeController: AbortController | undefined;
+  let initialController: AbortController | undefined;
+  let windowController: AbortController | undefined;
+  let windowLoadPromise: Promise<void> | null = null;
 
   const [columns, setColumns] = createSignal(1);
-  const [loadedRange, setLoadedRange] = createSignal<IndexRange>({ start: 0, end: INITIAL_POSTS });
+  const [posts, setPosts] = createSignal<PostSummary[]>([]);
   const [selectedId, setSelectedId] = createSignal<number | null>(null);
+  const [routePostId, setRoutePostId] = createSignal<number | null>(null);
+  const [routeStatus, setRouteStatus] = createSignal<RouteStatus>("idle");
+  const [authState, setAuthState] = createSignal<AuthState>({ status: "loading" });
+  const [hasOlder, setHasOlder] = createSignal(false);
+  const [hasNewer, setHasNewer] = createSignal(false);
+  const [initialLoading, setInitialLoading] = createSignal(false);
+  const [feedError, setFeedError] = createSignal(false);
   const [stats, setStats] = createSignal<BenchmarkStats>({
     selectionSamples: [],
     longTasks: 0,
@@ -172,28 +150,42 @@ const App: Component = () => {
     lastFrameMs: 0,
   });
 
+  const postById = createMemo(() => new Map(posts().map((post) => [post.id, post])));
+  const selectedPost = createMemo(() => {
+    const id = selectedId();
+    return id === null ? null : (postById().get(id) ?? null);
+  });
   const selectedIndex = createMemo(() => {
     const id = selectedId();
-    return id === null ? -1 : (postIndexById.get(id) ?? -1);
+    if (id === null) return -1;
+    return posts().findIndex((post) => post.id === id);
   });
-  const selectedRowIndex = createMemo(() => rowIndexForPostIndex(selectedIndex(), columns()));
-  const selectedPost = createMemo(() => {
+  const selectedRowKey = createMemo(() => {
     const index = selectedIndex();
-    return index < 0 ? null : posts[index];
+    if (index < 0) return null;
+    const rowStart = Math.floor(index / columns()) * columns();
+    return posts()[rowStart]?.id ?? null;
   });
   const isSelectedPost = createSelector(selectedId);
-  const isSelectedRow = createSelector(selectedRowIndex);
+  const isSelectedRow = createSelector(selectedRowKey);
 
-  const loadedRowRange = createMemo(() => rowRangeForIndexRange(loadedRange(), columns()));
-  const rowIndices = createMemo(() => {
-    const range = loadedRowRange();
-    return Array.from({ length: range.end - range.start }, (_, offset) => range.start + offset);
+  const rowMap = createMemo(() => {
+    const value = new Map<number, PostSummary[]>();
+    const list = posts();
+    const width = columns();
+    for (let start = 0; start < list.length; start += width) {
+      const row = list.slice(start, start + width);
+      if (row[0]) value.set(row[0].id, row);
+    }
+    return value;
   });
-  const renderedPostCount = createMemo(() => {
-    const range = loadedRowRange();
-    const start = range.start * columns();
-    const end = Math.min(posts.length, range.end * columns());
-    return Math.max(0, end - start);
+  const rowKeys = createMemo(() => [...rowMap().keys()]);
+  const authLabel = createMemo(() => {
+    const state = authState();
+    if (state.status === "signed-in") return state.user.username;
+    if (state.status === "signed-out") return "signed out";
+    if (state.status === "unavailable") return "auth unavailable";
+    return "auth…";
   });
 
   const benchmarkEnabled = new URLSearchParams(window.location.search).has("bench");
@@ -214,142 +206,247 @@ const App: Component = () => {
       });
     });
 
-  const captureViewportAnchor = (): ViewportAnchor | null => {
-    const topbarBottom = document.querySelector<HTMLElement>(".topbar")?.getBoundingClientRect().bottom ?? 0;
-    const maxX = Math.max(0, window.innerWidth - 1);
-    const maxY = Math.max(0, window.innerHeight - 1);
-    const x = Math.min(maxX, Math.max(0, window.innerWidth / 2));
-    const y = Math.min(maxY, Math.max(0, topbarBottom + 1));
-    const hitRow = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-row-index]") ?? null;
-
-    const id = selectedId();
-    const selectedRow = id === null
-      ? null
-      : boardElement
-          .querySelector<HTMLElement>(`[data-post-id="${id}"]`)
-          ?.closest<HTMLElement>("[data-row-index]") ?? null;
-    const element = hitRow ?? selectedRow;
-    return element ? { element, top: element.getBoundingClientRect().top } : null;
-  };
-
-  const prependLoadedRange = (): Promise<PrependAnchorProbe> => {
-    if (prependPromise) return prependPromise;
-
-    const beforeRange = { ...loadedRange() };
-    const afterRange = extendRange(beforeRange, posts.length, -1, LOAD_CHUNK);
-    const anchor = captureViewportAnchor();
-    const beforeTop = anchor?.top ?? null;
-
-    if (afterRange.start === beforeRange.start) {
-      return Promise.resolve({
-        beforeRange,
-        afterRange,
-        beforeTop,
-        shiftedTop: beforeTop,
-        afterTop: beforeTop,
-        correctionPx: 0,
-      });
-    }
-
-    setLoadedRange(afterRange);
-    prependPromise = new Promise<PrependAnchorProbe>((resolve) => {
-      requestAnimationFrame(() => {
-        let shiftedTop: number | null = null;
-        let correctionPx = 0;
-        if (anchor?.element.isConnected) {
-          shiftedTop = anchor.element.getBoundingClientRect().top;
-          correctionPx = shiftedTop - anchor.top;
-          if (Math.abs(correctionPx) > 0.5) window.scrollBy(0, correctionPx);
-        }
-
-        requestAnimationFrame(() => {
-          const afterTop = anchor?.element.isConnected ? anchor.element.getBoundingClientRect().top : null;
-          const result = {
-            beforeRange,
-            afterRange,
-            beforeTop,
-            shiftedTop,
-            afterTop,
-            correctionPx,
-          };
-          prependPromise = null;
-          resolve(result);
-        });
-      });
+  const scrollSelectedIntoView = (id: number) => {
+    requestAnimationFrame(() => {
+      boardElement
+        .querySelector<HTMLElement>(`[data-post-id="${id}"]`)
+        ?.scrollIntoView({ block: "nearest" });
     });
-
-    return prependPromise;
   };
 
-  const ensureIndexLoaded = (index: number, mode: LoadMode) => {
-    if (mode === "center") {
-      setLoadedRange(rangeAroundIndex(index, posts.length));
-      return;
+  const writeHistory = (id: number | null, mode: HistoryMode) => {
+    const path = id === null ? "/" : pathForPost(id);
+    if (mode === "push" && window.location.pathname !== path) {
+      history.pushState(id === null ? {} : { postId: id }, "", path);
+    } else if (mode === "replace") {
+      history.replaceState(id === null ? {} : { postId: id }, "", path);
     }
-    const range = loadedRange();
-    if (index >= range.start && index < range.end) return;
-    const farOutside = index < range.start - LOAD_CHUNK || index >= range.end + LOAD_CHUNK;
-    setLoadedRange(
-      farOutside
-        ? rangeAroundIndex(index, posts.length)
-        : extendRangeToIndex(range, index, posts.length),
-    );
   };
 
-  const selectPost = (
+  const selectRetainedPost = (
     id: number,
     mode: HistoryMode = "push",
     ensureVisible = false,
-    loadMode: LoadMode = "extend",
     measure = false,
     recordSample = measure,
   ): Promise<SelectionTiming> | null => {
-    const index = postIndexById.get(id);
-    if (index === undefined) return null;
+    if (!postById().has(id)) return null;
 
     const startedAt = performance.now();
-    ensureIndexLoaded(index, loadMode);
+    setRoutePostId(id);
+    setRouteStatus("idle");
     setSelectedId(id);
-
-    const path = pathForPost(id);
-    if (mode === "push" && window.location.pathname !== path) history.pushState({ postId: id }, "", path);
-    if (mode === "replace") history.replaceState({ postId: id }, "", path);
-
+    writeHistory(id, mode);
     const syncMs = performance.now() - startedAt;
 
-    if (ensureVisible) {
-      requestAnimationFrame(() => {
-        boardElement.querySelector<HTMLElement>(`[data-post-id="${id}"]`)?.scrollIntoView({ block: "nearest" });
-      });
-    }
-
+    if (ensureVisible) scrollSelectedIntoView(id);
     return measure ? recordNextFrame(startedAt, syncMs, recordSample) : null;
   };
 
   const closePost = () => {
     setSelectedId(null);
-    history.pushState({}, "", "/");
+    setRoutePostId(null);
+    setRouteStatus("idle");
+    writeHistory(null, "push");
   };
 
-  const syncRoute = (mode: HistoryMode = "none", loadMode: LoadMode = "extend") => {
+  const replaceServerWindow = (nextPosts: PostSummary[]) => {
+    windowEpoch += 1;
+    setPosts(nextPosts);
+  };
+
+  const loadInitialFeed = async () => {
+    if (initialLoading() || posts().length > 0) return;
+    initialController?.abort();
+    const controller = new AbortController();
+    initialController = controller;
+    setInitialLoading(true);
+    setFeedError(false);
+    try {
+      const page = await fetchFeed(0, FEED_PAGE_SIZE, controller.signal);
+      if (controller.signal.aborted || routePostId() !== null) return;
+      replaceServerWindow(page.posts);
+      setHasNewer(false);
+      setHasOlder(Boolean(page.nextBefore));
+    } catch (error) {
+      if (!controller.signal.aborted) setFeedError(true);
+    } finally {
+      if (initialController === controller) initialController = undefined;
+      if (!controller.signal.aborted) setInitialLoading(false);
+    }
+  };
+
+  const loadRoutePost = async (id: number) => {
+    initialController?.abort();
+    routeController?.abort();
+    const controller = new AbortController();
+    routeController = controller;
+    const sequence = ++routeSequence;
+    const radius = aroundRadiusForColumns(columns());
+    setSelectedId(null);
+    setRouteStatus("loading");
+    setFeedError(false);
+
+    try {
+      const result = await fetchAround(id, radius, controller.signal);
+      if (controller.signal.aborted || sequence !== routeSequence || routePostId() !== id) return;
+      if (result === null) {
+        setRouteStatus("not-found");
+        return;
+      }
+      if (result.selectedId !== id) throw new Error("around response selected id mismatch");
+
+      replaceServerWindow(result.posts);
+      const index = result.posts.findIndex((post) => post.id === id);
+      if (index < 0) throw new Error("around response omitted selected post");
+      setHasNewer(index >= radius);
+      setHasOlder(result.posts.length - index - 1 >= radius);
+      setSelectedId(id);
+      setRouteStatus("idle");
+      scrollSelectedIntoView(id);
+    } catch (error) {
+      if (controller.signal.aborted) return;
+      if (error instanceof APIError && error.status === 404) setRouteStatus("not-found");
+      else setRouteStatus("error");
+    } finally {
+      if (routeController === controller) routeController = undefined;
+    }
+  };
+
+  const syncRoute = () => {
     const id = postIdFromPath(window.location.pathname);
+    setRoutePostId(id);
+    routeSequence += 1;
+    routeController?.abort();
+
     if (id === null) {
       setSelectedId(null);
+      setRouteStatus("idle");
+      if (posts().length === 0) void loadInitialFeed();
       return;
     }
-    if (!postIndexById.has(id)) {
-      setSelectedId(null);
-      if (mode !== "none") history.replaceState({}, "", "/");
+    if (postById().has(id)) {
+      selectRetainedPost(id, "none", true);
       return;
     }
-    selectPost(id, mode, true, loadMode);
+    void loadRoutePost(id);
   };
 
-  const navigate = (direction: -1 | 1) => {
-    const current = selectedIndex();
-    const startIndex = current < 0 ? loadedRange().start : current;
-    const index = current < 0 ? startIndex : nextPostIndex(startIndex, direction, posts.length);
-    selectPost(posts[index].id, "push", true, "extend", benchmarkEnabled, benchmarkEnabled);
+  const captureViewportAnchor = (): ViewportAnchor | null => {
+    const topbarBottom = document.querySelector<HTMLElement>(".topbar")?.getBoundingClientRect().bottom ?? 0;
+    const x = Math.min(Math.max(window.innerWidth / 2, 0), Math.max(0, window.innerWidth - 1));
+    const y = Math.min(Math.max(topbarBottom + 1, 0), Math.max(0, window.innerHeight - 1));
+    const element = document.elementFromPoint(x, y)?.closest<HTMLElement>("[data-row-key]") ?? null;
+    return element ? { element, top: element.getBoundingClientRect().top } : null;
+  };
+
+  const restoreViewportAnchor = (anchor: ViewportAnchor | null) => {
+    if (!anchor) return;
+    requestAnimationFrame(() => {
+      if (!anchor.element.isConnected) return;
+      const shiftedTop = anchor.element.getBoundingClientRect().top;
+      const correction = shiftedTop - anchor.top;
+      if (Math.abs(correction) > 0.5) window.scrollBy(0, correction);
+    });
+  };
+
+  const loadWindow = (direction: WindowDirection): Promise<void> => {
+    if (windowLoadPromise) return windowLoadPromise;
+    const list = posts();
+    if (list.length === 0) return Promise.resolve();
+    if (direction === "older" && !hasOlder()) return Promise.resolve();
+    if (direction === "newer" && !hasNewer()) return Promise.resolve();
+
+    const epoch = windowEpoch;
+    const controller = new AbortController();
+    windowController = controller;
+    windowLoadPromise = (async () => {
+      try {
+        if (direction === "older") {
+          const boundary = list[list.length - 1].id;
+          const page = await fetchFeed(boundary, FEED_PAGE_SIZE, controller.signal);
+          if (controller.signal.aborted || epoch !== windowEpoch) return;
+          if (page.posts.length === 0) {
+            setHasOlder(false);
+            return;
+          }
+          const merged = mergePostWindows(
+            posts(),
+            page.posts,
+            "older",
+            selectedId(),
+            columns(),
+            MAX_RETAINED_POSTS,
+          );
+          setPosts(merged.posts);
+          setHasOlder(Boolean(page.nextBefore));
+          if (merged.trimmedNewer > 0) setHasNewer(true);
+          return;
+        }
+
+        const boundary = list[0].id;
+        const radius = aroundRadiusForColumns(columns());
+        const result = await fetchAround(boundary, radius, controller.signal);
+        if (controller.signal.aborted || epoch !== windowEpoch) return;
+        if (result === null) {
+          setHasNewer(false);
+          return;
+        }
+        const incoming = result.posts.filter((post) => post.id > boundary);
+        if (incoming.length === 0) {
+          setHasNewer(false);
+          return;
+        }
+        const anchor = captureViewportAnchor();
+        const merged = mergePostWindows(
+          posts(),
+          incoming,
+          "newer",
+          selectedId(),
+          columns(),
+          MAX_RETAINED_POSTS,
+        );
+        setPosts(merged.posts);
+        setHasNewer(incoming.length >= radius);
+        if (merged.trimmedOlder > 0) setHasOlder(true);
+        restoreViewportAnchor(anchor);
+      } catch (error) {
+        if (!controller.signal.aborted) setFeedError(true);
+      }
+    })().finally(() => {
+      if (windowController === controller) windowController = undefined;
+      windowLoadPromise = null;
+    });
+    return windowLoadPromise;
+  };
+
+  const navigate = async (direction: -1 | 1) => {
+    let list = posts();
+    if (list.length === 0) return;
+    const currentId = selectedId();
+    if (currentId === null) {
+      selectRetainedPost(list[0].id, "push", true, benchmarkEnabled, benchmarkEnabled);
+      return;
+    }
+
+    let index = list.findIndex((post) => post.id === currentId);
+    if (index < 0) return;
+    let target = index + direction;
+    if (target >= 0 && target < list.length) {
+      selectRetainedPost(list[target].id, "push", true, benchmarkEnabled, benchmarkEnabled);
+      return;
+    }
+
+    if (direction === 1 && hasOlder()) await loadWindow("older");
+    else if (direction === -1 && hasNewer()) await loadWindow("newer");
+    else return;
+
+    list = posts();
+    index = list.findIndex((post) => post.id === currentId);
+    target = index + direction;
+    if (index >= 0 && target >= 0 && target < list.length) {
+      selectRetainedPost(list[target].id, "push", true, benchmarkEnabled, benchmarkEnabled);
+    }
   };
 
   const onKeyDown = (event: KeyboardEvent) => {
@@ -361,16 +458,14 @@ const App: Component = () => {
       closePost();
       return;
     }
-
     if (event.key === "ArrowRight" || event.key === "ArrowDown" || event.key.toLowerCase() === "j") {
       event.preventDefault();
-      navigate(1);
+      void navigate(1);
       return;
     }
-
     if (event.key === "ArrowLeft" || event.key === "ArrowUp" || event.key.toLowerCase() === "k") {
       event.preventDefault();
-      navigate(-1);
+      void navigate(-1);
     }
   };
 
@@ -378,37 +473,49 @@ const App: Component = () => {
     const memory = (performance as Performance & { memory?: { usedJSHeapSize: number } }).memory;
     return {
       columns: columns(),
-      logicalRange: { ...loadedRange() },
-      renderedRows: rowIndices().length,
+      retainedPosts: posts().length,
+      renderedRows: rowKeys().length,
       thumbnails: boardElement.querySelectorAll(".thumbnail").length,
       domNodes: document.getElementsByTagName("*").length,
       rowMounts,
       rowUnmounts,
       longTasks: stats().longTasks,
+      hasNewer: hasNewer(),
+      hasOlder: hasOlder(),
+      selectedId: selectedId(),
+      routeStatus: routeStatus(),
       heapBytes: memory?.usedJSHeapSize ?? null,
     };
   };
 
   const assertInvariants = (): InvariantResult => {
     const errors: string[] = [];
+    const list = posts();
+    if (list.length > MAX_RETAINED_POSTS) errors.push(`retained ${list.length} posts above bound`);
+    for (let index = 1; index < list.length; index += 1) {
+      if (list[index - 1].id <= list[index].id) {
+        errors.push("retained posts are not strictly ID-descending");
+        break;
+      }
+    }
+    if (new Set(list.map((post) => post.id)).size !== list.length) errors.push("retained posts contain duplicates");
+
     const id = selectedId();
     const expanded = boardElement.querySelectorAll<HTMLElement>("[data-expanded-post]");
     const pressed = boardElement.querySelectorAll<HTMLElement>('.thumbnail[aria-pressed="true"]');
-
     if (id === null) {
       if (expanded.length !== 0) errors.push(`expected no expanded post, found ${expanded.length}`);
       if (pressed.length !== 0) errors.push(`expected no selected thumbnail, found ${pressed.length}`);
     } else {
+      if (!postById().has(id)) errors.push("selected post is not retained");
       if (expanded.length !== 1) errors.push(`expected one expanded post, found ${expanded.length}`);
       if (expanded[0]?.dataset.expandedPost !== String(id)) errors.push("expanded post does not match selected id");
       if (pressed.length !== 1) errors.push(`expected one selected thumbnail, found ${pressed.length}`);
       if (pressed[0]?.dataset.postId !== String(id)) errors.push("selected thumbnail does not match selected id");
-      const expectedRow = String(selectedRowIndex());
-      if (expanded[0]?.closest<HTMLElement>("[data-row-index]")?.dataset.rowIndex !== expectedRow) {
+      if (expanded[0]?.closest<HTMLElement>("[data-row-key]")?.dataset.rowKey !== String(selectedRowKey())) {
         errors.push("expanded post is not inside the selected thumbnail row");
       }
     }
-
     return { ok: errors.length === 0, errors };
   };
 
@@ -416,27 +523,21 @@ const App: Component = () => {
     setStats({ selectionSamples: [], longTasks: 0, lastSyncMs: 0, lastFrameMs: 0 });
   };
 
-  const retainForBenchmark = async (count: number) => {
-    const bounded = Math.max(INITIAL_POSTS, Math.min(POST_COUNT, Math.trunc(count)));
-    setLoadedRange({ start: 0, end: bounded });
-    setSelectedId(null);
-    window.scrollTo(0, 0);
-    await settleFrames(2);
-    return snapshot();
-  };
-
   const runBenchmark = async (pattern: BenchmarkPattern, iterations = 120): Promise<BenchmarkSummary> => {
-    const count = Math.max(1, Math.min(240, Math.trunc(iterations)));
-    const rowRange = loadedRowRange();
-    const baseIndex = Math.min(posts.length - 1, rowRange.start * columns());
-    const sameIndex = Math.min(posts.length - 1, baseIndex + Math.min(1, columns() - 1));
-    const crossIndex = Math.min(posts.length - 1, baseIndex + columns());
-    const pair = pattern === "same-row" ? [baseIndex, sameIndex] : [baseIndex, crossIndex];
-    const samples: SelectionTiming[] = [];
+    const rows = [...rowMap().values()];
+    let pair: [number, number] | null = null;
+    if (pattern === "same-row") {
+      const row = rows.find((candidate) => candidate.length > 1);
+      if (row) pair = [row[0].id, row[1].id];
+    } else if (rows.length > 1) {
+      pair = [rows[0][0].id, rows[1][0].id];
+    }
+    if (!pair) return summarize([]);
 
+    const count = Math.max(1, Math.min(240, Math.trunc(iterations)));
+    const samples: SelectionTiming[] = [];
     for (let iteration = 0; iteration < count; iteration += 1) {
-      const index = pair[iteration & 1];
-      const measured = selectPost(posts[index].id, "none", false, "extend", true, false);
+      const measured = selectRetainedPost(pair[iteration & 1], "none", false, true, false);
       if (measured) samples.push(await measured);
     }
     const summary = summarize(samples);
@@ -450,24 +551,6 @@ const App: Component = () => {
       }));
     }
     return summary;
-  };
-
-  const runMatrix = async (iterations = 120): Promise<MatrixResult[]> => {
-    resetStats();
-    const results: MatrixResult[] = [];
-    for (const requestedPosts of [320, 2_000, 5_000, 10_000]) {
-      await retainForBenchmark(requestedPosts);
-      const sameRow = await runBenchmark("same-row", iterations);
-      const crossRow = await runBenchmark("cross-row", iterations);
-      results.push({
-        requestedPosts,
-        snapshot: snapshot(),
-        sameRow,
-        crossRow,
-        invariants: assertInvariants(),
-      });
-    }
-    return results;
   };
 
   onMount(() => {
@@ -486,19 +569,23 @@ const App: Component = () => {
       (entries) => {
         for (const entry of entries) {
           if (!entry.isIntersecting) continue;
-          if (entry.target === topSentinelElement) {
-            void prependLoadedRange();
-          } else if (entry.target === bottomSentinelElement) {
-            setLoadedRange((range) => extendRange(range, posts.length, 1, LOAD_CHUNK));
-          }
+          if (entry.target === topSentinelElement && hasNewer()) void loadWindow("newer");
+          if (entry.target === bottomSentinelElement && hasOlder()) void loadWindow("older");
         }
       },
-      { rootMargin: "1200px 0px" },
+      { rootMargin: "1000px 0px" },
     );
     intersectionObserver.observe(topSentinelElement);
     intersectionObserver.observe(bottomSentinelElement);
 
-    const onPopState = () => syncRoute("none", "extend");
+    const authController = new AbortController();
+    void fetchCurrentUser(authController.signal)
+      .then((user) => setAuthState(user ? { status: "signed-in", user } : { status: "signed-out" }))
+      .catch(() => {
+        if (!authController.signal.aborted) setAuthState({ status: "unavailable" });
+      });
+
+    const onPopState = () => syncRoute();
     window.addEventListener("popstate", onPopState);
     window.addEventListener("keydown", onKeyDown);
 
@@ -511,33 +598,37 @@ const App: Component = () => {
         });
         longTaskObserver.observe({ type: "longtask", buffered: true });
       } catch {
-        // Safari currently lacks the Long Tasks API; selection timings still work.
+        // Long Tasks is not available in every browser; selection timings remain usable.
       }
     }
 
-    window.__ginbarM1 = {
+    window.__ginbarM4 = {
       select: (id) => {
-        selectPost(id, "push", true, "extend", benchmarkEnabled, benchmarkEnabled);
+        selectRetainedPost(id, "push", true, benchmarkEnabled, benchmarkEnabled);
       },
-      retain: retainForBenchmark,
-      prepend: prependLoadedRange,
+      loadOlder: () => loadWindow("older"),
+      loadNewer: () => loadWindow("newer"),
       run: runBenchmark,
-      runMatrix,
       snapshot,
       assertInvariants,
       resetStats,
       stats: () => stats(),
+      ids: () => posts().map((post) => post.id),
     };
 
-    syncRoute("replace", "center");
+    syncRoute();
 
     onCleanup(() => {
       resizeObserver.disconnect();
       intersectionObserver.disconnect();
+      authController.abort();
+      routeController?.abort();
+      initialController?.abort();
+      windowController?.abort();
       longTaskObserver?.disconnect();
       window.removeEventListener("popstate", onPopState);
       window.removeEventListener("keydown", onKeyDown);
-      delete window.__ginbarM1;
+      delete window.__ginbarM4;
     });
   });
 
@@ -545,26 +636,36 @@ const App: Component = () => {
     <main class="app-shell">
       <header class="topbar">
         <div>
-          <strong>Ginbar v2 / M1</strong>
-          <span>{posts.length.toLocaleString()} synthetic posts</span>
+          <strong>Ginbar v2</strong>
+          <span>{posts().length.toLocaleString()} retained</span>
         </div>
         <div class="topbar-meta">
+          <span>{authLabel()}</span>
           <span>{columns()} cols</span>
-          <span>{renderedPostCount().toLocaleString()} retained</span>
         </div>
       </header>
 
+      <Show when={feedError()}>
+        <p class="board-message board-message--error" role="status">Feed update failed</p>
+      </Show>
+      <Show when={routeStatus() !== "idle" && routePostId() !== null}>
+        <RouteShell postId={routePostId()!} status={routeStatus()} />
+      </Show>
+      <Show when={initialLoading() && posts().length === 0 && routePostId() === null}>
+        <p class="board-message" role="status">Loading feed…</p>
+      </Show>
+
       <div class="board" ref={boardElement} aria-label="Media board">
         <div ref={topSentinelElement} class="load-sentinel" aria-hidden="true" />
-        <For each={rowIndices()}>
-          {(rowIndex: number) => (
+        <For each={rowKeys()}>
+          {(rowKey: number) => (
             <BoardRow
-              rowIndex={rowIndex}
-              columns={columns}
+              rowKey={rowKey}
+              posts={() => rowMap().get(rowKey) ?? []}
               isSelectedPost={isSelectedPost}
               isSelectedRow={isSelectedRow}
               selectedPost={selectedPost}
-              onSelect={(id) => selectPost(id, "push", false, "extend", benchmarkEnabled, benchmarkEnabled)}
+              onSelect={(id) => selectRetainedPost(id, "push", false, benchmarkEnabled, benchmarkEnabled)}
               onClose={closePost}
               onMountRow={() => { rowMounts += 1; }}
               onUnmountRow={() => { rowUnmounts += 1; }}
@@ -575,22 +676,18 @@ const App: Component = () => {
       </div>
 
       <Show when={benchmarkEnabled}>
-        <BenchmarkPanel
-          stats={stats}
-          retainedCount={renderedPostCount}
-          rowCount={() => rowIndices().length}
-        />
+        <BenchmarkPanel stats={stats} retainedCount={() => posts().length} rowCount={() => rowKeys().length} />
       </Show>
     </main>
   );
 };
 
 interface BoardRowProps {
-  rowIndex: number;
-  columns: Accessor<number>;
+  rowKey: number;
+  posts: Accessor<PostSummary[]>;
   isSelectedPost(id: number): boolean;
-  isSelectedRow(rowIndex: number): boolean;
-  selectedPost: Accessor<FakePost | null>;
+  isSelectedRow(rowKey: number): boolean;
+  selectedPost: Accessor<PostSummary | null>;
   onSelect(id: number): void;
   onClose(): void;
   onMountRow(): void;
@@ -598,76 +695,110 @@ interface BoardRowProps {
 }
 
 const BoardRow: Component<BoardRowProps> = (props) => {
-  const row = createMemo(() => {
-    const columns = props.columns();
-    const start = props.rowIndex * columns;
-    return posts.slice(start, Math.min(posts.length, start + columns));
-  });
-
   onMount(props.onMountRow);
   onCleanup(props.onUnmountRow);
 
   return (
     <section
       class="board-row"
-      classList={{ "board-row--expanded": props.isSelectedRow(props.rowIndex) }}
-      data-row-index={props.rowIndex}
+      classList={{ "board-row--expanded": props.isSelectedRow(props.rowKey) }}
+      data-row-key={props.rowKey}
     >
       <div class="thumbnail-row">
-        <For each={row()}>
-          {(post: FakePost) => (
-            <button
-              type="button"
-              class="thumbnail"
-              classList={{ "thumbnail--selected": props.isSelectedPost(post.id) }}
-              data-post-id={post.id}
-              aria-label={`Open post ${post.id}`}
-              aria-pressed={props.isSelectedPost(post.id)}
-              onClick={() => props.onSelect(post.id)}
-              style={`--thumb-hue: ${(post.id * 29) % 360}`}
-            >
-              <span class="thumbnail-id">#{post.id}</span>
-              <span class="thumbnail-kind">{post.kind}</span>
-            </button>
+        <For each={props.posts()}>
+          {(post: PostSummary) => (
+            <Thumbnail post={post} selected={props.isSelectedPost(post.id)} onSelect={props.onSelect} />
           )}
         </For>
       </div>
 
-      <Show when={props.isSelectedRow(props.rowIndex) && props.selectedPost()} keyed>
-        {(post: FakePost) => <ExpandedPost post={post} onClose={props.onClose} />}
+      <Show when={props.isSelectedRow(props.rowKey) && props.selectedPost()} keyed>
+        {(post: PostSummary) => <ExpandedPost post={post} onClose={props.onClose} />}
       </Show>
     </section>
   );
 };
 
-const ExpandedPost: Component<{ post: FakePost; onClose(): void }> = (props) => (
-  <article class="expanded-post" data-expanded-post={props.post.id}>
-    <div class="expanded-media">
-      <Show
-        when={props.post.kind === "video"}
-        fallback={
-          <img
-            src={fakeMedia}
-            width={props.post.width}
-            height={props.post.height}
-            alt={`Synthetic post ${props.post.id}`}
-            decoding="async"
-          />
-        }
-      >
-        <video controls preload="metadata" poster={fakeMedia} aria-label={`Synthetic video post ${props.post.id}`} />
+const Thumbnail: Component<{ post: PostSummary; selected: boolean; onSelect(id: number): void }> = (props) => {
+  const thumbnailURL = createMemo(() => safeThumbnailPath(props.post.media.storageKey));
+  return (
+    <button
+      type="button"
+      class="thumbnail"
+      classList={{ "thumbnail--selected": props.selected }}
+      data-post-id={props.post.id}
+      aria-label={`Open post ${props.post.id}`}
+      aria-pressed={props.selected}
+      onClick={() => props.onSelect(props.post.id)}
+    >
+      <Show when={thumbnailURL()} fallback={<span class="thumbnail-placeholder" aria-hidden="true" />}>
+        {(url) => (
+          <img src={url()} width="256" height="256" alt="" loading="lazy" decoding="async" />
+        )}
       </Show>
-    </div>
-    <aside class="expanded-meta">
-      <div>
-        <strong>#{props.post.id}</strong>
-        <span>{props.post.score} points</span>
+      <span class="thumbnail-id">#{props.post.id}</span>
+      <span class="thumbnail-score">{props.post.score}</span>
+    </button>
+  );
+};
+
+const ExpandedPost: Component<{ post: PostSummary; onClose(): void }> = (props) => {
+  const mediaURL = createMemo(() => safeMediaPath(props.post.media.storageKey));
+  const thumbnailURL = createMemo(() => safeThumbnailPath(props.post.media.storageKey));
+  return (
+    <article class="expanded-post" data-expanded-post={props.post.id}>
+      <div class="expanded-media">
+        <Show when={mediaURL()} fallback={<p class="media-unavailable">Media unavailable</p>}>
+          {(url) => (
+            <Show
+              when={props.post.media.kind === 1}
+              fallback={
+                <img
+                  src={url()}
+                  width={props.post.media.width}
+                  height={props.post.media.height}
+                  alt={`Post ${props.post.id}`}
+                  decoding="async"
+                />
+              }
+            >
+              <video
+                src={url()}
+                width={props.post.media.width}
+                height={props.post.media.height}
+                controls
+                preload="metadata"
+                poster={thumbnailURL() ?? undefined}
+                aria-label={`Video post ${props.post.id}`}
+              />
+            </Show>
+          )}
+        </Show>
       </div>
-      <div class="tag-list">
-        <For each={props.post.tags}>{(tag: string) => <span>{tag}</span>}</For>
-      </div>
-      <button type="button" onClick={props.onClose}>Close</button>
-    </aside>
+      <aside class="expanded-meta">
+        <div>
+          <strong>#{props.post.id}</strong>
+          <span>{props.post.score} points</span>
+          <span>by user {props.post.authorId}</span>
+          <span>{props.post.media.width}×{props.post.media.height}</span>
+        </div>
+        <MediaStatus postId={props.post.id} />
+        <button type="button" onClick={props.onClose}>Close</button>
+      </aside>
+    </article>
+  );
+};
+
+const RouteShell: Component<{ postId: number; status: RouteStatus }> = (props) => (
+  <article class="route-shell" data-route-shell={props.postId} role="status">
+    <strong>Post #{props.postId}</strong>
+    <span>
+      {props.status === "loading"
+        ? "Loading surrounding feed…"
+        : props.status === "not-found"
+          ? "Post not found"
+          : "Post could not be loaded"}
+    </span>
   </article>
 );
 
@@ -680,7 +811,7 @@ const BenchmarkPanel: Component<{
   const frameP95 = createMemo(() => percentile(props.stats().selectionSamples.map((sample) => sample.frameMs), 0.95));
   return (
     <output class="benchmark-panel">
-      <strong>M1 instrumentation</strong>
+      <strong>M4 instrumentation</strong>
       <span>sync {props.stats().lastSyncMs.toFixed(2)} ms</span>
       <span>frame {props.stats().lastFrameMs.toFixed(1)} ms</span>
       <span>sync p95 {syncP95().toFixed(2)} ms</span>
@@ -690,5 +821,21 @@ const BenchmarkPanel: Component<{
     </output>
   );
 };
+
+function safeMediaPath(storageKey: string): string | null {
+  try {
+    return mediaPath(storageKey);
+  } catch {
+    return null;
+  }
+}
+
+function safeThumbnailPath(storageKey: string): string | null {
+  try {
+    return mediaPath(thumbnailStorageKey(storageKey));
+  } catch {
+    return null;
+  }
+}
 
 export default App;
