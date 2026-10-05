@@ -27,6 +27,7 @@ import {
   thumbnailStorageKey,
 } from "./board-data.js";
 import { columnsForWidth, pathForPost, postIdFromPath } from "./board-model.js";
+import { boardURL, effectiveSearchQuery, searchQueryFromSearch } from "./search-route.js";
 
 type HistoryMode = "push" | "replace" | "none";
 type WindowDirection = "older" | "newer";
@@ -80,6 +81,7 @@ interface BenchmarkSnapshot {
   hasOlder: boolean;
   selectedId: number | null;
   routeStatus: RouteStatus;
+  searchQuery: string;
   heapBytes: number | null;
 }
 
@@ -92,6 +94,7 @@ declare global {
   interface Window {
     __ginbarM4?: {
       select(id: number): void;
+      search(query: string): void;
       loadOlder(): Promise<void>;
       loadNewer(): Promise<void>;
       run(pattern: BenchmarkPattern, iterations?: number): Promise<BenchmarkSummary>;
@@ -133,6 +136,7 @@ const App: Component = () => {
   let windowController: AbortController | undefined;
   let windowLoadPromise: Promise<void> | null = null;
 
+  const initialSearchQuery = searchQueryFromSearch(window.location.search);
   const [columns, setColumns] = createSignal(1);
   const [posts, setPosts] = createSignal<PostSummary[]>([]);
   const [selectedId, setSelectedId] = createSignal<number | null>(null);
@@ -143,6 +147,9 @@ const App: Component = () => {
   const [hasNewer, setHasNewer] = createSignal(false);
   const [initialLoading, setInitialLoading] = createSignal(false);
   const [feedError, setFeedError] = createSignal(false);
+  const [searchQuery, setSearchQuery] = createSignal(initialSearchQuery);
+  const [searchDraft, setSearchDraft] = createSignal(initialSearchQuery);
+  const [searchError, setSearchError] = createSignal<string | null>(null);
   const [stats, setStats] = createSignal<BenchmarkStats>({
     selectionSamples: [],
     longTasks: 0,
@@ -214,12 +221,18 @@ const App: Component = () => {
     });
   };
 
-  const writeHistory = (id: number | null, mode: HistoryMode) => {
+  const writeHistory = (id: number | null, mode: HistoryMode, query = searchQuery()) => {
     const path = id === null ? "/" : pathForPost(id);
-    if (mode === "push" && window.location.pathname !== path) {
-      history.pushState(id === null ? {} : { postId: id }, "", path);
+    const url = boardURL(path, query, benchmarkEnabled);
+    const currentURL = `${window.location.pathname}${window.location.search}`;
+    const state = {
+      ...(id === null ? {} : { postId: id }),
+      ...(query === "" ? {} : { q: query }),
+    };
+    if (mode === "push" && currentURL !== url) {
+      history.pushState(state, "", url);
     } else if (mode === "replace") {
-      history.replaceState(id === null ? {} : { postId: id }, "", path);
+      history.replaceState(state, "", url);
     }
   };
 
@@ -255,21 +268,39 @@ const App: Component = () => {
     setPosts(nextPosts);
   };
 
-  const loadInitialFeed = async () => {
-    if (initialLoading() || posts().length > 0) return;
+  const resetForSearchChange = () => {
     initialController?.abort();
+    initialController = undefined;
+    setInitialLoading(false);
+    routeController?.abort();
+    routeController = undefined;
+    routeSequence += 1;
+    windowController?.abort();
+    replaceServerWindow([]);
+    setSelectedId(null);
+    setHasNewer(false);
+    setHasOlder(false);
+    setRouteStatus("idle");
+    setFeedError(false);
+  };
+
+  const loadInitialFeed = async (query = searchQuery()) => {
+    if (initialController || posts().length > 0) return;
     const controller = new AbortController();
     initialController = controller;
     setInitialLoading(true);
     setFeedError(false);
     try {
-      const page = await fetchFeed(0, FEED_PAGE_SIZE, controller.signal);
-      if (controller.signal.aborted || routePostId() !== null) return;
+      const page = await fetchFeed(0, FEED_PAGE_SIZE, query, controller.signal);
+      if (controller.signal.aborted || routePostId() !== null || query !== searchQuery()) return;
       replaceServerWindow(page.posts);
       setHasNewer(false);
       setHasOlder(Boolean(page.nextBefore));
-    } catch {
-      if (!controller.signal.aborted) setFeedError(true);
+      setSearchError(null);
+    } catch (error) {
+      if (controller.signal.aborted || query !== searchQuery()) return;
+      if (error instanceof APIError && error.code === "invalid_search") setSearchError(error.message);
+      else setFeedError(true);
     } finally {
       if (initialController === controller) {
         initialController = undefined;
@@ -278,7 +309,7 @@ const App: Component = () => {
     }
   };
 
-  const loadRoutePost = async (id: number) => {
+  const loadRoutePost = async (id: number, query = searchQuery()) => {
     initialController?.abort();
     initialController = undefined;
     setInitialLoading(false);
@@ -292,8 +323,13 @@ const App: Component = () => {
     setFeedError(false);
 
     try {
-      const result = await fetchAround(id, radius, controller.signal);
-      if (controller.signal.aborted || sequence !== routeSequence || routePostId() !== id) return;
+      const result = await fetchAround(id, radius, query, controller.signal);
+      if (
+        controller.signal.aborted
+        || sequence !== routeSequence
+        || routePostId() !== id
+        || query !== searchQuery()
+      ) return;
       if (result === null) {
         setRouteStatus("not-found");
         return;
@@ -307,17 +343,30 @@ const App: Component = () => {
       setHasOlder(result.posts.length - index - 1 >= radius);
       setSelectedId(id);
       setRouteStatus("idle");
+      setSearchError(null);
       scrollSelectedIntoView(id);
     } catch (error) {
-      if (controller.signal.aborted) return;
+      if (controller.signal.aborted || query !== searchQuery()) return;
       if (error instanceof APIError && error.status === 404) setRouteStatus("not-found");
-      else setRouteStatus("error");
+      else if (error instanceof APIError && error.code === "invalid_search") {
+        setSearchError(error.message);
+        setRouteStatus("error");
+      } else setRouteStatus("error");
     } finally {
       if (routeController === controller) routeController = undefined;
     }
   };
 
   const syncRoute = () => {
+    const nextQuery = searchQueryFromSearch(window.location.search);
+    const queryChanged = nextQuery !== searchQuery();
+    setSearchDraft(nextQuery);
+    if (queryChanged) {
+      setSearchQuery(nextQuery);
+      setSearchError(null);
+      resetForSearchChange();
+    }
+
     const id = postIdFromPath(window.location.pathname);
     setRoutePostId(id);
     routeController?.abort();
@@ -325,14 +374,22 @@ const App: Component = () => {
     if (id === null) {
       setSelectedId(null);
       setRouteStatus("idle");
-      if (posts().length === 0) void loadInitialFeed();
+      if (posts().length === 0) void loadInitialFeed(nextQuery);
       return;
     }
     if (postById().has(id)) {
       selectRetainedPost(id, "none", true);
       return;
     }
-    void loadRoutePost(id);
+    void loadRoutePost(id, nextQuery);
+  };
+
+  const applySearch = (value = searchDraft()) => {
+    const nextQuery = effectiveSearchQuery(value);
+    setSearchDraft(nextQuery);
+    const id = postIdFromPath(window.location.pathname);
+    writeHistory(id, "push", nextQuery);
+    syncRoute();
   };
 
   const captureViewportAnchor = (): ViewportAnchor | null => {
@@ -361,14 +418,15 @@ const App: Component = () => {
     if (direction === "newer" && !hasNewer()) return Promise.resolve();
 
     const epoch = windowEpoch;
+    const query = searchQuery();
     const controller = new AbortController();
     windowController = controller;
     windowLoadPromise = (async () => {
       try {
         if (direction === "older") {
           const boundary = list[list.length - 1].id;
-          const page = await fetchFeed(boundary, FEED_PAGE_SIZE, controller.signal);
-          if (controller.signal.aborted || epoch !== windowEpoch) return;
+          const page = await fetchFeed(boundary, FEED_PAGE_SIZE, query, controller.signal);
+          if (controller.signal.aborted || epoch !== windowEpoch || query !== searchQuery()) return;
           if (page.posts.length === 0) {
             setHasOlder(false);
             return;
@@ -389,8 +447,8 @@ const App: Component = () => {
 
         const boundary = list[0].id;
         const radius = aroundRadiusForColumns(columns());
-        const result = await fetchAround(boundary, radius, controller.signal);
-        if (controller.signal.aborted || epoch !== windowEpoch) return;
+        const result = await fetchAround(boundary, radius, query, controller.signal);
+        if (controller.signal.aborted || epoch !== windowEpoch || query !== searchQuery()) return;
         if (result === null) {
           setHasNewer(false);
           return;
@@ -413,8 +471,10 @@ const App: Component = () => {
         setHasNewer(incoming.length >= radius);
         if (merged.trimmedOlder > 0) setHasOlder(true);
         restoreViewportAnchor(anchor);
-      } catch {
-        if (!controller.signal.aborted) setFeedError(true);
+      } catch (error) {
+        if (controller.signal.aborted || epoch !== windowEpoch || query !== searchQuery()) return;
+        if (error instanceof APIError && error.code === "invalid_search") setSearchError(error.message);
+        else setFeedError(true);
       }
     })().finally(() => {
       if (windowController === controller) windowController = undefined;
@@ -487,6 +547,7 @@ const App: Component = () => {
       hasOlder: hasOlder(),
       selectedId: selectedId(),
       routeStatus: routeStatus(),
+      searchQuery: searchQuery(),
       heapBytes: memory?.usedJSHeapSize ?? null,
     };
   };
@@ -611,6 +672,7 @@ const App: Component = () => {
       select: (id) => {
         selectRetainedPost(id, "push", true, benchmarkEnabled, benchmarkEnabled);
       },
+      search: (query) => applySearch(query),
       loadOlder: () => loadWindow("older"),
       loadNewer: () => loadWindow("newer"),
       run: runBenchmark,
@@ -650,6 +712,35 @@ const App: Component = () => {
         </div>
       </header>
 
+      <form
+        class="search-bar"
+        role="search"
+        onSubmit={(event) => {
+          event.preventDefault();
+          applySearch();
+        }}
+      >
+        <label for="board-search">Search</label>
+        <input
+          id="board-search"
+          type="search"
+          value={searchDraft()}
+          placeholder="tag -excluded score:>=100"
+          autocomplete="off"
+          spellcheck={false}
+          onInput={(event) => setSearchDraft(event.currentTarget.value)}
+        />
+        <button type="submit">Apply</button>
+        <Show when={searchQuery() !== ""}>
+          <button type="button" onClick={() => applySearch("")}>Clear</button>
+        </Show>
+      </form>
+
+      <Show when={searchError()}>
+        {(message) => (
+          <p class="board-message board-message--error" role="alert">Invalid search: {message()}</p>
+        )}
+      </Show>
       <Show when={feedError()}>
         <p class="board-message board-message--error" role="status">Feed update failed</p>
       </Show>
