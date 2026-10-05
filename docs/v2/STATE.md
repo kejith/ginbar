@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-05
-Phase: **M4 connected core product in progress; search-connected board accepted, browser-gated and integrated**
+Phase: **M4 connected core product in progress; post-voting executable candidate is CI-green, SQL/browser acceptance pending**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -16,7 +16,59 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - authentication/session foundation: **accepted, target-gated and integrated**;
   - connected board/API/session boundary: **accepted, browser-gated and integrated**;
   - search-connected board: **accepted, browser-gated and integrated**;
-  - post/comment votes, tag mutations, nested comments and profiles remain.
+  - post voting: **implemented on `astra/m4-post-voting`, exact executable CI green, SQL/browser acceptance pending**;
+  - comment voting, tag mutations, nested comments and profiles remain.
+
+## M4 post voting — implementation complete, acceptance pending
+
+Feature branch: `astra/m4-post-voting`, branched from `v2` at:
+
+`a1043990f4deafb4ba19a84877fdd61fe015236e`
+
+Exact executable candidate:
+
+`e1c5d1f65e72a81615164bc6445bcdc2d8218381`
+
+Exact-candidate CI run `37313953385`: **success**. It completed the exact-revision checkout, full scoped v2 correctness gate, PostgreSQL-backed Go tests, frontend validation/tests/build, worker checks, target-worker release-build verification and clean tracked-checkout verification.
+
+An earlier executable `146e6afc3d9b1afde122728814ffbacf9aded5a1` failed CI run `37313602695` only because two new PostgreSQL test fixture usernames exceeded the existing schema length constraint. Production code was unchanged; the fixture generator was bounded and the corrected exact candidate above passed.
+
+Implemented boundary:
+
+- `PUT /api/v2/posts/:id/vote` is an authenticated same-origin mutation with an explicit requested state `-1`, `0` or `+1`;
+- voting uses immutable numeric `users.id` and post IDs; no username identity or Redis/cache/write-behind path was introduced;
+- the PostgreSQL mutation is one transaction: lock the released/nondeleted post row, read that user's current vote after the lock, delete/upsert `post_votes` as needed, derive the exact score delta as `newVote-currentVote`, update `posts.score`, then commit;
+- the post row lock serializes competing score mutations on the same post, while the existing `(post_id, user_id)` primary key provides the point lookup/upsert key;
+- explicit repeated requested state is idempotent; the frontend contract maps clicking the already-active direction to an explicit neutral request;
+- feed and around accept an optional viewer identity resolved once from the existing session boundary; authenticated reads left-join the existing `post_votes` primary key and expose `userVote` in the same bounded query;
+- signed-out feed/around reads project literal neutral `userVote=0` and do not join `post_votes` at all;
+- no schema redesign or new index was added because the existing `post_votes(post_id,user_id)` primary key matches the new read/mutation point lookups;
+- the SolidJS board applies optimistic score/vote feedback immediately to the retained post state, and selected expanded state continues to derive from that same retained result rather than a duplicate post copy;
+- per-post mutation queues preserve user action order at the server boundary, while per-post sequence numbers prevent older responses from overwriting newer optimistic intent;
+- latest failures reconcile to the last confirmed authoritative state; a 401 also transitions the UI auth state to signed out;
+- vote requests do not invoke feed/around, and the existing search `q`, canonical `/post/:id`, Back/Forward, Arrow/J/K navigation, stable row keys and 960-post retention logic were left intact;
+- comment voting, tag voting/mutations, comments, profiles, moderation/admin, uploads and Redis remain out of scope.
+
+Correctness coverage in the green candidate includes:
+
+- `0 -> +1`, `0 -> -1`, `+1 -> 0`, `-1 -> 0`, `+1 -> -1`, `-1 -> +1` with exact score assertions;
+- repeated explicit vote-state idempotence;
+- nonexistent post, unauthenticated mutation, cross-origin mutation, malformed/missing/null/out-of-range vote values;
+- two distinct users voting on the same post;
+- concurrent mixed vote mutations with the invariant `posts.score == baseScore + SUM(post_votes.value)`;
+- authenticated feed and around returning the requesting user's vote;
+- signed-out feed and around returning neutral vote state;
+- existing auth/search/feed/around/media/worker correctness suites.
+
+Performance/SQL preparation:
+
+- `src/backend/v2/bench/post_vote_seed.sql` adds 200,000 deterministic vote rows over the existing realistic 100,000-post/1,000-user benchmark fixture and analyzes `post_votes`;
+- `src/backend/v2/bench/post_vote_explain.sql` captures `EXPLAIN (ANALYZE, BUFFERS)` for authenticated first-page feed, old-cursor feed, around reconstruction, post-row lock, current-vote point lookup, vote upsert and score update;
+- those plans have **not yet been accepted** on the real PostgreSQL gate; no performance claim is recorded yet.
+
+Browser acceptance is also **pending**. The gate still must establish immediate optimistic up/down/remove, success reconciliation, failure rollback/reconciliation, rapid opposite-direction behavior without stale corruption, retained-post persistence after navigating away/back, searched-board `q` preservation, Back/Forward coherence, no feed/around request caused merely by voting a retained post, row mount/unmount delta, Long Task/update scope, and unchanged 960-post retention invariants.
+
+Decision: **do not integrate post voting into `v2` yet**. The exact executable candidate is eligible for the read-only local SQL/browser acceptance gate because applicable CI is green, but SQL plans and browser evidence remain mandatory integration gates.
 
 ## M4 search-connected board — accepted and integrated
 
@@ -137,4 +189,4 @@ Use local/server agents for browser/DevTools, SSH, real PostgreSQL, target bench
 
 ## Single best next task
 
-Begin the next M4 slice from current `v2`: implement **post voting** as the smallest authenticated mutation. First inspect the existing fresh schema/auth/feed contracts; add a thin Go mutation/workflow using numeric user/post IDs and transactional PostgreSQL state, expose the requesting user's current post vote in board data without extra per-post round trips, and connect optimistic SolidJS vote controls while preserving search/history/960-post retention and targeted row updates. Keep comment voting, tag voting/mutations and comments out of this slice. Check any new hot SQL with `EXPLAIN (ANALYZE, BUFFERS)` and browser-test rollback/error behavior plus retained-row update scope before integration.
+Run the **read-only M4 post-voting SQL/browser acceptance gate** against exact executable `e1c5d1f65e72a81615164bc6445bcdc2d8218381` (CI run `37313953385` green). Execute the committed realistic vote seed and `EXPLAIN (ANALYZE, BUFFERS)` scripts, exercise optimistic/reconciliation/failure/rapid-vote behavior plus retained-board/search/history/update-scope invariants in the browser, and return one retained `.local-agent-results/` ZIP with raw evidence and `findings.md`. Do not modify tracked source/config/docs, branches, deployments or persistent application state during this gate.
