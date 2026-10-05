@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-05
-Phase: **M4 connected core product in progress; comment voting accepted and pending integration**
+Phase: **M4 connected core product in progress; comment voting accepted and integrated**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -18,10 +18,10 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - search-connected board: **accepted and integrated**;
   - post voting: **accepted, SQL/browser-gated and integrated**;
   - nested comments read/create: **accepted, SQL/browser-gated and integrated**;
-  - comment voting: **accepted after PostgreSQL/browser gate; integration pending**;
+  - comment voting: **accepted, SQL/browser-gated and integrated**;
   - tag mutations and profiles remain.
 
-## M4 comment voting — accepted, integration pending
+## M4 comment voting — accepted and integrated
 
 Verified live GitHub `v2` base before this slice:
 
@@ -111,7 +111,25 @@ The isolated backend/nginx processes were stopped, both disposable databases wer
 
 Decision: **accept M4 comment voting**. The mutation is concurrency-safe and PostgreSQL-authoritative, read/write SQL is bounded and indexed at realistic scale, optimistic/stale/failure behavior is correct, and existing board/comment/navigation/update-scope invariants remain intact. No additional cache, global store, index, polling/event stream or virtualization layer is justified.
 
-Integration is still pending in this state snapshot. The accepted range must remain a pure non-force fast-forward from live `v2`, then post-fast-forward `v2 CI` must succeed before the slice is closed.
+### Integration verification
+
+Accepted history was non-force fast-forwarded on remote `v2`:
+
+`06f5ab361448cf6578626f792304b39b4ee9c164 -> 3c1731208fca815eac6d3e189f4951862fa98b1c`
+
+The range was a pure fast-forward and contained the exact executable candidate plus documentation-only state commits. No merge commit or force update was used.
+
+Post-fast-forward `v2 CI` run `37351495807`, job `111903167789`: **success**.
+
+- `head_branch=v2`;
+- `head_sha=3c1731208fca815eac6d3e189f4951862fa98b1c`;
+- exact checkout and SHA verification succeeded;
+- scoped v2 correctness gate succeeded;
+- target-worker release-build verification succeeded;
+- tracked checkout remained clean;
+- all job steps completed successfully.
+
+Integration decision: **comment voting is fully integrated and the M4 slice is closed**.
 
 ## M4 nested comments read/create — accepted and integrated
 
@@ -200,8 +218,8 @@ Do not pull these into the next slice without a concrete requirement:
 
 ## Unresolved issues
 
-No correctness, SQL-plan, browser-performance or architecture blocker remains from the accepted comment-voting implementation. The only remaining gate for this slice is integration: pure fast-forward to live GitHub `v2` followed by successful `v2 CI` on the resulting integration SHA.
+No unresolved correctness, SQL-plan, browser-performance, integration or architecture blocker remains from the comment-voting slice.
 
 ## Single best next task
 
-Fast-forward the accepted `astra/m4-comment-voting` history into current GitHub `v2` without force, verify post-integration `v2 CI`, then update this state with the resulting integration SHA/run and begin the M4 tag-mutation slice.
+Begin the **M4 tag-mutation** slice from current GitHub `v2`. Preserve the product rule that authenticated users may add tags while moderators/admins remove them; keep immutable numeric relational identity, parameterized/bounded SQL, current search/feed semantics, local targeted frontend updates and existing board/comment/navigation invariants. Do not pull profiles, Redis, global event streams or unrelated moderation work into the slice.
