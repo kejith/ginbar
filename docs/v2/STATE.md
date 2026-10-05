@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-05
-Phase: **M3 media pipeline — regeneration accepted; progress/status remains**
+Phase: **M3 media pipeline — regeneration accepted and integrated; progress/status remains**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -16,23 +16,31 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/architecture
 - M3 production worker runner, lease renewal, cancellation/recovery and hermetic release build: **accepted and integrated**.
 - M3 compatible-MP4 H.264/AAC zero-transcode publication + deterministic AVIF thumbnail: **accepted and integrated**.
 - M3 perceptual duplicate detection: **accepted after two target gates and integrated into `v2`**.
-- M3 regeneration: **accepted on feature branch after PostgreSQL-backed server CI; integration pending this state commit**.
+- M3 regeneration: **accepted and integrated into `v2`**.
 - M3 remains **in progress**: progress/status exposure/UI remains. Broader video transcoding is still deferred until a concrete product/input requirement defines the codec/container contract.
 
 ## Regeneration — accepted contract
 
 Feature branch: `astra/m3-regeneration`, branched from `v2` at `1b54204c84b45722cbac3af533e9515a8dbe3b3f`.
 
-Implementation commits:
+Relevant commits:
 
 - `8b8ae1b66cdcc98717694d8b2ae9d28b6176558b` — durable regeneration primitive, PostgreSQL request semantics, lookup migration, publication replacement semantics and focused tests;
-- `217dc165c03f823e2d7a777a339fd5a32c4fb8c1` — rustfmt-only correction; this is the exact executable candidate validated by final feature CI.
+- `217dc165c03f823e2d7a777a339fd5a32c4fb8c1` — rustfmt-only correction;
+- `36da67ea0c77774aca45cd1cb78d5e75ea33b31f` — first regeneration state/documentation integration commit;
+- `6dbed26bb1cceeb28e1b1b4899d32067d33a8987` — test-fixture-only PostgreSQL parameter typing correction; production code is unchanged from `217dc165c03f823e2d7a777a339fd5a32c4fb8c1`.
+
+Exact integrated executable state before this final state-only commit:
+
+`6dbed26bb1cceeb28e1b1b4899d32067d33a8987`
 
 Applicable CI:
 
-- feature run `37246198934`: **success** on exact SHA `217dc165c03f823e2d7a777a339fd5a32c4fb8c1`;
-- scoped server gate passed Rust fmt/check/tests/Clippy, Go vet/tests, PostgreSQL-backed integration tests, Cargo.lock stability, hermetic target-worker release build and clean tracked checkout;
-- prior run `37246073444` on `8b8ae1b66cdcc98717694d8b2ae9d28b6176558b` stopped at `cargo fmt --check` for one line wrap before compile/tests; no correctness failure was observed.
+- feature run `37246198934`: **success** on `217dc165c03f823e2d7a777a339fd5a32c4fb8c1`, including scoped v2 correctness, PostgreSQL-backed tests, hermetic target-worker release build and clean tracked checkout;
+- initial post-fast-forward `v2` run `37246461451` on `36da67ea0c77774aca45cd1cb78d5e75ea33b31f`: **failure** in the new Go regeneration fixture before the request under test because one setup query reused `$1` as both a `smallint` job state and an untyped integer expression; worker regeneration tests and the production regeneration path passed in that run;
+- repair feature run `37246617978`: **success** on `6dbed26bb1cceeb28e1b1b4899d32067d33a8987`;
+- post-fast-forward `v2` run `37246694427`: **success** on the same `6dbed26bb1cceeb28e1b1b4899d32067d33a8987`, including scoped correctness, PostgreSQL-backed tests, release build and clean tracked checkout;
+- earlier run `37246073444` on `8b8ae1b66cdcc98717694d8b2ae9d28b6176558b` stopped at `cargo fmt --check` for one line wrap before compile/tests; it exposed no correctness failure.
 
 Contract and state transitions:
 
