@@ -15,7 +15,8 @@ Measured and safe to state:
 - within-v2 SQL/query-shape improvements;
 - v2 media-ingestion/source-verification/publication/image/video processing costs;
 - API/media-worker coexistence and capacity tradeoffs on the target host;
-- v2 authentication KDF and auth lookup/query-plan costs from M4.
+- v2 authentication KDF and auth lookup/query-plan costs from M4;
+- v2 connected-board browser interaction, retention and DOM-scope costs from the accepted M4 browser gate.
 
 A direct v1/v2 comparison should be added only when both versions can be exercised with the same dataset, endpoint/interaction semantics, host state, concurrency and measurement method.
 
@@ -299,6 +300,45 @@ Decision: accept the auth target gate and retain the measured 64 MiB/t=1/p=1 Arg
 
 Target cleanup removed the disposable PostgreSQL container and detached candidate worktree; the canonical checkout remained on its original branch/HEAD with no tracked changes and Wallium services were not modified. The retained raw target directory may be deleted now that the uploaded evidence archive has been independently validated.
 
+## M4 connected-board browser/DevTools gate
+
+Exact tested executable revision: `e24105598e5c5440625126e29b29bd95201db5c1`.
+
+Exact pre-browser CI run: `37261434103`, success including all frontend tests, strict TypeScript checking, Vite production build, applicable worker-build verification and clean tracked checkout.
+
+Evidence bundle analyzed in the primary session: `m4-connected-board-20261005T042618Z.zip`, SHA-256 `124c847cb80a17ee6f4a2a01773ce32cb853b1aa77dee023074706d5541cd0a5`.
+
+Browser environment: Chrome for Testing 153.0.8010.12 in new headless mode on a WSL2 client with 20 logical CPUs and 15 GiB RAM. The disposable runtime used PostgreSQL 16.15, user-space nginx 1.24.0, Go 1.27.1 to build the Go 1.25 module, 1,200 released SFW posts, real AVIF/MP4 objects and a disposable auth/session fixture. These browser measurements are client-machine evidence, not target-server evidence.
+
+Accepted desktop 1440x900 selection results, eight columns:
+
+| interaction | sync p50 | sync p95 | sync max | frame p50 | frame p95 | frame max |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| same-row, 120 iterations | **0.6 ms** | **0.8 ms** | **1.8 ms** | **16.7 ms** | **16.8 ms** | **16.9 ms** |
+| cross-row, 120 iterations | **0.6 ms** | **0.8 ms** | **0.9 ms** | **16.6 ms** | **16.8 ms** | **28.5 ms** |
+
+Mobile 390x844, two columns, 60 iterations per pattern: same-row and cross-row sync p95 were both **0.8 ms**; frame p95 was **16.8 ms**; zero long tasks and zero row mount/unmount deltas were observed.
+
+Update-scope and bounded-state evidence:
+
+- warmed same-row/cross-row selection produced **zero feed/around requests** and **zero row mounts/unmounts**; selected-post media-status mount reads remained isolated to the selected component;
+- initial 120-post desktop state used **539 DOM nodes** and about **2.9 MB** reported heap;
+- retained 960-post state used **4,119 DOM nodes**, 120 rows, 960 thumbnails and about **12.3 MB** reported heap;
+- after **1,200 distinct posts** had been fetched in the retention gate, retained server state remained **<=960**, IDs remained unique/descending and both trim edges were exercised;
+- newer-edge recovery through the around endpoint restored the trimmed edge while keeping 960 retained posts;
+- prepend anchor residual was **-0.25 px**;
+- Long Tasks: **0** in every retained snapshot and selection run.
+
+Functional browser evidence also passed immediate retained-post shell selection, same-row placement, cross-row movement, canonical `/post/:id`, retained Back/Forward, Arrow/J/K navigation, cursor incremental loading, direct-link reconstruction and real image/video/thumbnail rendering. A fresh delayed `/post/600` direct link displayed its route shell at **42 ms**, made **zero initial feed requests**, then reconstructed 113 posts through one around request.
+
+Selected-post status polling was isolated to the selected post at approximately **2,002 ms** gaps while unresolved, stopped on selection change and unmount, and made only one mount request after the disposable job reached terminal `ready`. The authenticated browser session resolved `/api/v2/auth/me` successfully through nginx.
+
+The isolated nginx configuration passed `nginx -t` and served only the processed `/media/` subtree. Canonical AVIF/MP4 objects and AVIF thumbnails were delivered with correct media types; a decoy ingestion `sources/` object was not exposed. Auth POSTs through the isolated non-default port returned `403 origin_not_allowed` because the candidate uses `proxy_set_header Host $host`, which omits the explicit port; production default-port HTTPS is unaffected. This is recorded as a deployment caveat, not a gate failure.
+
+The accepted M1 synthetic 10,000-post numbers are only a historical reference: M1 same-row/cross-row sync p95 were 0.3/0.4 ms and cross-row frame p95 17.1 ms. The connected board was not rerun against M1 on the same machine, so no apples-to-apples speedup or regression claim is made.
+
+Decision: **accept the connected-board browser gate and the bounded 960-post architecture**. The evidence supports targeted selection reactivity, coherent routing/navigation, bounded retention, selected-post-only polling and direct nginx media delivery without introducing virtualization, a large store, Redis or another synchronization layer.
+
 ## Scheduling/isolation experiments
 
 Earlier saturated-c8 experiments tested unrestricted worker execution, reduced cgroup CPU weight, a 0.5 CPU quota and physical-core partitioning. Low weight did not materially protect the API; the 0.5 CPU quota made the standalone worker roughly **3.69x slower**; reserving a physical core imposed a large API capacity tax before worker work began. `perf` call-stack profiling was unavailable because the host used `perf_event_paranoid=4`; that setting was intentionally not changed.
@@ -312,4 +352,5 @@ Earlier saturated-c8 experiments tested unrestricted worker execution, reduced c
 5. Compatible-MP4 passthrough is accepted with one active media job: it avoids video transcoding, keeps memory small, and preserves correctness, while imposing a measurable c8 capacity cost that should be regression-tested.
 6. The PostgreSQL polling/lease-renewal runner remains the accepted baseline; current evidence does not justify scheduler/wakeup/admission infrastructure.
 7. M4 authentication accepts Argon2id 64 MiB/t=1/p=1 at about 44 ms for both hash and verify on the target; auth lookup SQL is bounded/index-backed. Eight concurrent verifications reached about 1.07 GiB RSS, so abuse/admission controls remain a production-hardening concern rather than a reason to weaken the KDF.
-8. There is still no valid overall v1-versus-v2 speedup number.
+8. M4 connected-board browser evidence accepts the 960-post bounded retention model: warmed desktop selection stayed at 0.8 ms sync p95 with zero row remounts and zero long tasks, while direct links, history/navigation, media delivery and selected-post polling behaved coherently in the disposable gate.
+9. There is still no valid overall v1-versus-v2 speedup number.
