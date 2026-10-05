@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-05
-Phase: **M3 media pipeline — perceptual duplicate detection accepted and integrated**
+Phase: **M3 media pipeline — regeneration accepted; progress/status remains**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -16,7 +16,49 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/architecture
 - M3 production worker runner, lease renewal, cancellation/recovery and hermetic release build: **accepted and integrated**.
 - M3 compatible-MP4 H.264/AAC zero-transcode publication + deterministic AVIF thumbnail: **accepted and integrated**.
 - M3 perceptual duplicate detection: **accepted after two target gates and integrated into `v2`**.
-- M3 remains **in progress**: regeneration and progress/status UI remain. Broader video transcoding is still deferred until a concrete product/input requirement defines the codec/container contract.
+- M3 regeneration: **accepted on feature branch after PostgreSQL-backed server CI; integration pending this state commit**.
+- M3 remains **in progress**: progress/status exposure/UI remains. Broader video transcoding is still deferred until a concrete product/input requirement defines the codec/container contract.
+
+## Regeneration — accepted contract
+
+Feature branch: `astra/m3-regeneration`, branched from `v2` at `1b54204c84b45722cbac3af533e9515a8dbe3b3f`.
+
+Implementation commits:
+
+- `8b8ae1b66cdcc98717694d8b2ae9d28b6176558b` — durable regeneration primitive, PostgreSQL request semantics, lookup migration, publication replacement semantics and focused tests;
+- `217dc165c03f823e2d7a777a339fd5a32c4fb8c1` — rustfmt-only correction; this is the exact executable candidate validated by final feature CI.
+
+Applicable CI:
+
+- feature run `37246198934`: **success** on exact SHA `217dc165c03f823e2d7a777a339fd5a32c4fb8c1`;
+- scoped server gate passed Rust fmt/check/tests/Clippy, Go vet/tests, PostgreSQL-backed integration tests, Cargo.lock stability, hermetic target-worker release build and clean tracked checkout;
+- prior run `37246073444` on `8b8ae1b66cdcc98717694d8b2ae9d28b6176558b` stopped at `cargo fmt --check` for one line wrap before compile/tests; no correctness failure was observed.
+
+Contract and state transitions:
+
+- regeneration reuses the existing kind-0 media-processing job row and the existing worker/processor/publication path; there is no new job kind, table, worker, queue or event system;
+- a released, non-deleted post with authoritative `media_sources` and ready `media` can request regeneration;
+- succeeded or failed kind-0 work is reactivated by resetting the same job to pending, clearing prior claim/error state and resetting attempts;
+- a duplicate request while the job is already pending coalesces without resetting retry/backoff or lease generation;
+- a request while the job is running supersedes the running attempt by returning the same job to pending and incrementing `lease_generation`; stale ownership therefore fails the existing publication fence;
+- initial ingestion/processing without last-known-good ready media is not treated as regeneration and is left untouched;
+- the currently ready/released media remains authoritative while regeneration is pending/running and after regeneration failure; requesting regeneration never hides an already valid released post;
+- terminal regeneration failure changes only the durable job outcome and does not destroy the last known-good `media` publication;
+- unchanged source/current processing version follows the existing deterministic output-key path and verified file reuse; no overwrite or random output naming is introduced;
+- successful publication remains fenced by job state, worker ownership, `lease_generation`, authoritative source digest and post state;
+- publication conflict handling now atomically replaces the authoritative `media` storage key, output digest and metadata after all existing fences pass, so a future output-affecting processing-version/source change can replace prior media without a second pipeline;
+- regenerated still/video work therefore derives perceptual hash through the same accepted processors and publishes it through the same authoritative transaction;
+- processing version remains version 1 because this slice changes orchestration/publication semantics, not output bytes or codec behavior.
+
+SQL/index shape:
+
+- regeneration lookup prioritizes an active kind-0 job for the post, otherwise the latest durable kind-0 row, locks that job row, and performs the request transition transactionally;
+- migration `005_media_job_regeneration_lookup.sql` adds `media_jobs_post_kind_id_idx ON media_jobs (post_id, kind, id DESC)` so the common completed-job regeneration lookup is bounded instead of scanning durable job history;
+- the new query is request-only/cold-path work. It does not change normal feed queries, idle polling, worker claim shape, codec execution or steady-state dispatch cost.
+
+Performance decision:
+
+No target API-coexistence rerun or new performance gate was required. Regeneration is dormant when unused, reuses the existing processing/claim/codec path when invoked, and adds no polling table, worker, normal-feed query, source reread, copy or second encode/decode pass. The only new lookup is an explicit on-demand regeneration request and is backed by the dedicated `(post_id, kind, id DESC)` index. No new hot steady-state SQL shape was introduced, so an additional `EXPLAIN (ANALYZE, BUFFERS)` target gate was not justified for this slice. `PERFORMANCE.md` is unchanged.
 
 ## Perceptual duplicate detection — accepted contract
 
@@ -26,7 +68,7 @@ Exact executable candidate validated on target and accepted:
 
 `2cef9a9d309639855a9e5b14cfa19191f40acbe5`
 
-Accepted feature/integration state before this final state-only commit:
+Accepted feature/integration state before its final state-only commit:
 
 `a87036320ad1b3aa9ef07e4acafbb0c87cf67bcb`
 
@@ -168,14 +210,13 @@ Do not add broader video transcoding until a concrete required input/browser/pro
 
 ## Remaining M3 work
 
-- regeneration;
-- progress/status UI;
+- progress/status exposure and UI built from durable job state;
 - decide whether broader video transcoding is required only from concrete product/input evidence;
 - exact WebM/EBML acceptance remains deferred until container distinction and browser-compatibility behavior are explicit.
 
 Deferred operational cleanup:
 
-- ingestion-source and processed-staging orphan reconciliation/janitor;
+- ingestion-source, processed-staging and superseded deterministic-output orphan reconciliation/janitor;
 - deployment UID/GID/media-storage permissions;
 - stronger `openat2`/`O_NOFOLLOW` hardening only if the local media-tree threat model changes;
 - v1-v2 apples-to-apples benchmark once equivalent end-to-end behavior exists.
@@ -186,4 +227,4 @@ Use local/server agents for browser/DevTools, SSH, real PostgreSQL, target-serve
 
 ## Single best next task
 
-Begin the **M3 regeneration contract** from current `v2`: define the smallest durable regeneration workflow that reuses the existing processing-version identity, PostgreSQL job ownership/generation fencing and deterministic no-overwrite outputs without creating a second media-processing path. Inspect current schema/job/publication boundaries first, then implement and validate the minimal coherent slice.
+Implement the **M3 progress/status exposure and UI** on top of the authoritative durable `media_jobs` state and existing ingestion/regeneration lifecycle. Define the smallest bounded status API needed by the frontend, then add UI that reflects pending/running/retry/failure/success without introducing SSE, WebSockets, Redis pub/sub or a parallel progress/event system.
