@@ -268,16 +268,20 @@ const App: Component = () => {
       replaceServerWindow(page.posts);
       setHasNewer(false);
       setHasOlder(Boolean(page.nextBefore));
-    } catch (error) {
+    } catch {
       if (!controller.signal.aborted) setFeedError(true);
     } finally {
-      if (initialController === controller) initialController = undefined;
-      if (!controller.signal.aborted) setInitialLoading(false);
+      if (initialController === controller) {
+        initialController = undefined;
+        setInitialLoading(false);
+      }
     }
   };
 
   const loadRoutePost = async (id: number) => {
     initialController?.abort();
+    initialController = undefined;
+    setInitialLoading(false);
     routeController?.abort();
     const controller = new AbortController();
     routeController = controller;
@@ -316,7 +320,6 @@ const App: Component = () => {
   const syncRoute = () => {
     const id = postIdFromPath(window.location.pathname);
     setRoutePostId(id);
-    routeSequence += 1;
     routeController?.abort();
 
     if (id === null) {
@@ -410,7 +413,7 @@ const App: Component = () => {
         setHasNewer(incoming.length >= radius);
         if (merged.trimmedOlder > 0) setHasOlder(true);
         restoreViewportAnchor(anchor);
-      } catch (error) {
+      } catch {
         if (!controller.signal.aborted) setFeedError(true);
       }
     })().finally(() => {
@@ -554,15 +557,17 @@ const App: Component = () => {
   };
 
   onMount(() => {
-    const resizeObserver = new ResizeObserver(([entry]) => {
-      const width = entry.contentRect.width;
+    const applyBoardWidth = (width: number) => {
       const nextColumns = columnsForWidth(width);
       const gapPx = 2;
       const rowSize = Math.max(1, (width - Math.max(0, nextColumns - 1) * gapPx) / nextColumns + gapPx);
       boardElement.style.setProperty("--columns", String(nextColumns));
       boardElement.style.setProperty("--row-size", `${rowSize}px`);
       setColumns(nextColumns);
-    });
+    };
+
+    applyBoardWidth(boardElement.getBoundingClientRect().width || window.innerWidth);
+    const resizeObserver = new ResizeObserver(([entry]) => applyBoardWidth(entry.contentRect.width));
     resizeObserver.observe(boardElement);
 
     const intersectionObserver = new IntersectionObserver(
@@ -732,9 +737,7 @@ const Thumbnail: Component<{ post: PostSummary; selected: boolean; onSelect(id: 
       onClick={() => props.onSelect(props.post.id)}
     >
       <Show when={thumbnailURL()} fallback={<span class="thumbnail-placeholder" aria-hidden="true" />}>
-        {(url) => (
-          <img src={url()} width="256" height="256" alt="" loading="lazy" decoding="async" />
-        )}
+        {(url) => <img src={url()} width="256" height="256" alt="" loading="lazy" decoding="async" />}
       </Show>
       <span class="thumbnail-id">#{props.post.id}</span>
       <span class="thumbnail-score">{props.post.score}</span>
