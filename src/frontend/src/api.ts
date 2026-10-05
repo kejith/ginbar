@@ -42,6 +42,22 @@ export interface PostVoteResult {
   vote: PostVote;
 }
 
+export interface Comment {
+  id: number;
+  postId: number;
+  authorId: number;
+  parentCommentId: number | null;
+  body?: string;
+  score: number;
+  createdAt: string;
+  deleted: boolean;
+}
+
+export interface CommentPage {
+  comments: Comment[];
+  nextAfter?: number;
+}
+
 interface AuthResponse {
   user: CurrentUser;
 }
@@ -124,6 +140,45 @@ export async function setPostVote(postId: number, vote: PostVote): Promise<PostV
       body: JSON.stringify({ vote }),
     }),
     "post vote",
+  );
+}
+
+export async function fetchComments(
+  postId: number,
+  after = 0,
+  limit = 100,
+  signal?: AbortSignal,
+): Promise<CommentPage> {
+  const query = new URLSearchParams({ limit: String(limit) });
+  if (after > 0) query.set("after", String(after));
+  return parseJSON<CommentPage>(
+    await fetch(`/api/v2/posts/${postId}/comments?${query}`, {
+      signal,
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    }),
+    "comments",
+  );
+}
+
+export async function createComment(
+  postId: number,
+  body: string,
+  parentCommentId?: number,
+  signal?: AbortSignal,
+): Promise<Comment> {
+  return parseJSON<Comment>(
+    await fetch(`/api/v2/posts/${postId}/comments`, {
+      method: "POST",
+      signal,
+      credentials: "same-origin",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ body, ...(parentCommentId === undefined ? {} : { parentCommentId }) }),
+    }),
+    "comment",
   );
 }
 
