@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-05
-Phase: **M4 connected core product in progress; auth/session foundation accepted and integrated**
+Phase: **M4 connected core product in progress; connected board candidate is CI-green and awaiting browser/DevTools gate**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -12,7 +12,39 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
 - M1 board performance prototype: **complete and integrated**.
 - M2 fresh PostgreSQL schema + core Go API: **complete and integrated**.
 - M3 media pipeline: **complete for the accepted v2 scope and integrated**.
-- M4 connected core product: **in progress; authentication/session foundation is accepted, target-gated and integrated**.
+- M4 connected core product: **in progress; authentication/session foundation is accepted and integrated, connected board/API/session candidate is CI-green with browser acceptance pending**.
+
+## M4 connected board/API/session boundary — candidate, browser gate pending
+
+Feature branch: `astra/m4-connected-board`, branched from `v2` at `6019dcabce1df1823bc5fa5352f4a26f2ddf945b`.
+
+Exact executable candidate:
+
+`e24105598e5c5440625126e29b29bd95201db5c1`
+
+Applicable exact-candidate CI run `37261434103`: **success**, including all frontend tests, strict TypeScript checking, Vite production build, applicable worker-build skip verification and clean tracked checkout.
+
+Implemented boundary:
+
+- the real SolidJS board boots session state once from `GET /api/v2/auth/me`; `401` becomes signed-out state and other auth-read failures are isolated from the public board read path;
+- root board boot uses the existing post-ID cursor feed only; direct `/post/:id` reconstruction uses the existing `/api/v2/posts/:id/around` endpoint only, avoiding an extra feed round trip;
+- user selection of an already-retained post updates the selected row/expanded shell and canonical history path synchronously before any network work; direct links show a route shell immediately while around data is fetched;
+- route state, ephemeral selection/keyboard state and retained server state are separate; no legacy v1 stores/components or new state-management dependency were introduced;
+- same-row selection keeps the expanded slot in place; cross-row selection moves it below the newly selected row; Back/Forward reuses retained data when possible and reconstructs evicted direct-link context through the around endpoint;
+- Arrow keys and J/K navigate the retained ID-descending window and request the next cursor/around window only when navigation reaches a retained boundary;
+- feed pages are 120 posts, around radius is aligned to complete thumbnail rows up to the backend radius cap, and retained server state is bounded at 960 posts with row-sized trimming and selected-post preservation;
+- newer-window prepends use viewport-anchor correction; row identity is keyed by the first retained post ID and selection uses Solid selectors so selection itself does not rebuild the server window;
+- thumbnail and expanded media use authoritative v2 media dimensions; AVIF thumbnails are derived from the worker's canonical AVIF/MP4 storage-key contract with no extra API request;
+- nginx now exposes only the processed `media/` subtree at `/media/` for immutable static delivery; ingestion `sources/` is not exposed by the added route;
+- the accepted reusable `MediaStatus` component is mounted only for the selected expanded post, preserving its bounded polling and abort-on-change/unmount/terminal behavior;
+- browser instrumentation is exposed only as `window.__ginbarM4` and records same-row/cross-row selection sync/frame timings, row mount/unmount counts, retained/DOM counts, long tasks and invariants for the pending browser gate;
+- no backend feed/around/auth contract change, OFFSET pagination, Redis/JWT dependency, votes, tags, comments, uploads, profiles or moderation work was added in this slice.
+
+Focused helper coverage validates row-aligned around radii, canonical/thumbnail media paths, ID-descending deduplicated merge behavior, whole-row bounded trimming, selected-post preservation and duplicate object identity. Exact-candidate CI passed **17/17 frontend tests**, `tsc --noEmit`, and the production Vite build. Candidate production output was `0.46 kB` HTML (`0.29 kB` gzip), `3.69 kB` CSS (`1.45 kB` gzip) and `32.67 kB` JavaScript (`12.14 kB` gzip), with source maps enabled.
+
+No connected-board performance claim is accepted yet. Browser/DevTools evidence is still required for immediate shell timing, same-row/cross-row update scope, direct-link reconstruction, Back/Forward, Arrow/J/K navigation, incremental loading, the 960-post retention bound, viewport stability on newer prepends, selected-post polling cancellation/terminal behavior, real media/thumbnail delivery, production bundle behavior and actual row/DOM update scope. The target/browser gate should also syntax/serve-check the new `/media/` nginx mapping in an isolated configuration because the current scoped frontend CI does not lint nginx configuration.
+
+Decision: **do not integrate or add votes/tags/comments yet**. The exact CI-green executable candidate must pass the browser/DevTools gate first.
 
 M3 accepted scope now includes:
 
@@ -232,4 +264,4 @@ Use local/server agents for browser/DevTools, SSH, real PostgreSQL, target bench
 
 ## Single best next task
 
-Begin the next M4 slice from current `v2`: define and implement the minimal frontend v2 API/session boundary that boots authentication state from `GET /api/v2/auth/me` and replaces the synthetic M1 board feed/around data with the existing v2 feed and `/api/v2/posts/:id/around` endpoints while preserving immediate expanded-shell selection, canonical `/post/:id`, Back/Forward coherence, Arrow/J/K navigation, bounded retention and selected-post media-status polling. Do not port the legacy v1 stores/components wholesale; keep route, ephemeral UI and server state separate, and browser-test/benchmark the connected board before adding votes, tags or comments.
+Run the browser/DevTools acceptance gate against exact CI-green executable candidate `e24105598e5c5440625126e29b29bd95201db5c1`: validate the connected real-API board and `/media/` delivery in an isolated disposable environment, measure immediate same-row/cross-row selection and row/DOM update scope, exercise direct-link reconstruction, Back/Forward, Arrow/J/K navigation, incremental cursor loading, the 960-post retention bound, newer-prepend viewport stability and selected-post media-status polling cleanup, and return retained raw evidence for primary-session review before integration or any votes/tags/comments work.
