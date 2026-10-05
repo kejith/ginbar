@@ -30,28 +30,35 @@ Broader video transcoding, exact WebM/EBML acceptance and operational orphan/jan
 
 ## M4 authentication/session foundation — candidate awaiting target gate
 
-Feature branch: `astra/m4-auth-session`, branched from `v2` at `24aba0cda53641f7ef1cf107bbe7611b1803fca6`.
+Original implementation branch: `astra/m4-auth-session`, branched from `v2` at `24aba0cda53641f7ef1cf107bbe7611b1803fca6`.
+
+Reviewed candidate branch: `astra/m4-auth-session-review`, created as a descendant after the original feature branch was observed advancing concurrently during review so review corrections would not race or overwrite that branch.
 
 CI-green executable candidate:
 
-`33d72e7b5d56fe9bf8608b305984d4e150646fd5`
+`15e2d5d187d660fe81ecdc7864fe6f0e206a8a7b`
 
 Relevant commits:
 
 - `fd72a4069859dda718d677c080dc67ff4677cf0c` — invitation registration, Argon2id password credentials, opaque PostgreSQL sessions, auth HTTP boundary, migration `006_auth_sessions.sql`, focused service/store/HTTP/security/concurrency tests and deterministic KDF benchmarks;
-- `33d72e7b5d56fe9bf8608b305984d4e150646fd5` — align the Go workspace dependency graph with `x/text`'s required `x/sync v0.22.0` so readonly CI does not attempt to create `go.work.sum`.
+- `33d72e7b5d56fe9bf8608b305984d4e150646fd5` — align the Go workspace dependency graph with `x/text`'s required `x/sync v0.22.0` so readonly CI does not attempt to create `go.work.sum`;
+- `b5582995d1171b0849c52ca4fb58186bf69c5650` and `e79c86281f9d618e8ba7803831f391b11de701fd` — state-only candidate/target-gate documentation;
+- `5dd2733ffbfcb33e8926cdb3de4d58e8af1bf0a2` — reject oversized encoded password verifiers before split/base64 decode and add a deterministic realistic auth SQL query-plan fixture at `src/backend/v2/bench/auth_explain.sql`;
+- `15e2d5d187d660fe81ecdc7864fe6f0e206a8a7b` — apply the required Go formatting to the verifier bound; executable behavior is otherwise the same as `5dd2733...`.
 
 Applicable CI:
 
 - run `37256793597` on `fd72a4069859dda718d677c080dc67ff4677cf0c`: **failed before Go tests** because the readonly workspace needed the selected `golang.org/x/sync v0.22.0` checksum; Rust regression coverage had already passed and the tracked checkout remained clean;
-- run `37256998256` on `33d72e7b5d56fe9bf8608b305984d4e150646fd5`: **success**, including scoped Go 1.25 formatting/vet/PostgreSQL-backed correctness, migration-triggered Rust regression checks, hermetic target-worker release build and clean tracked checkout.
+- run `37256998256` on `33d72e7b5d56fe9bf8608b305984d4e150646fd5`: **success**, including scoped Go 1.25 formatting/vet/PostgreSQL-backed correctness, migration-triggered Rust regression checks, hermetic target-worker release build and clean tracked checkout;
+- run `37257449979` on `5dd2733ffbfcb33e8926cdb3de4d58e8af1bf0a2`: **failed at the formatting gate only** because the new constant changed `gofmt` alignment; the tracked checkout remained clean and no target handoff was performed from this revision;
+- run `37257570130` on exact executable candidate `15e2d5d187d660fe81ecdc7864fe6f0e206a8a7b`: **success**, including the applicable scoped v2 correctness gate, PostgreSQL-backed auth tests, migration-triggered checks, hermetic target-worker release build and clean tracked checkout.
 
 Implemented contract:
 
 - immutable numeric `users.id` remains relational identity; username is not an authorization/foreign-key identity;
 - existing credential kind `0` is used as the initial password credential slot; existing user status `0` is treated as active/default according to the M2 schema semantics; `user_identities` remains independent for later OIDC/OAuth/passkey/email identities;
 - no baseline ordinary-user role is created because current schema/product semantics do not require one;
-- passwords use `golang.org/x/crypto/argon2` Argon2id with a self-describing verifier containing algorithm/version/parameters/salt/hash; password input is bounded to 12-1024 bytes before KDF work and stored verifier parameters are bounded before allocation/work;
+- passwords use `golang.org/x/crypto/argon2` Argon2id with a self-describing verifier containing algorithm/version/parameters/salt/hash; password input is bounded to 12-1024 bytes before KDF work, stored verifier parameters are bounded before Argon2 allocation/work, and the complete encoded verifier is capped at 512 bytes before string splitting/base64 decoding so malformed persisted values cannot cause unbounded decode allocation;
 - current provisional Argon2id default is 64 MiB memory, one iteration, parallelism one, 16-byte random salt and 32-byte output; this is **not accepted until target-host measurement**;
 - registration validates cheap request bounds, hashes the invitation token with SHA-256, performs an indexed availability precheck, hashes the password outside the transaction, then transactionally locks/revalidates the invitation with `FOR UPDATE`, creates the user and kind-0 credential, claims the invitation by numeric user ID and commits atomically;
 - raw passwords, invitation tokens and session tokens are never persisted by the implemented boundaries; stable API errors do not echo supplied secrets or stored verifiers;
@@ -68,18 +75,20 @@ Implemented contract:
 - nonexistent usernames return the same public invalid-credentials shape but intentionally do not run a dummy Argon2 hash in this slice, avoiding an attacker-controlled KDF path before rate-limit/abuse policy is designed and measured;
 - existing unauthenticated feed/media-status read behavior remains unchanged; this slice does not connect board mutations, uploads, votes, tags, comments, full profiles, moderation/admin, private messages, Redis or JWT infrastructure.
 
-Focused tests cover password verifier round-trip/random salt/malformed verifier/input bounds; invitation state and rollback; case-insensitive duplicate and same-invitation concurrency; session token hashing, independent sessions, expiry, revocation, user status and non-mutating lookup; cookie attributes; origin/CSRF policy; bounded HTTP bodies; stable unauthorized semantics; and secret non-echo behavior. Existing M1-M3 applicable regression checks remain green in CI.
+Focused tests cover password verifier round-trip/random salt/malformed verifier/input bounds including the encoded-verifier hard cap; invitation state and rollback; case-insensitive duplicate and same-invitation concurrency; session token hashing, independent sessions, expiry, revocation, user status and non-mutating lookup; cookie attributes; origin/CSRF policy; bounded HTTP bodies; stable unauthorized semantics; and secret non-echo behavior. Existing M1-M3 applicable regression checks remain green in CI.
 
 Prepared deterministic target KDF benchmarks cover hash cost, verify cost, parallel verification pressure and parameter candidates `32MiB-t2`, `64MiB-t1`, `64MiB-t2`, and `128MiB-t1`.
 
+Prepared deterministic PostgreSQL fixture `src/backend/v2/bench/auth_explain.sql` is for a disposable database only. It creates 100,000 users/credentials, 100,000 invitations and 500,000 sessions, analyzes the tables, then runs `EXPLAIN (ANALYZE, BUFFERS)` for the exact session token-hash resolution, case-insensitive username/password-credential lookup, invitation availability lookup and invitation `FOR UPDATE` registration lock shapes.
+
 ### Pending target acceptance gate
 
-No target-host KDF benchmark or realistic auth SQL query-plan evidence has been accepted yet. The target gate is pinned to exact executable candidate `33d72e7b5d56fe9bf8608b305984d4e150646fd5`, which has green CI run `37256998256`. Later state-only documentation commits are not substitute executable candidates. This gate is required before integration because Argon2 cost is hardware-sensitive and session lookup will become request-path hot.
+No target-host KDF benchmark or realistic auth SQL query-plan evidence has been accepted yet. The target gate is pinned to exact executable candidate `15e2d5d187d660fe81ecdc7864fe6f0e206a8a7b`, which has green CI run `37257570130`. Later state-only documentation commits are not substitute executable candidates. This gate is required before integration because Argon2 cost is hardware-sensitive and session lookup will become request-path hot.
 
-Target evidence must measure exact executable candidate `33d72e7b5d56fe9bf8608b305984d4e150646fd5`, including:
+Target evidence must measure exact executable candidate `15e2d5d187d660fe81ecdc7864fe6f0e206a8a7b`, including:
 
 - hash/registration and verify/login Argon2 cost, CPU behavior, peak/representative memory, and parallel verification pressure on the shared i7-7700-class target;
-- `EXPLAIN (ANALYZE, BUFFERS)` for production-shaped session token-hash resolution, username/password-credential lookup and invitation token lookup/lock against realistic row counts;
+- `EXPLAIN (ANALYZE, BUFFERS)` from the committed `auth_explain.sql` fixture against disposable PostgreSQL 17;
 - evidence that the unique session token-hash index, existing case-insensitive username index and existing invitation token-hash index bound the intended hot paths without request-path writes or sequential scans.
 
 Do not weaken KDF parameters merely for throughput. If target measurements justify changing the provisional default, change it here, rerun applicable CI and repeat the exact target measurement before acceptance. No broader API coexistence benchmark is required unless the KDF measurements show material interactive concurrency risk.
@@ -190,4 +199,4 @@ Use local/server agents for browser/DevTools, SSH, real PostgreSQL, target bench
 
 ## Single best next task
 
-Run the **target-host M4 authentication KDF + PostgreSQL auth query-plan gate** against exact executable candidate `33d72e7b5d56fe9bf8608b305984d4e150646fd5` (CI run `37256998256` green), then return the retained evidence ZIP for review here. Do not integrate the auth slice into `v2` until that evidence is reviewed and the password parameters/query shapes are accepted.
+Run the **target-host M4 authentication KDF + PostgreSQL auth query-plan gate** against exact executable candidate `15e2d5d187d660fe81ecdc7864fe6f0e206a8a7b` (CI run `37257570130` green), then return the retained evidence ZIP for review here. Do not integrate the auth slice into `v2` until that evidence is reviewed and the password parameters/query shapes are accepted.
