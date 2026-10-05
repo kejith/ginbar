@@ -163,7 +163,10 @@ func TestFeedAndAroundExposeViewerVoteWithoutChangingSignedOutRead(t *testing.T)
 func createVoteUser(t *testing.T, store *Store, suffix string) int64 {
 	t.Helper()
 	var userID int64
-	username := fmt.Sprintf("%s-%d", suffix, time.Now().UnixNano())
+	if len(suffix) > 8 {
+		suffix = suffix[:8]
+	}
+	username := fmt.Sprintf("%s-%x", suffix, time.Now().UnixNano())
 	if err := store.pool.QueryRow(context.Background(), "INSERT INTO users (username) VALUES ($1) RETURNING id", username).Scan(&userID); err != nil {
 		t.Fatal(err)
 	}
