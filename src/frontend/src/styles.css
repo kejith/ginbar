@@ -10,7 +10,8 @@
 
 html { background: #0b0d10; }
 body { margin: 0; min-width: 280px; min-height: 100vh; }
-button { font: inherit; }
+button,
+input { font: inherit; }
 
 .app-shell { min-height: 100vh; }
 
@@ -29,6 +30,44 @@ button { font: inherit; }
 .topbar > div { display: flex; align-items: baseline; gap: 0.8rem; }
 .topbar span { color: #929aa6; font-size: 0.8rem; }
 .topbar-meta { white-space: nowrap; }
+
+.search-bar {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 0.75rem;
+  border-bottom: 1px solid #272c34;
+  background: #0f1216;
+}
+
+.search-bar label {
+  color: #aeb6c1;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.search-bar input {
+  width: 100%;
+  min-width: 0;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid #343b46;
+  outline: none;
+  color: inherit;
+  background: #171b21;
+}
+
+.search-bar input:focus { border-color: #697586; }
+
+.search-bar button {
+  padding: 0.5rem 0.7rem;
+  border: 1px solid #343b46;
+  color: inherit;
+  background: #1a1f26;
+  cursor: pointer;
+}
+
+.search-bar button:hover { background: #222832; }
 
 .board-message,
 .route-shell {
@@ -198,6 +237,18 @@ button { font: inherit; }
 
 @media (max-width: 720px) {
   .topbar-meta { display: none !important; }
+  .search-bar { grid-template-columns: minmax(0, 1fr) auto auto; }
+  .search-bar label {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+    border: 0;
+  }
   .route-shell { display: grid; gap: 0.3rem; }
   .expanded-post { grid-template-columns: 1fr; }
   .expanded-meta { position: static; grid-template-columns: 1fr auto; align-items: start; }
