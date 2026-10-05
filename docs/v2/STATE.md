@@ -34,9 +34,9 @@ Implementation branch:
 
 Exact executable candidate:
 
-`a5ff30597efd718f7ab5b6488ebc9c762197fff1`
+`1d67cfde2847a3b10aa44bb799ae878a39e36a55`
 
-Exact-candidate `v2 CI` run `37356154056`, job `111918951457`: **success**.
+Exact-candidate `v2 CI` run `37359169575`, job `111929122699`: **success**.
 
 - exact SHA checkout/verification passed;
 - scoped v2 correctness gate passed, including the new PostgreSQL-backed tag mutation tests and retained v2 suites;
@@ -55,6 +55,7 @@ Exact-candidate `v2 CI` run `37356154056`, job `111918951457`: **success**.
 - Existing feed/around row shape and search SQL are unchanged. Search continues to match active `post_tags` using existing include/exclude semantics. The selected-post tag endpoint avoids adding per-post tag materialization work to every hot feed/around row.
 - Add/remove responses return the full authoritative selected-post tag snapshot, including whether the current viewer may remove tags. Successful frontend mutations therefore do not reload feed/around solely for reconciliation.
 - Frontend tag state is local to the expanded post and authoritative-first. Same-row selection changes abort/invalidate old load/mutation work by post ID plus epoch; cross-row/unmount cleanup aborts in-flight work. Old-selection or mismatched-post responses cannot update the newly selected post.
+- Deterministic 400/401/403/404 mutation failures retain the last authoritative snapshot without an extra read. Transport failures and 5xx responses can have ambiguous commit outcomes, so the frontend performs one focused post-tag GET and applies it only if the same post/epoch is still active; failed reconciliation keeps the last authoritative snapshot plus the visible mutation error.
 - The board shell still updates immediately on selection; tag loading is independent of shell rendering. No large global store or whole-board replacement was introduced.
 
 ### Candidate correctness coverage
@@ -74,6 +75,7 @@ The exact-candidate suites cover:
 - same-origin rejection before mutation;
 - authoritative HTTP response state;
 - stale-selection/epoch/aborted-response frontend isolation;
+- ambiguous-failure reconciliation classification for transport/5xx versus deterministic client/auth/not-found failures;
 - retained auth/feed/search/post-vote/comment/comment-vote suites via normal v2 CI.
 
 ### Pending acceptance gate
@@ -97,7 +99,7 @@ Required browser/real-API evidence should cover at minimum:
 - selected-post shell remains immediate while tag state loads independently;
 - signed-in ordinary user can add and receives authoritative normalized/idempotent state;
 - moderator/admin remove works and ordinary-user/signed-out/cross-origin remove/add failures produce zero unauthorized DB mutation;
-- failed mutations keep/reconcile the last authoritative tag snapshot and expose a usable error;
+- failed mutations keep/reconcile the last authoritative tag snapshot and expose a usable error, including an ambiguous transport/5xx path that performs only the focused tag-state reconciliation read;
 - same-row and cross-row selection changes while tag reads/mutations are delayed do not leak stale state;
 - successful add/remove causes no feed/around reconciliation request when the tag response is sufficient;
 - unrelated thumbnail rows/DOM identity, route/search/Back/Forward/Arrow/J/K behavior and existing post/comment UI remain coherent;
@@ -305,11 +307,11 @@ Do not pull these into the next slice without a concrete requirement:
 
 ## Unresolved issues
 
-- Tag mutations are not yet accepted: realistic-scale PostgreSQL plans and isolated browser/real-API behavior still require retained evidence against exact executable `a5ff30597efd718f7ab5b6488ebc9c762197fff1`.
+- Tag mutations are not yet accepted: realistic-scale PostgreSQL plans and isolated browser/real-API behavior still require retained evidence against exact executable `1d67cfde2847a3b10aa44bb799ae878a39e36a55`.
 - The selected-post tag query is constrained by immutable post ID and indexed relations but there is no explicit numeric per-post tag-count cap in the current schema. Validate realistic cardinality in the gate; only add a cap/pagination/index if evidence or product requirements justify it.
 
 No unresolved correctness, SQL-plan, browser-performance, integration or architecture blocker remains from the accepted comment-voting slice.
 
 ## Single best next task
 
-Run the isolated **M4 tag-mutation SQL/browser acceptance gate** against exact executable `a5ff30597efd718f7ab5b6488ebc9c762197fff1` after confirming exact-candidate CI run `37356154056` / job `111918951457` remains green. Use realistic tag/post-tag scale, capture `EXPLAIN (ANALYZE, BUFFERS)` for the new read/write shapes, exercise real API/browser add/remove/auth/stale-selection/update-scope behavior, retain the standard evidence ZIP, and inspect that evidence here before any integration into `v2`.
+Run the isolated **M4 tag-mutation SQL/browser acceptance gate** against exact executable `1d67cfde2847a3b10aa44bb799ae878a39e36a55` after confirming exact-candidate CI run `37359169575` / job `111929122699` remains green. Use realistic tag/post-tag scale, capture `EXPLAIN (ANALYZE, BUFFERS)` for the new read/write shapes, exercise real API/browser add/remove/auth/stale-selection/failure-reconciliation/update-scope behavior, retain the standard evidence ZIP, and inspect that evidence here before any integration into `v2`.
