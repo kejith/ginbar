@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-05
-Phase: **M4 connected core product in progress; auth/session candidate CI-green, target auth gate pending**
+Phase: **M4 connected core product in progress; auth/session foundation target-gated and accepted, integration pending**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -12,7 +12,7 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
 - M1 board performance prototype: **complete and integrated**.
 - M2 fresh PostgreSQL schema + core Go API: **complete and integrated**.
 - M3 media pipeline: **complete for the accepted v2 scope and integrated**.
-- M4 connected core product: **in progress; authentication/session foundation implemented on a feature branch and awaiting target-host KDF/query-plan acceptance evidence**.
+- M4 connected core product: **in progress; authentication/session foundation is implemented, CI-green, target-gated and accepted, with integration into `v2` pending**.
 
 M3 accepted scope now includes:
 
@@ -28,13 +28,13 @@ M3 accepted scope now includes:
 
 Broader video transcoding, exact WebM/EBML acceptance and operational orphan/janitor hardening remain deferred until concrete product/production requirements justify them; they do not block the accepted M3 gate.
 
-## M4 authentication/session foundation — candidate awaiting target gate
+## M4 authentication/session foundation — accepted, integration pending
 
 Original implementation branch: `astra/m4-auth-session`, branched from `v2` at `24aba0cda53641f7ef1cf107bbe7611b1803fca6`.
 
 Reviewed candidate branch: `astra/m4-auth-session-review`, created as a descendant after the original feature branch was observed advancing concurrently during review so review corrections would not race or overwrite that branch.
 
-CI-green executable candidate:
+Target-gated executable candidate:
 
 `15e2d5d187d660fe81ecdc7864fe6f0e206a8a7b`
 
@@ -44,7 +44,9 @@ Relevant commits:
 - `33d72e7b5d56fe9bf8608b305984d4e150646fd5` — align the Go workspace dependency graph with `x/text`'s required `x/sync v0.22.0` so readonly CI does not attempt to create `go.work.sum`;
 - `b5582995d1171b0849c52ca4fb58186bf69c5650` and `e79c86281f9d618e8ba7803831f391b11de701fd` — state-only candidate/target-gate documentation;
 - `5dd2733ffbfcb33e8926cdb3de4d58e8af1bf0a2` — reject oversized encoded password verifiers before split/base64 decode and add a deterministic realistic auth SQL query-plan fixture at `src/backend/v2/bench/auth_explain.sql`;
-- `15e2d5d187d660fe81ecdc7864fe6f0e206a8a7b` — apply the required Go formatting to the verifier bound; executable behavior is otherwise the same as `5dd2733...`.
+- `15e2d5d187d660fe81ecdc7864fe6f0e206a8a7b` — apply required Go formatting to the verifier bound; executable behavior is otherwise the same as `5dd2733...`;
+- `e68cb64d21eb41ca8d4bc1e29374c4428cbe3ff9` — state-only commit pinning the exact target-gate candidate;
+- `f95549d56cd04a1ed8b1701061293a086e347e7e` — record the accepted target KDF/query-plan evidence in `PERFORMANCE.md`; no executable change.
 
 Applicable CI:
 
@@ -59,7 +61,7 @@ Implemented contract:
 - existing credential kind `0` is used as the initial password credential slot; existing user status `0` is treated as active/default according to the M2 schema semantics; `user_identities` remains independent for later OIDC/OAuth/passkey/email identities;
 - no baseline ordinary-user role is created because current schema/product semantics do not require one;
 - passwords use `golang.org/x/crypto/argon2` Argon2id with a self-describing verifier containing algorithm/version/parameters/salt/hash; password input is bounded to 12-1024 bytes before KDF work, stored verifier parameters are bounded before Argon2 allocation/work, and the complete encoded verifier is capped at 512 bytes before string splitting/base64 decoding so malformed persisted values cannot cause unbounded decode allocation;
-- current provisional Argon2id default is 64 MiB memory, one iteration, parallelism one, 16-byte random salt and 32-byte output; this is **not accepted until target-host measurement**;
+- accepted Argon2id default is **64 MiB memory, one iteration, parallelism one, 16-byte random salt and 32-byte output**;
 - registration validates cheap request bounds, hashes the invitation token with SHA-256, performs an indexed availability precheck, hashes the password outside the transaction, then transactionally locks/revalidates the invitation with `FOR UPDATE`, creates the user and kind-0 credential, claims the invitation by numeric user ID and commits atomically;
 - raw passwords, invitation tokens and session tokens are never persisted by the implemented boundaries; stable API errors do not echo supplied secrets or stored verifiers;
 - concurrent claims of one invitation have at most one winner; concurrent case-insensitive duplicate usernames have at most one winner; credential-creation failure rolls back both the user and invitation claim;
@@ -77,21 +79,44 @@ Implemented contract:
 
 Focused tests cover password verifier round-trip/random salt/malformed verifier/input bounds including the encoded-verifier hard cap; invitation state and rollback; case-insensitive duplicate and same-invitation concurrency; session token hashing, independent sessions, expiry, revocation, user status and non-mutating lookup; cookie attributes; origin/CSRF policy; bounded HTTP bodies; stable unauthorized semantics; and secret non-echo behavior. Existing M1-M3 applicable regression checks remain green in CI.
 
-Prepared deterministic target KDF benchmarks cover hash cost, verify cost, parallel verification pressure and parameter candidates `32MiB-t2`, `64MiB-t1`, `64MiB-t2`, and `128MiB-t1`.
+### Target authentication acceptance gate — accepted
 
-Prepared deterministic PostgreSQL fixture `src/backend/v2/bench/auth_explain.sql` is for a disposable database only. It creates 100,000 users/credentials, 100,000 invitations and 500,000 sessions, analyzes the tables, then runs `EXPLAIN (ANALYZE, BUFFERS)` for the exact session token-hash resolution, case-insensitive username/password-credential lookup, invitation availability lookup and invitation `FOR UPDATE` registration lock shapes.
+Evidence package:
 
-### Pending target acceptance gate
+`m4-auth-gate-20261005T031229Z.zip`
 
-No target-host KDF benchmark or realistic auth SQL query-plan evidence has been accepted yet. The target gate is pinned to exact executable candidate `15e2d5d187d660fe81ecdc7864fe6f0e206a8a7b`, which has green CI run `37257570130`. Later state-only documentation commits are not substitute executable candidates. This gate is required before integration because Argon2 cost is hardware-sensitive and session lookup will become request-path hot.
+Uploaded/validated SHA-256:
 
-Target evidence must measure exact executable candidate `15e2d5d187d660fe81ecdc7864fe6f0e206a8a7b`, including:
+`f792fa3d05da4db81f201bb983ec93f510c8a7c63074b6d32e0128f5479f3155`
 
-- hash/registration and verify/login Argon2 cost, CPU behavior, peak/representative memory, and parallel verification pressure on the shared i7-7700-class target;
-- `EXPLAIN (ANALYZE, BUFFERS)` from the committed `auth_explain.sql` fixture against disposable PostgreSQL 17;
-- evidence that the unique session token-hash index, existing case-insensitive username index and existing invitation token-hash index bound the intended hot paths without request-path writes or sequential scans.
+Exact tested executable SHA: `15e2d5d187d660fe81ecdc7864fe6f0e206a8a7b`, with green pre-target CI run `37257570130`.
 
-Do not weaken KDF parameters merely for throughput. If target measurements justify changing the provisional default, change it here, rerun applicable CI and repeat the exact target measurement before acceptance. No broader API coexistence benchmark is required unless the KDF measurements show material interactive concurrency risk.
+Target environment: Ubuntu 24.04.3, kernel 6.8.0-88-generic, i7-7700 (4 physical / 8 logical CPUs), 62 GiB RAM with about 46 GiB available at baseline. Native Go and `psql` were unavailable, so the committed benchmarks ran with Go 1.25.14 in a container and PostgreSQL 17.11 ran in an isolated disposable container with no published host port.
+
+Accepted KDF evidence:
+
+- default hash: **43.65-44.46 ms/op** across ten benchmark runs, about 67.1 MB/op;
+- default verify: **43.60-44.31 ms/op**, about 67.1 MB/op;
+- candidate `32MiB-t2`: **42.46-43.06 ms/op**;
+- candidate `64MiB-t2`: **86.72-87.11 ms/op**;
+- candidate `128MiB-t1`: **89.48-91.00 ms/op**;
+- fixed 32-op parallel verify ranged **43.96-44.53 ms/op** at GOMAXPROCS=1, **23.86-26.35** at 2, **13.90-19.21** at 4 and **11.28-20.19** at 8;
+- representative eight-way parallel run peaked at **1,120,756 KiB RSS** and about 553% CPU with no swapping.
+
+The eight-way run is a real aggregate CPU/memory cost but not a target-host memory-capacity problem at the measured baseline. It does not justify weakening the KDF. Password KDF calls are not currently protected by a service-level concurrency limiter; abuse/rate limiting and any admission guard remain production-hardening concerns and should be introduced earlier only if connected-product evidence or exposure requirements justify them.
+
+The committed SQL fixture used 100,000 users/credentials, 100,000 invitations and 500,000 sessions. PostgreSQL 17.11 used the intended indexes for every point path:
+
+- session token hash -> active user: `user_sessions_token_hash_key` then `users_pkey`, **0.024 ms** execution;
+- case-insensitive username -> password credential: `users_username_lower_uidx` then `user_credentials_user_id_kind_key`, **0.042 ms**;
+- invitation availability: `invitations_token_hash_key`, **0.015 ms**;
+- invitation registration `FOR UPDATE`: `LockRows` over `invitations_token_hash_key`, **0.019 ms**.
+
+There were no sequential scans on the point-path tables, no unexpected row growth, explicit sort or temp spill.
+
+Decision: **accept the authentication target gate and the 64 MiB/t=1/p=1 Argon2id default**. No KDF parameter change, auth lookup index, Redis/cache layer or broader API coexistence rerun is justified by this evidence. Durable measurements are recorded in `PERFORMANCE.md`.
+
+Target cleanup removed the disposable PostgreSQL container and detached candidate worktree. The canonical checkout remained at its original branch/HEAD with no tracked changes; Wallium was untouched. The retained remote raw evidence directory may now be deleted because the uploaded archive has been independently validated.
 
 ## M3 progress/status — accepted and integrated
 
@@ -191,6 +216,7 @@ Do not pull these into the next slice unless a concrete requirement makes them n
 - ingestion-source, processed-staging and superseded-output orphan janitor;
 - deployment UID/GID/media-storage permissions;
 - stronger `openat2`/`O_NOFOLLOW` hardening if the media-tree threat model changes;
+- auth abuse/rate limits and KDF admission/concurrency controls until connected-product or production-hardening requirements justify their shape;
 - v1-v2 apples-to-apples end-to-end benchmark once equivalent behavior exists.
 
 ## Local-agent rule
@@ -199,4 +225,4 @@ Use local/server agents for browser/DevTools, SSH, real PostgreSQL, target bench
 
 ## Single best next task
 
-Run the **target-host M4 authentication KDF + PostgreSQL auth query-plan gate** against exact executable candidate `15e2d5d187d660fe81ecdc7864fe6f0e206a8a7b` (CI run `37257570130` green), then return the retained evidence ZIP for review here. Do not integrate the auth slice into `v2` until that evidence is reviewed and the password parameters/query shapes are accepted.
+Fast-forward the accepted `astra/m4-auth-session-review` lineage into the still-unchanged `v2` integration branch, verify the resulting branch/ref and post-integration CI, then update this state file to mark authentication integrated and name exactly one connected-board M4 slice.
