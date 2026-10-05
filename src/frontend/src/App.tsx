@@ -9,6 +9,7 @@ import {
 } from "solid-js";
 import type { Accessor, Component } from "solid-js";
 
+import Comments from "./Comments";
 import MediaStatus from "./MediaStatus";
 import {
   APIError,
@@ -1026,6 +1027,7 @@ const ExpandedPost: Component<ExpandedPostProps> = (props) => {
             <MediaStatus postId={post().id} />
             <button type="button" onClick={props.onClose}>Close</button>
           </aside>
+          <Comments postId={post().id} canCreate={props.canVote} />
         </article>
       )}
     </Show>

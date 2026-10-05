@@ -1,0 +1,112 @@
+.expanded-post > .comments {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 0.75rem;
+  padding: 1rem;
+  border-top: 1px solid #2b313a;
+  background: #0d1014;
+}
+
+.comments-header,
+.comment-meta,
+.comment-composer-actions,
+.comment-reply-target {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.comments-header span,
+.comment-meta span,
+.comment-composer-actions span,
+.comments-auth-note,
+.comments-status {
+  color: #929aa6;
+  font-size: 0.82rem;
+}
+
+.comments-auth-note,
+.comments-status,
+.comment-error,
+.comment-body,
+.comment-orphan-warning {
+  margin: 0;
+}
+
+.comment-composer {
+  display: grid;
+  gap: 0.5rem;
+  max-width: 60rem;
+}
+
+.comment-composer textarea {
+  width: 100%;
+  min-height: 5rem;
+  resize: vertical;
+  padding: 0.65rem;
+  border: 1px solid #343b46;
+  outline: none;
+  color: inherit;
+  background: #15191f;
+}
+
+.comment-composer textarea:focus { border-color: #697586; }
+
+.comment-composer button,
+.comment-reply,
+.comments-load-more {
+  padding: 0.45rem 0.65rem;
+  border: 1px solid #343b46;
+  color: inherit;
+  background: #1a1f26;
+  cursor: pointer;
+}
+
+.comment-composer button:disabled,
+.comments-load-more:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.comment-reply-target {
+  justify-content: flex-start;
+  color: #aeb6c1;
+  font-size: 0.82rem;
+}
+
+.comment-tree {
+  display: grid;
+  gap: 0.4rem;
+  min-width: 0;
+}
+
+.comment {
+  display: grid;
+  gap: 0.45rem;
+  margin-inline-start: min(calc(var(--comment-depth) * 1.1rem), 35vw);
+  padding: 0.65rem 0.75rem;
+  border-inline-start: 2px solid #343b46;
+  background: #12161b;
+  overflow-wrap: anywhere;
+}
+
+.comment-meta {
+  justify-content: flex-start;
+  font-size: 0.78rem;
+}
+
+.comment-meta strong { color: #d9dee5; }
+.comment-body { white-space: pre-wrap; }
+.comment--deleted .comment-body { color: #929aa6; font-style: italic; }
+.comment--orphaned { border-inline-start-color: #765353; }
+.comment-orphan-warning,
+.comment-error { color: #e4b8b8; font-size: 0.82rem; }
+.comment-reply { justify-self: start; }
+.comments-load-more { justify-self: start; }
+
+@media (max-width: 720px) {
+  .expanded-post > .comments { padding: 0.75rem; }
+  .comment { margin-inline-start: min(calc(var(--comment-depth) * 0.7rem), 28vw); }
+  .comment-composer-actions { align-items: flex-start; }
+}
