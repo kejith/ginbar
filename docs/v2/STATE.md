@@ -74,9 +74,9 @@ Prepared deterministic target KDF benchmarks cover hash cost, verify cost, paral
 
 ### Pending target acceptance gate
 
-No target-host KDF benchmark or realistic auth SQL query-plan evidence has been accepted yet. This is required before integration because Argon2 cost is hardware-sensitive and session lookup will become request-path hot.
+No target-host KDF benchmark or realistic auth SQL query-plan evidence has been accepted yet. The target gate is pinned to exact executable candidate `33d72e7b5d56fe9bf8608b305984d4e150646fd5`, which has green CI run `37256998256`. Later state-only documentation commits are not substitute executable candidates. This gate is required before integration because Argon2 cost is hardware-sensitive and session lookup will become request-path hot.
 
-Target evidence must measure the exact CI-green candidate (or a later exact CI-green revision with only documented state changes), including:
+Target evidence must measure exact executable candidate `33d72e7b5d56fe9bf8608b305984d4e150646fd5`, including:
 
 - hash/registration and verify/login Argon2 cost, CPU behavior, peak/representative memory, and parallel verification pressure on the shared i7-7700-class target;
 - `EXPLAIN (ANALYZE, BUFFERS)` for production-shaped session token-hash resolution, username/password-credential lookup and invitation token lookup/lock against realistic row counts;
@@ -190,4 +190,4 @@ Use local/server agents for browser/DevTools, SSH, real PostgreSQL, target bench
 
 ## Single best next task
 
-Run the **target-host M4 authentication KDF + PostgreSQL auth query-plan gate** against the exact CI-green `astra/m4-auth-session` revision produced by this state update, then return the retained evidence ZIP for review here. Do not integrate the auth slice into `v2` until that evidence is reviewed and the password parameters/query shapes are accepted.
+Run the **target-host M4 authentication KDF + PostgreSQL auth query-plan gate** against exact executable candidate `33d72e7b5d56fe9bf8608b305984d4e150646fd5` (CI run `37256998256` green), then return the retained evidence ZIP for review here. Do not integrate the auth slice into `v2` until that evidence is reviewed and the password parameters/query shapes are accepted.
