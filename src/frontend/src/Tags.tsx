@@ -8,7 +8,7 @@ import {
   removePostTag,
   type TagSnapshot,
 } from "./api";
-import { canApplyTagSnapshot } from "./tag-state.js";
+import { canApplyTagSnapshot, shouldReconcileTagMutationFailure } from "./tag-state.js";
 import "./tags.css";
 
 interface TagsProps {
@@ -86,6 +86,7 @@ const Tags: Component<TagsProps> = (props) => {
       if (operation === "add") setDraft("");
     } catch (requestError) {
       if (controller.signal.aborted || requestEpoch !== epoch || props.postId !== postId) return;
+      const status = requestError instanceof APIError ? requestError.status : undefined;
       if (requestError instanceof APIError) {
         if (requestError.status === 401) setError("Authentication required");
         else if (requestError.status === 403) setError("Tag removal is not authorized");
@@ -94,6 +95,17 @@ const Tags: Component<TagsProps> = (props) => {
         else setError("Tag update failed");
       } else {
         setError("Tag update failed");
+      }
+
+      if (shouldReconcileTagMutationFailure(status)) {
+        try {
+          const reconciled = await fetchPostTags(postId, controller.signal);
+          if (canApplyTagSnapshot(props.postId, postId, reconciled.postId, requestEpoch, epoch, controller.signal.aborted)) {
+            setSnapshot(reconciled);
+          }
+        } catch {
+          // Keep the last authoritative snapshot and the mutation error if reconciliation also fails.
+        }
       }
     } finally {
       if (mutationController !== controller || requestEpoch !== epoch) return;
