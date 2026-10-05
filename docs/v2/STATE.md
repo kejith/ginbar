@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-05
-Phase: **M4 connected core product in progress; post voting accepted, browser/SQL-gated and integrated**
+Phase: **M4 connected core product in progress; nested comments read/create implemented and SQL/CI-gated, browser acceptance pending**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -17,7 +17,96 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - connected board/API/session boundary: **accepted and integrated**;
   - search-connected board: **accepted and integrated**;
   - post voting: **accepted, SQL/browser-gated and integrated**;
-  - nested comments read/create, comment voting, tag mutations and profiles remain.
+  - nested comments read/create: **implemented; exact candidate SQL/CI-gated, browser/DevTools gate pending**;
+  - comment voting, tag mutations and profiles remain.
+
+## M4 nested comments read/create — exact candidate pending browser gate
+
+Verified GitHub `v2` base:
+
+`3c7fcb9ed2f6815203bdd038c46d08e4ad2916fe`
+
+Exact executable candidate:
+
+`d83ffa69c6a80418f13c5e4a2b5af19004846a51`
+
+Gate branch:
+
+`astra/m4-nested-comments-gate`
+
+The candidate is one commit directly ahead of the verified `v2` base and is therefore fast-forwardable if the remaining browser gate is accepted. It changes only the nested-comment backend/frontend slice: 13 intended files, no schema migration, no new index, no comment voting and no unrelated board/navigation architecture change. `src/frontend/src/App.tsx` changes by only the comments import plus the expanded-post comments child.
+
+Exact-candidate `v2 CI` run `37334651076`, job `111846241798`: **success**.
+
+- exact SHA checkout/verification passed;
+- full `scope=all` correctness gate passed, including PostgreSQL-backed backend tests and retained worker suites;
+- frontend 27-test suite, `tsc --noEmit` and production Vite build passed;
+- hermetic target-worker release build passed;
+- tracked checkout remained clean.
+
+### Candidate implementation boundary
+
+- Public comment read endpoint is `GET /api/v2/posts/:id/comments` with immutable ascending comment-ID cursor `after` and bounded `limit`; service default is 100 and maximum is 200. No OFFSET pagination or per-comment query is used.
+- The read store uses one released/nondeleted-post query with a bounded lateral comment scan. A valid post with zero comments is distinguishable from an unavailable post without a second existence round trip.
+- Rows are deterministic by ascending immutable comment ID. Because a reply necessarily has a larger identity than its already-existing parent, incremental ascending-ID retrieval cannot return a reply before its parent.
+- Deleted comments are retained in reads as structural tombstones: immutable IDs/parent identity remain, body is omitted, and descendants keep their hierarchy.
+- Authenticated create endpoint is same-origin `POST /api/v2/posts/:id/comments` using immutable numeric `users.id`; signed-out mutation is rejected.
+- Body is preserved exactly and validated as valid UTF-8 with 1–10,000 Unicode code points, matching the schema character-length boundary. Request bytes and unknown JSON fields are bounded/rejected.
+- Top-level and reply creation use one PostgreSQL statement. Materialized CTEs lock/validate the released/nondeleted post and optional parent with `FOR SHARE`, reject missing/cross-post parents, reject replies to deleted parents, insert only after validation, and return the authoritative row.
+- Cross-post parents intentionally map to the same not-found contract as nonexistent parents. Replying to a deleted parent is an explicit conflict and is not permitted.
+- No schema/index change was made. Existing `comments_post_idx`, `comments_pkey` and the existing released-post index are sufficient for measured query shapes.
+- Comment server state lives only in the selected expanded-post experience. It is not attached to the bounded retained board post array and no global frontend store/cache was introduced.
+- Comment GET/POST requests are abortable and epoch-guarded across selection/close/route changes. Selection still renders the expanded shell before comments network work completes.
+- Tree construction builds parent/children maps once and performs iterative preorder traversal; the frontend test exercises 20,000 nesting levels without recursive traversal or repeated full-list rescans.
+- The initial and incremental GET paths both merge authoritative rows by immutable ID. This specifically prevents a delayed initial GET from erasing a newer successful comment POST that completed first.
+- Comment voting remains entirely outside this slice.
+
+### Correctness coverage
+
+Green exact-candidate coverage includes:
+
+- valid post with an empty comment set versus unavailable/unreleased post;
+- deterministic ascending comment ordering and cursor/limit boundaries;
+- multiple top-level comments, siblings and multiple nesting levels;
+- deleted-parent tombstone hierarchy;
+- authenticated top-level creation and nested reply creation;
+- authoritative returned post/user/parent/body/score/created identity;
+- nonexistent post, nonexistent parent, cross-post parent and deleted-parent rejection;
+- signed-out and cross-origin creation rejection;
+- malformed IDs, cursors, payloads, unknown fields and body boundaries;
+- Unicode 1- and 10,000-character boundaries plus over-limit/invalid UTF-8 rejection;
+- explicit frontend orphan handling rather than silent reparenting;
+- iterative 20,000-level tree traversal;
+- preserved auth, feed, search, post-vote, media and worker suites.
+
+### SQL-plan evidence
+
+The exact-candidate CI fixture includes 5,000 unrelated unreleased posts, two released posts, 20,000 comments on a noise post and 20,000 comments on the target post, followed by `ANALYZE`.
+
+`EXPLAIN (ANALYZE, BUFFERS)` for the comment read path:
+
+- target post: index-only scan using `posts_feed_released_idx`;
+- comments: index scan using `comments_post_idx` with `(post_id = p.id) AND (id > 0)`;
+- bounded `LIMIT 101` for a requested page of 100;
+- final ordering used an in-memory 32 kB quicksort over 101 rows;
+- execution **0.176 ms**; planning **1.036 ms**;
+- no comment-table sequential scan, external merge or disk/temp spill.
+
+`EXPLAIN (ANALYZE, BUFFERS)` for reply creation:
+
+- released target post: `posts_feed_released_idx`;
+- parent lookup: `comments_pkey`;
+- one-row validated insert path;
+- execution **0.652 ms**; planning **0.264 ms**;
+- no comment-table sequential scan or spill.
+
+These measurements establish boundedness/regression acceptance only; they are not a performance-improvement claim.
+
+### Remaining gate
+
+Browser/DevTools acceptance has not yet been run against the exact candidate. Do not integrate to `v2` or claim the comments slice accepted until that evidence is inspected here.
+
+The browser gate must verify immediate expanded-shell behavior under delayed comment reads, correct nested/tombstone/paginated rendering, authoritative top-level/reply creation, failure handling, the delayed-read/create race, stale-request isolation across selection/close, signed-out behavior, search/history/keyboard invariants, zero comment-induced feed/around refreshes, unchanged unrelated row mounts, retained-state invariants and representative Long Task/update-scope evidence.
 
 ## M4 post voting — accepted and integrated
 
@@ -195,7 +284,7 @@ Keep these accepted boundaries unless new evidence requires change:
 
 Do not pull these into the next slice without a concrete requirement:
 
-- comment voting before comment read/create exists on v2;
+- comment voting before comment read/create is accepted and integrated on v2;
 - broader video transcoding or exact WebM/EBML acceptance;
 - media orphan/janitor hardening;
 - deployment UID/GID/media-storage permissions;
@@ -206,8 +295,9 @@ Do not pull these into the next slice without a concrete requirement:
 
 ## Unresolved issues
 
-No unresolved correctness, SQL-plan, browser-performance or integration blocker remains from the post-voting slice.
+- M4 nested comments read/create exact candidate `d83ffa69c6a80418f13c5e4a2b5af19004846a51` still requires isolated browser/DevTools acceptance before integration.
+- No unresolved correctness or SQL-plan blocker is known for that candidate; exact-candidate all-scope CI is green.
 
 ## Single best next task
 
-Begin the **M4 nested comments read/create slice** from current GitHub `v2`. Add bounded/indexed retrieval for the selected post using the existing `comments(post_id, id)` and parent indexes, authenticated comment creation using immutable numeric user/post/parent IDs with strict parent-post validation, and nested SolidJS rendering that preserves immediate post selection, search/history/navigation, stable board rows and the 960-post retention boundary. Keep comment voting out of this slice; add it only after the v2 comment read/create path is accepted and browser-gated.
+Run the isolated **M4 nested comments read/create browser/DevTools acceptance gate** against exact executable `d83ffa69c6a80418f13c5e4a2b5af19004846a51`, retain raw evidence in one `.local-agent-results/` ZIP, inspect that evidence here, and only then decide whether to accept and fast-forward the candidate to `v2`.
