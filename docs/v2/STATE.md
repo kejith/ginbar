@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-05
-Phase: **M4 connected core product in progress; comment voting accepted and integrated**
+Phase: **M4 connected core product in progress; tag-mutation implementation candidate awaiting SQL/browser gate**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -19,7 +19,94 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - post voting: **accepted, SQL/browser-gated and integrated**;
   - nested comments read/create: **accepted, SQL/browser-gated and integrated**;
   - comment voting: **accepted, SQL/browser-gated and integrated**;
-  - tag mutations and profiles remain.
+  - tag mutations: **implementation candidate complete; exact-candidate CI green; external SQL/browser gate pending**;
+  - profiles remain afterward.
+
+## M4 tag mutations — implementation candidate; acceptance gate pending
+
+Verified live GitHub `v2` base before this slice:
+
+`e7da7d7ed80599cffd0caf9c32e0db586366265a`
+
+Implementation branch:
+
+`astra/m4-tag-mutations`
+
+Exact executable candidate:
+
+`a5ff30597efd718f7ab5b6488ebc9c762197fff1`
+
+Exact-candidate `v2 CI` run `37356154056`, job `111918951457`: **success**.
+
+- exact SHA checkout/verification passed;
+- scoped v2 correctness gate passed, including the new PostgreSQL-backed tag mutation tests and retained v2 suites;
+- frontend helper tests, TypeScript/build checks and retained board tests passed through the normal v2 gate;
+- target-worker release-build verification passed;
+- tracked checkout remained clean.
+
+### Candidate implementation boundary
+
+- Public selected-post tag state is `GET /api/v2/posts/:id/tags`; authenticated users add with `POST /api/v2/posts/:id/tags`; authenticated moderator/admin users remove by immutable numeric tag ID with `DELETE /api/v2/posts/:id/tags/:tagId`.
+- Add/remove handlers retain the accepted same-origin mutation boundary and use immutable authenticated `user_id`; removal authorization is resolved from authoritative `user_roles` rows inside the PostgreSQL transaction rather than client/session role claims.
+- Tag names are valid UTF-8, trimmed, 1..80 runes, lower-case normalized for identity/search matching, and reject control characters plus quote/backslash forms the current search grammar cannot represent safely. Existing normalized tag entities are reused.
+- Repeated active addition is idempotent. The existing `(post_id, tag_id)` primary key prevents duplicate relations; an existing soft-removed relation is reactivated atomically. Concurrent creation of the same normalized tag uses the existing normalized-name uniqueness constraint rather than process-local synchronization.
+- Addition first locks a released/nondeleted target post and unavailable/deleted posts do not create a tag/relation. Removal requires an authoritative moderator/admin role, validates the same eligible post boundary, and treats an absent/inactive relation as an idempotent no-op.
+- PostgreSQL remains authoritative. No schema migration, Redis dependency, event stream, cache, process-local mutation lock or speculative index was added.
+- Existing feed/around row shape and search SQL are unchanged. Search continues to match active `post_tags` using existing include/exclude semantics. The selected-post tag endpoint avoids adding per-post tag materialization work to every hot feed/around row.
+- Add/remove responses return the full authoritative selected-post tag snapshot, including whether the current viewer may remove tags. Successful frontend mutations therefore do not reload feed/around solely for reconciliation.
+- Frontend tag state is local to the expanded post and authoritative-first. Same-row selection changes abort/invalidate old load/mutation work by post ID plus epoch; cross-row/unmount cleanup aborts in-flight work. Old-selection or mismatched-post responses cannot update the newly selected post.
+- The board shell still updates immediately on selection; tag loading is independent of shell rendering. No large global store or whole-board replacement was introduced.
+
+### Candidate correctness coverage
+
+The exact-candidate suites cover:
+
+- normalization and invalid/unsearchable tag names;
+- authenticated add and unauthenticated rejection;
+- repeated/idempotent add and soft-removed relation reactivation;
+- missing/deleted post rejection without orphan tag creation;
+- moderator/admin removal and ordinary-user rejection with zero mutation;
+- deterministic absent-relation removal;
+- concurrent same-tag creation/add attempts with one tag entity/relation;
+- concurrent add/remove consistency without duplicate relations or partial removal metadata;
+- immediate reuse of existing include-tag search semantics after add/remove;
+- signed-out/ordinary/moderator selected-post capability state;
+- same-origin rejection before mutation;
+- authoritative HTTP response state;
+- stale-selection/epoch/aborted-response frontend isolation;
+- retained auth/feed/search/post-vote/comment/comment-vote suites via normal v2 CI.
+
+### Pending acceptance gate
+
+Do **not** integrate this slice into `v2` yet. The exact executable candidate above needs the normal isolated local-agent evidence gate before acceptance.
+
+Required PostgreSQL evidence at realistic scale should cover `EXPLAIN (ANALYZE, BUFFERS)` for the actual new hot shapes, including:
+
+- signed-out selected-post tag read;
+- authenticated selected-post tag read and role capability lookup;
+- eligible-post lock/validation;
+- normalized tag lookup and create/conflict path;
+- post/tag relation insert/reactivation;
+- moderator/admin authorization and active relation removal;
+- existing include/exclude feed search after realistic tag/post-tag population.
+
+Confirm there is no attributable large-table sequential scan, unbounded large-table sort, temp spill or N+1 pattern and that existing constraints/indexes are sufficient. The selected-post read is keyed to one post, but the schema does not impose an explicit numeric per-post tag-count cap; validate realistic tag cardinality and only introduce a product cap/pagination/index if evidence shows it is necessary. Do not invent a speedup claim.
+
+Required browser/real-API evidence should cover at minimum:
+
+- selected-post shell remains immediate while tag state loads independently;
+- signed-in ordinary user can add and receives authoritative normalized/idempotent state;
+- moderator/admin remove works and ordinary-user/signed-out/cross-origin remove/add failures produce zero unauthorized DB mutation;
+- failed mutations keep/reconcile the last authoritative tag snapshot and expose a usable error;
+- same-row and cross-row selection changes while tag reads/mutations are delayed do not leak stale state;
+- successful add/remove causes no feed/around reconciliation request when the tag response is sufficient;
+- unrelated thumbnail rows/DOM identity, route/search/Back/Forward/Arrow/J/K behavior and existing post/comment UI remain coherent;
+- retained IDs remain descending/unique/within the board bound and `window.__ginbarM4.assertInvariants()` passes;
+- representative tag interaction does not introduce Long Tasks.
+
+Retain raw plans, DB state/results, browser snapshots/traces/request logs, exact CI metadata and cleanup evidence in the standard local-agent ZIP. Any executable change after this gate invalidates the gate and requires green CI on the new exact SHA before rerunning acceptance evidence.
+
+Decision: **implementation is ready for the isolated SQL/browser gate, but tag mutations are not yet accepted or integrated**.
 
 ## M4 comment voting — accepted and integrated
 
@@ -218,8 +305,11 @@ Do not pull these into the next slice without a concrete requirement:
 
 ## Unresolved issues
 
-No unresolved correctness, SQL-plan, browser-performance, integration or architecture blocker remains from the comment-voting slice.
+- Tag mutations are not yet accepted: realistic-scale PostgreSQL plans and isolated browser/real-API behavior still require retained evidence against exact executable `a5ff30597efd718f7ab5b6488ebc9c762197fff1`.
+- The selected-post tag query is constrained by immutable post ID and indexed relations but there is no explicit numeric per-post tag-count cap in the current schema. Validate realistic cardinality in the gate; only add a cap/pagination/index if evidence or product requirements justify it.
+
+No unresolved correctness, SQL-plan, browser-performance, integration or architecture blocker remains from the accepted comment-voting slice.
 
 ## Single best next task
 
-Begin the **M4 tag-mutation** slice from current GitHub `v2`. Preserve the product rule that authenticated users may add tags while moderators/admins remove them; keep immutable numeric relational identity, parameterized/bounded SQL, current search/feed semantics, local targeted frontend updates and existing board/comment/navigation invariants. Do not pull profiles, Redis, global event streams or unrelated moderation work into the slice.
+Run the isolated **M4 tag-mutation SQL/browser acceptance gate** against exact executable `a5ff30597efd718f7ab5b6488ebc9c762197fff1` after confirming exact-candidate CI run `37356154056` / job `111918951457` remains green. Use realistic tag/post-tag scale, capture `EXPLAIN (ANALYZE, BUFFERS)` for the new read/write shapes, exercise real API/browser add/remove/auth/stale-selection/update-scope behavior, retain the standard evidence ZIP, and inspect that evidence here before any integration into `v2`.
