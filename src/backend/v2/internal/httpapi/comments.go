@@ -31,7 +31,17 @@ func (s *Server) listComments(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_limit", err.Error())
 		return
 	}
-	page, err := s.comments.List(r.Context(), comment.Query{PostID: postID, After: after, Limit: limit})
+	viewerUserID, err := s.viewerUserID(r)
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	page, err := s.comments.List(r.Context(), comment.Query{
+		PostID:       postID,
+		After:        after,
+		Limit:        limit,
+		ViewerUserID: viewerUserID,
+	})
 	if errors.Is(err, comment.ErrPostNotFound) {
 		writeError(w, http.StatusNotFound, "post_not_found", "post not found")
 		return
