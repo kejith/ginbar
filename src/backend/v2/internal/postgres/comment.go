@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/kejith/ginbar/backend/v2/internal/comment"
+	"github.com/kejith/ginbar/backend/v2/internal/model"
 )
 
 const listCommentsSQL = `
@@ -18,6 +19,7 @@ const listCommentsSQL = `
 		c.parent_comment_id,
 		COALESCE(c.body, ''),
 		COALESCE(c.score, 0),
+		0::smallint,
 		COALESCE(c.created_at, 'epoch'::timestamptz),
 		c.deleted_at IS NOT NULL
 	FROM posts AS p
@@ -29,6 +31,35 @@ const listCommentsSQL = `
 		ORDER BY id ASC
 		LIMIT $3
 	) AS c ON true
+	WHERE p.id = $1
+	  AND p.release_state = 1
+	  AND p.deleted_at IS NULL
+	ORDER BY c.id ASC NULLS LAST
+`
+
+const listCommentsWithViewerSQL = `
+	SELECT
+		COALESCE(c.id, 0),
+		COALESCE(c.user_id, 0),
+		c.parent_comment_id,
+		COALESCE(c.body, ''),
+		COALESCE(c.score, 0),
+		CASE WHEN c.deleted_at IS NULL THEN COALESCE(cv.value, 0) ELSE 0 END::smallint,
+		COALESCE(c.created_at, 'epoch'::timestamptz),
+		c.deleted_at IS NOT NULL
+	FROM posts AS p
+	LEFT JOIN LATERAL (
+		SELECT id, user_id, parent_comment_id, body, score, created_at, deleted_at
+		FROM comments
+		WHERE post_id = p.id
+		  AND id > $2
+		ORDER BY id ASC
+		LIMIT $3
+	) AS c ON true
+	LEFT JOIN comment_votes AS cv
+	  ON c.deleted_at IS NULL
+	 AND cv.comment_id = c.id
+	 AND cv.user_id = $4
 	WHERE p.id = $1
 	  AND p.release_state = 1
 	  AND p.deleted_at IS NULL
@@ -80,7 +111,15 @@ const createCommentSQL = `
 `
 
 func (s *Store) ListComments(ctx context.Context, query comment.Query) ([]comment.Comment, error) {
-	rows, err := s.pool.Query(ctx, listCommentsSQL, query.PostID, query.After, query.Limit+1)
+	var (
+		rows pgx.Rows
+		err  error
+	)
+	if query.ViewerUserID > 0 {
+		rows, err = s.pool.Query(ctx, listCommentsWithViewerSQL, query.PostID, query.After, query.Limit+1, query.ViewerUserID)
+	} else {
+		rows, err = s.pool.Query(ctx, listCommentsSQL, query.PostID, query.After, query.Limit+1)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("query comments: %w", err)
 	}
@@ -96,10 +135,11 @@ func (s *Store) ListComments(ctx context.Context, query comment.Query) ([]commen
 			parentID  pgtype.Int8
 			body      string
 			score     int32
+			userVote  int16
 			createdAt time.Time
 			deleted   bool
 		)
-		if err := rows.Scan(&id, &authorID, &parentID, &body, &score, &createdAt, &deleted); err != nil {
+		if err := rows.Scan(&id, &authorID, &parentID, &body, &score, &userVote, &createdAt, &deleted); err != nil {
 			return nil, fmt.Errorf("scan comment row: %w", err)
 		}
 		if id == 0 {
@@ -110,6 +150,7 @@ func (s *Store) ListComments(ctx context.Context, query comment.Query) ([]commen
 			PostID:    query.PostID,
 			AuthorID:  authorID,
 			Score:     score,
+			UserVote:  model.PostVote(userVote),
 			CreatedAt: createdAt,
 			Deleted:   deleted,
 		}
@@ -181,6 +222,7 @@ func (s *Store) CreateComment(ctx context.Context, request comment.CreateRequest
 		AuthorID:  authorID,
 		Body:      &body,
 		Score:     score,
+		UserVote:  model.VoteNeutral,
 		CreatedAt: createdAt,
 	}
 	if parentID != 0 {
