@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-05
-Phase: **M4 connected core product in progress; tag-mutation implementation candidate awaiting SQL/browser gate**
+Phase: **M4 connected core product in progress; tag-mutation SQL/API evidence accepted, focused browser supplement pending**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -19,10 +19,10 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - post voting: **accepted, SQL/browser-gated and integrated**;
   - nested comments read/create: **accepted, SQL/browser-gated and integrated**;
   - comment voting: **accepted, SQL/browser-gated and integrated**;
-  - tag mutations: **implementation candidate complete; exact-candidate CI green; external SQL/browser gate pending**;
+  - tag mutations: **implementation candidate complete; exact-candidate CI green; SQL/API evidence accepted; focused browser supplement pending**;
   - profiles remain afterward.
 
-## M4 tag mutations — implementation candidate; acceptance gate pending
+## M4 tag mutations — implementation candidate; browser supplement pending
 
 Verified live GitHub `v2` base before this slice:
 
@@ -39,7 +39,7 @@ Exact executable candidate:
 Exact-candidate `v2 CI` run `37359169575`, job `111929122699`: **success**.
 
 - exact SHA checkout/verification passed;
-- scoped v2 correctness gate passed, including the new PostgreSQL-backed tag mutation tests and retained v2 suites;
+- scoped v2 correctness gate passed, including PostgreSQL-backed tag mutation tests and retained v2 suites;
 - frontend helper tests, TypeScript/build checks and retained board tests passed through the normal v2 gate;
 - target-worker release-build verification passed;
 - tracked checkout remained clean.
@@ -54,211 +54,96 @@ Exact-candidate `v2 CI` run `37359169575`, job `111929122699`: **success**.
 - PostgreSQL remains authoritative. No schema migration, Redis dependency, event stream, cache, process-local mutation lock or speculative index was added.
 - Existing feed/around row shape and search SQL are unchanged. Search continues to match active `post_tags` using existing include/exclude semantics. The selected-post tag endpoint avoids adding per-post tag materialization work to every hot feed/around row.
 - Add/remove responses return the full authoritative selected-post tag snapshot, including whether the current viewer may remove tags. Successful frontend mutations therefore do not reload feed/around solely for reconciliation.
-- Frontend tag state is local to the expanded post and authoritative-first. Same-row selection changes abort/invalidate old load/mutation work by post ID plus epoch; cross-row/unmount cleanup aborts in-flight work. Old-selection or mismatched-post responses cannot update the newly selected post.
+- Frontend tag state is local to the expanded post and authoritative-first. Selection changes abort/invalidate old load/mutation work by post ID plus epoch; old-selection or mismatched-post responses cannot update the newly selected post.
 - Deterministic 400/401/403/404 mutation failures retain the last authoritative snapshot without an extra read. Transport failures and 5xx responses can have ambiguous commit outcomes, so the frontend performs one focused post-tag GET and applies it only if the same post/epoch is still active; failed reconciliation keeps the last authoritative snapshot plus the visible mutation error.
 - The board shell still updates immediately on selection; tag loading is independent of shell rendering. No large global store or whole-board replacement was introduced.
 
 ### Candidate correctness coverage
 
-The exact-candidate suites cover:
+The exact-candidate suites cover normalization/validation, authenticated add, idempotence/reactivation, unavailable-post rejection, moderator/admin removal, ordinary-user rejection, deterministic absent/inactive removal, concurrent same-tag creation, concurrent add/remove consistency, immediate search semantics, signed-out/ordinary/moderator capability state, same-origin rejection, authoritative response state, stale-selection/epoch isolation, ambiguous-failure reconciliation classification, and retained auth/feed/search/post-vote/comment/comment-vote suites.
 
-- normalization and invalid/unsearchable tag names;
-- authenticated add and unauthenticated rejection;
-- repeated/idempotent add and soft-removed relation reactivation;
-- missing/deleted post rejection without orphan tag creation;
-- moderator/admin removal and ordinary-user rejection with zero mutation;
-- deterministic absent-relation removal;
-- concurrent same-tag creation/add attempts with one tag entity/relation;
-- concurrent add/remove consistency without duplicate relations or partial removal metadata;
-- immediate reuse of existing include-tag search semantics after add/remove;
-- signed-out/ordinary/moderator selected-post capability state;
-- same-origin rejection before mutation;
-- authoritative HTTP response state;
-- stale-selection/epoch/aborted-response frontend isolation;
-- ambiguous-failure reconciliation classification for transport/5xx versus deterministic client/auth/not-found failures;
-- retained auth/feed/search/post-vote/comment/comment-vote suites via normal v2 CI.
+### Retained gate evidence inspected here
 
-### Pending acceptance gate
+Evidence package:
 
-Do **not** integrate this slice into `v2` yet. The exact executable candidate above needs the normal isolated local-agent evidence gate before acceptance.
+`m4-tag-20261005T185611Z.zip`
 
-Required PostgreSQL evidence at realistic scale should cover `EXPLAIN (ANALYZE, BUFFERS)` for the actual new hot shapes, including:
+Independently verified SHA-256:
 
-- signed-out selected-post tag read;
-- authenticated selected-post tag read and role capability lookup;
-- eligible-post lock/validation;
-- normalized tag lookup and create/conflict path;
-- post/tag relation insert/reactivation;
-- moderator/admin authorization and active relation removal;
-- existing include/exclude feed search after realistic tag/post-tag population.
+`a9ed36119c982a73bd2de0bfd756035dde027bc7d298ebbe7c281d0f42f13e5d`
 
-Confirm there is no attributable large-table sequential scan, unbounded large-table sort, temp spill or N+1 pattern and that existing constraints/indexes are sufficient. The selected-post read is keyed to one post, but the schema does not impose an explicit numeric per-post tag-count cap; validate realistic tag cardinality and only introduce a product cap/pagination/index if evidence shows it is necessary. Do not invent a speedup claim.
+Archive integrity passed with 74 entries. Raw `findings.md`, SQL plans, API/database-state results, synchronized conflict evidence, browser results/trace, exact CI metadata and cleanup evidence were inspected here. Exact tested executable was `1d67cfde2847a3b10aa44bb799ae878a39e36a55`.
 
-Required browser/real-API evidence should cover at minimum:
+#### Accepted PostgreSQL evidence
 
-- selected-post shell remains immediate while tag state loads independently;
-- signed-in ordinary user can add and receives authoritative normalized/idempotent state;
-- moderator/admin remove works and ordinary-user/signed-out/cross-origin remove/add failures produce zero unauthorized DB mutation;
-- failed mutations keep/reconcile the last authoritative tag snapshot and expose a usable error, including an ambiguous transport/5xx path that performs only the focused tag-state reconciliation read;
-- same-row and cross-row selection changes while tag reads/mutations are delayed do not leak stale state;
-- successful add/remove causes no feed/around reconciliation request when the tag response is sufficient;
-- unrelated thumbnail rows/DOM identity, route/search/Back/Forward/Arrow/J/K behavior and existing post/comment UI remain coherent;
-- retained IDs remain descending/unique/within the board bound and `window.__ginbarM4.assertInvariants()` passes;
-- representative tag interaction does not introduce Long Tasks.
+The disposable PostgreSQL 16.15 fixture applied all six committed migrations and contained 100,000 posts, 100 baseline tags, 300,000 active post/tag relations and 1,000 baseline users before gate-specific rows.
 
-Retain raw plans, DB state/results, browser snapshots/traces/request logs, exact CI metadata and cleanup evidence in the standard local-agent ZIP. Any executable change after this gate invalidates the gate and requires green CI on the new exact SHA before rerunning acceptance evidence.
+`EXPLAIN (ANALYZE, BUFFERS)` covered signed-out/authenticated selected-post snapshots, released/nondeleted post validation/lock, normalized tag lookup/create/conflict reload, relation insert/reactivation, moderator/admin authorization, active relation removal and post-mutation snapshot. Candidate tag-plan execution times were 0.008–0.204 ms on the disposable host. Large relations used bounded/index-backed shapes; PostgreSQL only chose sequential scans for the tiny `tags` and `user_roles` dimensions. Snapshot/role sorts were 25 KiB in-memory quicksorts.
 
-Decision: **implementation is ready for the isolated SQL/browser gate, but tag mutations are not yet accepted or integrated**.
+Existing feed/search shapes remained bounded at the realistic fixture size: first page 0.098 ms, old cursor 0.117 ms, include-tag+score 0.874 ms, include+exclude-tag+score 1.056 ms, and around-post 0.131 ms. No candidate-attributable large-table sequential scan, unbounded large-table sort, temp spill or application-level N+1 query pattern was observed. These timings establish boundedness/regression acceptance only, not a speedup claim. Existing indexes are sufficient; no new index is justified by this evidence.
+
+#### Accepted API/database-state evidence
+
+The retained evidence established normalized and repeated/idempotent adds, soft-removed relation reactivation, moderator/admin removal metadata, ordinary-user 403 with unchanged relation state, absent-relation no-op behavior, repeated inactive removal preserving metadata, concurrent add/remove consistency, missing/deleted/unavailable post rejection without orphan rows, and immediate include/exclude search consistency.
+
+A synchronized same-name create test forced two candidate `INSERT INTO tags` statements to wait concurrently under a held table lock; after release both requests returned 200, producing exactly one normalized tag and two post relations. Final direct checks found zero duplicate normalized names and zero broken removal-metadata rows.
+
+Signed-out add/remove returned 401 and cross-origin add/remove returned 403 with zero unauthorized database mutation. Disposable state and processes were cleaned up; canonical tracked status remained clean.
+
+#### Browser evidence already accepted
+
+The real-browser evidence established immediate expanded-shell rendering while tag state loaded independently; ordinary-user add/repeat behavior; no ordinary remove controls; moderator/admin remove controls and authoritative response reconciliation; signed-out and corrected cross-origin rejection; no feed/around reload on successful mutation; retained unrelated thumbnail DOM identity; and a delayed same-row old-post tag read that could not leak stale tag state after selection changed.
+
+The ordinary-user deterministic 403 scenario also retained the initial tag GET count across the failed removal, which is consistent with the candidate rule that deterministic client/auth failures do not trigger ambiguous-outcome reconciliation.
+
+### Missing acceptance evidence
+
+Do **not** integrate this slice into `v2` yet. The first gate did not exercise several browser checks explicitly required for acceptance, most importantly the executable behavior added after the original candidate:
+
+- no ambiguous transport/5xx mutation-outcome test was run, so there is no real-browser proof that a mutation which committed server-side but surfaced as a browser-visible 5xx performs exactly one focused `GET /api/v2/posts/:id/tags`, restores authoritative state, keeps the visible mutation error, and avoids feed/around reconciliation;
+- no delayed **mutation response** selection test was run; the retained stale-selection evidence only delayed a tag read;
+- no cross-row stale read/mutation case was retained;
+- route/search/Back/Forward/Arrow/J/K coherence, existing comment UI coherence, retained descending/unique/bounded IDs, `window.__ginbarM4.assertInvariants()`, and representative Long Tasks were not retained in this tag gate.
+
+These are evidence gaps, not observed application failures. The PostgreSQL/API portion and the browser scenarios listed above are accepted and should not be rerun unless the executable changes.
+
+Decision: **do not accept or integrate M4 tag mutations yet**. Run a focused browser supplement against the same exact executable SHA; no SQL rerun is required if the executable remains unchanged.
 
 ## M4 comment voting — accepted and integrated
 
-Verified live GitHub `v2` base before this slice:
-
-`06f5ab361448cf6578626f792304b39b4ee9c164`
-
-Implementation branch:
-
-`astra/m4-comment-voting`
-
-Exact executable candidate:
-
-`005b10ffa4b6f344d64ae6b0e9b5246a15527244`
+Exact executable candidate: `005b10ffa4b6f344d64ae6b0e9b5246a15527244`.
 
 Exact-candidate `v2 CI` run `37342739594`, job `111873754474`: **success**.
 
-- exact SHA checkout/verification passed;
-- scoped v2 correctness gate passed, including PostgreSQL-backed comment-vote concurrency/read tests and retained suites;
-- frontend comment-vote helper tests, TypeScript/build checks and existing board/comment tests passed through the normal v2 gate;
-- hermetic target-worker release build passed;
-- tracked checkout remained clean.
+Accepted evidence package: `m4-comment-voting-20261005T170504Z.zip`, SHA-256 `481b990f4c3d4ac6a8f1e7b4b504733b7b80fef8d5e199e4d1ab74d2e234e356`.
 
-### Accepted implementation boundary
+Accepted boundary: PostgreSQL-authoritative explicit `-1/0/+1` comment voting; bounded viewer-vote reads; row-locked score deltas; per-comment frontend sequencing; optimistic rollback; stale-selection isolation; no feed/around/comment-page reconciliation on success. Realistic SQL plans were bounded/index-backed and browser evidence covered transition correctness, failure rollback, rapid competing actions, independent-comment concurrency, navigation/update-scope invariants and Long Tasks.
 
-- Authenticated explicit-state mutation is `PUT /api/v2/posts/:id/comments/:commentId/vote` with requested vote `-1`, `0` or `+1`; `0` removes the stored vote and repeated requested state is idempotent.
-- A dedicated `commentvote` service/store boundary keeps vote mechanics separate from comment read/create semantics and keeps the HTTP handler thin.
-- PostgreSQL remains authoritative. The mutation transaction validates a released/nondeleted post plus the target nondeleted comment belonging to that post, locks only the target comment row, reads the current user/comment vote, applies insert/update/delete, updates `comments.score` by `newVote - previousVote`, and commits the authoritative result.
-- Missing, cross-post, deleted-comment and unavailable-post targets collapse to a non-votable not-found boundary. Deleted tombstones remain structural read nodes and never expose vote controls or non-neutral viewer state.
-- Public bounded comment reads retain the accepted ascending immutable-ID cursor/order/tree contract. Signed-out reads use a separate neutral query shape; authenticated reads add bounded viewer-vote state without per-comment SQL.
-- No schema/index change, Redis, write-behind, asynchronous score repair, global comment store or global vote store was introduced.
-- Comment voting is optimistic. Clicking the active direction requests explicit neutral state; direct opposite-direction switches apply the exact ±2 optimistic score delta.
-- Mutation sequencing is per comment, not global. Different comments can mutate independently; each comment retains last-confirmed authoritative score/vote, stale responses cannot overwrite newer intent, and the latest failed mutation restores confirmed state.
-- Selection/post teardown aborts and invalidates in-flight vote work. Successful voting does not request feed, around or a replacement comment page merely to reconcile state.
-- Targeted comment replacement preserves sibling comment objects; the bounded row cache preserves unrelated row identity where the keyed Solid path can reuse it.
-- Existing comment pagination, parent IDs, tree order/depth, tombstones, orphan handling, delayed-read/create merge and iterative tree construction remain unchanged.
-
-### Accepted correctness and PostgreSQL evidence
-
-The exact-candidate suites cover all explicit transitions/idempotence, exact score deltas, multiple users, concurrent mixed voting, unavailable/cross-post/deleted targets, malformed IDs/payloads, 401/403 boundaries, viewer-vote pagination, tombstone neutrality, created-comment neutrality, optimistic helper behavior and retained v2 suites.
-
-Accepted retained gate package:
-
-`m4-comment-voting-20261005T170504Z.zip`
-
-Independently validated SHA-256:
-
-`481b990f4c3d4ac6a8f1e7b4b504733b7b80fef8d5e199e4d1ab74d2e234e356`
-
-Archive integrity passed with 69 entries. Raw `findings.md`, SQL plans, DB consistency output, browser scenario snapshots, traces, request logs, CI metadata and cleanup evidence were inspected here. Exact tested executable was `005b10ffa4b6f344d64ae6b0e9b5246a15527244` in a clean detached worktree.
-
-The realistic SQL fixture used 100,000 posts plus 200,000 comments and 200,000 comment-vote rows. `EXPLAIN (ANALYZE, BUFFERS)` established bounded/index-backed shapes:
-
-- signed-out page: `posts_pkey` + `comments_post_idx`, 2 rows, 25 kB in-memory quicksort, **0.086 ms**;
-- authenticated page: same bounded comment scan plus `comment_votes_user_idx`, 2 rows, 25 kB quicksort, **0.065 ms**;
-- target validation/lock: `posts_pkey` + `comments_pkey`, 1 row, **0.076 ms**;
-- current-vote lookup: `comment_votes_user_idx`, 1 row, **0.014 ms**;
-- vote delete: indexed, **0.083 ms**;
-- vote upsert: `comment_votes_pkey` conflict arbiter, **0.248 ms**;
-- score update: `comments_pkey`, 1 row, **0.071 ms**.
-
-No tested shape had a large-table sequential scan, unbounded sort, temp spill or N+1 query pattern. Existing indexes are sufficient; no new index is justified by the evidence. These timings establish boundedness/regression acceptance only, not a speedup claim.
-
-Controlled score consistency passed all eight sequential transitions, neutral-row deletion, multi-user sums and concurrent mixed/flip rounds. In every controlled case `comments.score = base + SUM(stored votes)`.
-
-### Accepted browser/DevTools evidence
-
-The isolated real API/PostgreSQL/browser gate established:
-
-- authenticated rows expose viewer vote correctly and all transition results match DOM, API and score state;
-- active-direction click returns to neutral; opposite-direction flips reconcile exactly;
-- a delayed mutation shows optimistic score/control state before response completion, then reconciles to authoritative success;
-- a forced mutation failure rolls back to last confirmed score/vote and exposes visible error state;
-- rapid same-comment actions finish at the last intended state without stale-response overwrite;
-- independent comments are not globally serialized: the retained API snapshot shows comment 41 committed at `+1` while deliberately delayed comment 40 remained server-side neutral;
-- load-more retains viewer-vote attachment by immutable comment ID;
-- selection changes while a vote is pending do not inject state into the newly selected post; close/reopen re-synchronizes coherently;
-- deleted tombstones expose no vote controls;
-- signed-out reads remain usable/neutral; direct signed-out PUT returned 401 and cross-origin authenticated PUT returned 403, both with zero DB mutation;
-- canonical `/post/:id`, search `q`, Back/Forward and Arrow/J/K navigation remain coherent;
-- representative warmed voting generated exactly one vote PUT and **0 feed requests, 0 around requests and 0 comment-page GET reconciliation requests**;
-- unrelated board thumbnails and a sibling comment retained DOM identity through a targeted vote;
-- retained IDs remained descending/unique and within the 960-post bound;
-- `window.__ginbarM4.assertInvariants()` passed and representative Long Tasks remained 0.
-
-Observed anomalies were gate-script-only: a discarded score-regex parsing attempt and Playwright route-handler races were corrected and rerun. One retained overlap helper boolean remained false because it observed optimistic UI timing, while its own authoritative API snapshot proves the intended independent-comment overlap; this does not contradict application behavior. Expected signed-out `/me` 401 console logging and deliberate failure/abort traffic were separated from unexpected failures.
-
-The isolated backend/nginx processes were stopped, both disposable databases were dropped, the detached worktree was removed, and canonical tracked status remained clean before and after. No prohibited tracked-source, SQL, docs, config, ref, deployment or persistent-state write occurred during the gate.
-
-Decision: **accept M4 comment voting**. The mutation is concurrency-safe and PostgreSQL-authoritative, read/write SQL is bounded and indexed at realistic scale, optimistic/stale/failure behavior is correct, and existing board/comment/navigation/update-scope invariants remain intact. No additional cache, global store, index, polling/event stream or virtualization layer is justified.
-
-### Integration verification
-
-Accepted history was non-force fast-forwarded on remote `v2`:
-
-`06f5ab361448cf6578626f792304b39b4ee9c164 -> 3c1731208fca815eac6d3e189f4951862fa98b1c`
-
-The range was a pure fast-forward and contained the exact executable candidate plus documentation-only state commits. No merge commit or force update was used.
-
-Post-fast-forward `v2 CI` run `37351495807`, job `111903167789`: **success**.
-
-- `head_branch=v2`;
-- `head_sha=3c1731208fca815eac6d3e189f4951862fa98b1c`;
-- exact checkout and SHA verification succeeded;
-- scoped v2 correctness gate succeeded;
-- target-worker release-build verification succeeded;
-- tracked checkout remained clean;
-- all job steps completed successfully.
-
-Integration decision: **comment voting is fully integrated and the M4 slice is closed**.
+Accepted history was fast-forwarded to `v2`; post-integration `v2 CI` run `37351495807`, job `111903167789`, succeeded. No blocker remains from this slice.
 
 ## M4 nested comments read/create — accepted and integrated
 
-Exact executable candidate:
-
-`d83ffa69c6a80418f13c5e4a2b5af19004846a51`
+Exact executable candidate: `d83ffa69c6a80418f13c5e4a2b5af19004846a51`.
 
 Exact-candidate `v2 CI` run `37334651076`, job `111846241798`: **success**.
 
-Accepted evidence package:
+Accepted evidence package: `m4-comments-20261005T000000Z.zip`, SHA-256 `8c1ca3f71753e449db451c6ed33412bf9451bc4e2345f92b62a64b18e764e7cf`.
 
-`m4-comments-20261005T000000Z.zip`
+Accepted boundary: bounded public ascending comment-ID cursor reads; deleted structural tombstones; authenticated same-origin top-level/reply creation; exact body validation; one-statement validated PostgreSQL creation; local selected-post state; abort/epoch guards; iterative tree construction; authoritative-ID merge across delayed reads/creates. SQL/browser evidence established bounded plans, nested/deleted tree correctness, create identity, race/failure isolation and navigation/update-scope invariants.
 
-SHA-256:
-
-`8c1ca3f71753e449db451c6ed33412bf9451bc4e2345f92b62a64b18e764e7cf`
-
-Accepted boundary: bounded public ascending comment-ID cursor reads; deleted structural tombstones; authenticated same-origin top-level/reply creation; exact UTF-8/Unicode body validation; one-statement validated PostgreSQL creation; no schema/index change; local selected-post state; abort/epoch guards; iterative tree construction; authoritative ID merge across delayed reads/creates. SQL plans used `comments_post_idx`, `comments_pkey` and released-post lookup without spill or comment-table sequential scan. Browser evidence established immediate shell behavior, nested/deleted tree correctness, authoritative create identity, delayed-read/create race safety, failure isolation, selection/navigation invariants, bounded update scope and signed-out/403 boundaries.
-
-Accepted history was non-force fast-forwarded to `v2`; post-integration `v2 CI` run `37339584913`, job `111862933910`, succeeded. No blocker remains from this slice.
+Post-integration `v2 CI` run `37339584913`, job `111862933910`, succeeded. No blocker remains from this slice.
 
 ## M4 post voting — accepted and integrated
 
-Exact executable candidate:
-
-`e1c5d1f65e72a81615164bc6445bcdc2d8218381`
+Exact executable candidate: `e1c5d1f65e72a81615164bc6445bcdc2d8218381`.
 
 Exact-candidate CI run `37313953385`: **success**.
 
-Accepted browser/SQL evidence package:
+Accepted evidence package: `m4-post-voting-20261005T133638Z.zip`, SHA-256 `4cf5c5839e7cfc427465821600bcf08a3bb56e9b5a22dbdead4fd185ca396b14`.
 
-`m4-post-voting-20261005T133638Z.zip`
+Post voting is PostgreSQL-authoritative, uses explicit `-1/0/+1` state, serializes score mutations with the post row lock, exposes viewer vote in bounded feed/around reads, and updates retained frontend post state optimistically without feed/around reloads or board-row remounts. The accepted browser gate covered transitions, rollback, rapid competing actions, history/search/navigation invariants, signed-out behavior and zero warmed feed/around refreshes.
 
-SHA-256:
-
-`4cf5c5839e7cfc427465821600bcf08a3bb56e9b5a22dbdead4fd185ca396b14`
-
-Post voting is PostgreSQL-authoritative, uses explicit `-1/0/+1` state, serializes competing score mutations with the post row lock, exposes viewer vote in bounded feed/around reads, and updates retained frontend post state optimistically without feed/around reloads or board-row remounts. The accepted browser gate covered transitions, rollback, rapid competing actions, history/search/navigation invariants, signed-out behavior and zero warmed feed/around refreshes.
-
-The accepted post-voting head was fast-forwarded to `v2`, and post-integration `v2 CI` run `37321333276` succeeded. No blocker remains from this slice.
+Post-integration `v2 CI` run `37321333276` succeeded. No blocker remains from this slice.
 
 ## Retained M4 board/auth/search decisions
 
@@ -307,11 +192,11 @@ Do not pull these into the next slice without a concrete requirement:
 
 ## Unresolved issues
 
-- Tag mutations are not yet accepted: realistic-scale PostgreSQL plans and isolated browser/real-API behavior still require retained evidence against exact executable `1d67cfde2847a3b10aa44bb799ae878a39e36a55`.
-- The selected-post tag query is constrained by immutable post ID and indexed relations but there is no explicit numeric per-post tag-count cap in the current schema. Validate realistic cardinality in the gate; only add a cap/pagination/index if evidence or product requirements justify it.
+- Tag mutations are not yet accepted solely because the focused browser supplement above is missing against exact executable `1d67cfde2847a3b10aa44bb799ae878a39e36a55`.
+- No SQL/index/schema change is justified by the retained tag evidence. The realistic fixture's bounded selected-post cardinality did not show a need for a numeric per-post tag cap or pagination; revisit only if product requirements or later evidence justify it.
 
-No unresolved correctness, SQL-plan, browser-performance, integration or architecture blocker remains from the accepted comment-voting slice.
+No unresolved correctness, SQL-plan, browser-performance, integration or architecture blocker remains from the accepted post-voting/comment slices.
 
 ## Single best next task
 
-Run the isolated **M4 tag-mutation SQL/browser acceptance gate** against exact executable `1d67cfde2847a3b10aa44bb799ae878a39e36a55` after confirming exact-candidate CI run `37359169575` / job `111929122699` remains green. Use realistic tag/post-tag scale, capture `EXPLAIN (ANALYZE, BUFFERS)` for the new read/write shapes, exercise real API/browser add/remove/auth/stale-selection/failure-reconciliation/update-scope behavior, retain the standard evidence ZIP, and inspect that evidence here before any integration into `v2`.
+Run a focused **M4 tag-mutation browser supplement** against exact executable `1d67cfde2847a3b10aa44bb799ae878a39e36a55` after confirming exact-candidate CI run `37359169575` / job `111929122699` remains green. Reuse the real candidate API/PostgreSQL/browser stack but do not rerun the accepted SQL plan suite. Retain evidence for ambiguous committed-but-browser-5xx reconciliation, deterministic-failure no-reconciliation behavior, delayed mutation-response selection isolation, cross-row stale-state isolation, route/search/Back/Forward/Arrow/J/K/comment coherence, retained board invariants and representative Long Tasks. Return one standard evidence ZIP for inspection here before any integration into `v2`.
