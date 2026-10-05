@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-05
-Phase: **M4 connected core product in progress; auth/session foundation target-gated and accepted, integration pending**
+Phase: **M4 connected core product in progress; auth/session foundation accepted and integrated**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -12,7 +12,7 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
 - M1 board performance prototype: **complete and integrated**.
 - M2 fresh PostgreSQL schema + core Go API: **complete and integrated**.
 - M3 media pipeline: **complete for the accepted v2 scope and integrated**.
-- M4 connected core product: **in progress; authentication/session foundation is implemented, CI-green, target-gated and accepted, with integration into `v2` pending**.
+- M4 connected core product: **in progress; authentication/session foundation is accepted, target-gated and integrated**.
 
 M3 accepted scope now includes:
 
@@ -28,15 +28,21 @@ M3 accepted scope now includes:
 
 Broader video transcoding, exact WebM/EBML acceptance and operational orphan/janitor hardening remain deferred until concrete product/production requirements justify them; they do not block the accepted M3 gate.
 
-## M4 authentication/session foundation — accepted, integration pending
+## M4 authentication/session foundation — accepted and integrated
 
 Original implementation branch: `astra/m4-auth-session`, branched from `v2` at `24aba0cda53641f7ef1cf107bbe7611b1803fca6`.
 
 Reviewed candidate branch: `astra/m4-auth-session-review`, created as a descendant after the original feature branch was observed advancing concurrently during review so review corrections would not race or overwrite that branch.
 
-Target-gated executable candidate:
+Exact target-gated executable candidate:
 
 `15e2d5d187d660fe81ecdc7864fe6f0e206a8a7b`
+
+Accepted feature/evidence head fast-forwarded into `v2`:
+
+`55d1f3b6c9569c94e7d4aecf907415e1483e6b93`
+
+Post-fast-forward `v2` CI run `37259875155`: **success** on `55d1f3b6c9569c94e7d4aecf907415e1483e6b93`, including scoped v2 correctness, hermetic target-worker release build and clean tracked checkout.
 
 Relevant commits:
 
@@ -46,9 +52,10 @@ Relevant commits:
 - `5dd2733ffbfcb33e8926cdb3de4d58e8af1bf0a2` — reject oversized encoded password verifiers before split/base64 decode and add a deterministic realistic auth SQL query-plan fixture at `src/backend/v2/bench/auth_explain.sql`;
 - `15e2d5d187d660fe81ecdc7864fe6f0e206a8a7b` — apply required Go formatting to the verifier bound; executable behavior is otherwise the same as `5dd2733...`;
 - `e68cb64d21eb41ca8d4bc1e29374c4428cbe3ff9` — state-only commit pinning the exact target-gate candidate;
-- `f95549d56cd04a1ed8b1701061293a086e347e7e` — record the accepted target KDF/query-plan evidence in `PERFORMANCE.md`; no executable change.
+- `f95549d56cd04a1ed8b1701061293a086e347e7e` — record the accepted target KDF/query-plan evidence in `PERFORMANCE.md`; no executable change;
+- `55d1f3b6c9569c94e7d4aecf907415e1483e6b93` — accept the auth target gate in project state; no executable change, then fast-forwarded into `v2`.
 
-Applicable CI:
+Applicable candidate CI:
 
 - run `37256793597` on `fd72a4069859dda718d677c080dc67ff4677cf0c`: **failed before Go tests** because the readonly workspace needed the selected `golang.org/x/sync v0.22.0` checksum; Rust regression coverage had already passed and the tracked checkout remained clean;
 - run `37256998256` on `33d72e7b5d56fe9bf8608b305984d4e150646fd5`: **success**, including scoped Go 1.25 formatting/vet/PostgreSQL-backed correctness, migration-triggered Rust regression checks, hermetic target-worker release build and clean tracked checkout;
@@ -225,4 +232,4 @@ Use local/server agents for browser/DevTools, SSH, real PostgreSQL, target bench
 
 ## Single best next task
 
-Fast-forward the accepted `astra/m4-auth-session-review` lineage into the still-unchanged `v2` integration branch, verify the resulting branch/ref and post-integration CI, then update this state file to mark authentication integrated and name exactly one connected-board M4 slice.
+Begin the next M4 slice from current `v2`: define and implement the minimal frontend v2 API/session boundary that boots authentication state from `GET /api/v2/auth/me` and replaces the synthetic M1 board feed/around data with the existing v2 feed and `/api/v2/posts/:id/around` endpoints while preserving immediate expanded-shell selection, canonical `/post/:id`, Back/Forward coherence, Arrow/J/K navigation, bounded retention and selected-post media-status polling. Do not port the legacy v1 stores/components wholesale; keep route, ephemeral UI and server state separate, and browser-test/benchmark the connected board before adding votes, tags or comments.
