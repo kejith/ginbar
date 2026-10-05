@@ -29,7 +29,7 @@ const Comments: Component<CommentsProps> = (props) => {
   const canCreate = createMemo(() => props.canCreate() && !authBlocked());
   const rows = createMemo(() => buildCommentRows(comments()));
 
-  const loadPage = async (postId: number, after: number, replace: boolean, requestEpoch: number) => {
+  const loadPage = async (postId: number, after: number, requestEpoch: number) => {
     readController?.abort();
     const controller = new AbortController();
     readController = controller;
@@ -38,7 +38,7 @@ const Comments: Component<CommentsProps> = (props) => {
     try {
       const page = await fetchComments(postId, after, 100, controller.signal);
       if (controller.signal.aborted || requestEpoch !== epoch || props.postId !== postId) return;
-      setComments((current) => replace ? page.comments : mergeCommentsByID(current, page.comments));
+      setComments((current) => mergeCommentsByID(current, page.comments));
       setNextAfter(page.nextAfter ?? 0);
     } catch (error) {
       if (controller.signal.aborted || requestEpoch !== epoch || props.postId !== postId) return;
@@ -64,7 +64,7 @@ const Comments: Component<CommentsProps> = (props) => {
     setSubmitting(false);
     setSubmitError(null);
     setAuthBlocked(false);
-    void loadPage(postId, 0, true, requestEpoch);
+    void loadPage(postId, 0, requestEpoch);
 
     onCleanup(() => {
       readController?.abort();
@@ -196,7 +196,7 @@ const Comments: Component<CommentsProps> = (props) => {
           type="button"
           class="comments-load-more"
           disabled={loading()}
-          onClick={() => void loadPage(props.postId, nextAfter(), false, epoch)}
+          onClick={() => void loadPage(props.postId, nextAfter(), epoch)}
         >
           {loading() ? "Loading…" : "Load more comments"}
         </button>
