@@ -13,6 +13,7 @@ import (
 	"github.com/kejith/ginbar/backend/v2/internal/auth"
 	"github.com/kejith/ginbar/backend/v2/internal/feed"
 	"github.com/kejith/ginbar/backend/v2/internal/mediastatus"
+	"github.com/kejith/ginbar/backend/v2/internal/postvote"
 	"github.com/kejith/ginbar/backend/v2/internal/search"
 )
 
@@ -20,6 +21,7 @@ type Store interface {
 	feed.Store
 	mediastatus.Store
 	auth.Store
+	postvote.Store
 }
 
 type Config struct {
@@ -40,6 +42,7 @@ type Server struct {
 	feed           *feed.Service
 	mediaStatus    *mediastatus.Service
 	auth           *auth.Service
+	postVote       *postvote.Service
 	mux            *http.ServeMux
 	requestTimeout time.Duration
 	cookieSecure   bool
@@ -72,6 +75,7 @@ func NewWithConfig(store Store, cfg Config) *Server {
 		feed:           feed.New(store),
 		mediaStatus:    mediastatus.New(store),
 		auth:           auth.New(store, cfg.Auth),
+		postVote:       postvote.New(store),
 		mux:            http.NewServeMux(),
 		requestTimeout: cfg.RequestTimeout,
 		cookieSecure:   cfg.CookieSecure,
@@ -81,6 +85,7 @@ func NewWithConfig(store Store, cfg Config) *Server {
 	s.mux.HandleFunc("GET /api/v2/feed", s.listFeed)
 	s.mux.HandleFunc("GET /api/v2/posts/{id}/around", s.aroundPost)
 	s.mux.HandleFunc("GET /api/v2/posts/{id}/media-status", s.postMediaStatus)
+	s.mux.Handle("PUT /api/v2/posts/{id}/vote", s.requireAuth(http.HandlerFunc(s.setPostVote)))
 	s.mux.HandleFunc("POST /api/v2/auth/register", s.register)
 	s.mux.HandleFunc("POST /api/v2/auth/login", s.login)
 	s.mux.HandleFunc("POST /api/v2/auth/logout", s.logout)
@@ -122,7 +127,17 @@ func (s *Server) listFeed(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_search", err.Error())
 		return
 	}
-	page, err := s.feed.List(r.Context(), feed.Query{Before: before, Limit: limit, Search: parsed})
+	viewerUserID, err := s.viewerUserID(r)
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	page, err := s.feed.List(r.Context(), feed.Query{
+		Before:       before,
+		Limit:        limit,
+		ViewerUserID: viewerUserID,
+		Search:       parsed,
+	})
 	if err != nil {
 		writeServiceError(w, r, err)
 		return
@@ -145,7 +160,17 @@ func (s *Server) aroundPost(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_search", err.Error())
 		return
 	}
-	result, err := s.feed.Around(r.Context(), feed.AroundQuery{PostID: postID, Radius: radius, Search: parsed})
+	viewerUserID, err := s.viewerUserID(r)
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	result, err := s.feed.Around(r.Context(), feed.AroundQuery{
+		PostID:       postID,
+		Radius:       radius,
+		ViewerUserID: viewerUserID,
+		Search:       parsed,
+	})
 	if errors.Is(err, feed.ErrPostNotFound) {
 		writeError(w, http.StatusNotFound, "post_not_found", "post not found")
 		return

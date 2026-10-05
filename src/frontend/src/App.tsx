@@ -15,8 +15,10 @@ import {
   fetchAround,
   fetchCurrentUser,
   fetchFeed,
+  setPostVote,
   type CurrentUser,
   type PostSummary,
+  type PostVote,
 } from "./api";
 import {
   FEED_PAGE_SIZE,
@@ -27,6 +29,7 @@ import {
   thumbnailStorageKey,
 } from "./board-data.js";
 import { columnsForWidth, pathForPost, postIdFromPath } from "./board-model.js";
+import { nextVoteForDirection, withOptimisticVote } from "./post-vote.js";
 import { boardURL, effectiveSearchQuery, searchQueryFromSearch } from "./search-route.js";
 
 type HistoryMode = "push" | "replace" | "none";
@@ -90,11 +93,22 @@ interface InvariantResult {
   errors: string[];
 }
 
+interface ConfirmedVoteState {
+  score: number;
+  vote: PostVote;
+}
+
+interface VoteError {
+  postId: number;
+  message: string;
+}
+
 declare global {
   interface Window {
     __ginbarM4?: {
       select(id: number): void;
       search(query: string): void;
+      vote(direction: -1 | 1): void;
       loadOlder(): Promise<void>;
       loadNewer(): Promise<void>;
       run(pattern: BenchmarkPattern, iterations?: number): Promise<BenchmarkSummary>;
@@ -135,6 +149,9 @@ const App: Component = () => {
   let initialController: AbortController | undefined;
   let windowController: AbortController | undefined;
   let windowLoadPromise: Promise<void> | null = null;
+  const voteQueues = new Map<number, Promise<void>>();
+  const voteSequences = new Map<number, number>();
+  const confirmedVotes = new Map<number, ConfirmedVoteState>();
 
   const initialSearchQuery = searchQueryFromSearch(window.location.search);
   const [columns, setColumns] = createSignal(1);
@@ -150,6 +167,7 @@ const App: Component = () => {
   const [searchQuery, setSearchQuery] = createSignal(initialSearchQuery);
   const [searchDraft, setSearchDraft] = createSignal(initialSearchQuery);
   const [searchError, setSearchError] = createSignal<string | null>(null);
+  const [voteError, setVoteError] = createSignal<VoteError | null>(null);
   const [stats, setStats] = createSignal<BenchmarkStats>({
     selectionSamples: [],
     longTasks: 0,
@@ -261,6 +279,77 @@ const App: Component = () => {
     setRoutePostId(null);
     setRouteStatus("idle");
     writeHistory(null, "push");
+  };
+
+  const updateRetainedPost = (id: number, update: (post: PostSummary) => PostSummary) => {
+    setPosts((previous) => {
+      const index = previous.findIndex((post) => post.id === id);
+      if (index < 0) return previous;
+      const current = previous[index];
+      const next = update(current);
+      if (next === current) return previous;
+      const updated = previous.slice();
+      updated[index] = next;
+      return updated;
+    });
+  };
+
+  const voteOnSelectedPost = (direction: -1 | 1) => {
+    const auth = authState();
+    const post = selectedPost();
+    if (auth.status !== "signed-in" || post === null) return;
+
+    const postID = post.id;
+    const desiredVote = nextVoteForDirection(post.userVote, direction) as PostVote;
+    if (!confirmedVotes.has(postID)) {
+      confirmedVotes.set(postID, { score: post.score, vote: post.userVote });
+    }
+    const sequence = (voteSequences.get(postID) ?? 0) + 1;
+    voteSequences.set(postID, sequence);
+    setVoteError(null);
+    updateRetainedPost(postID, (current) => withOptimisticVote(current, desiredVote));
+
+    const previous = voteQueues.get(postID) ?? Promise.resolve();
+    let queued!: Promise<void>;
+    queued = previous
+      .catch(() => undefined)
+      .then(async () => {
+        try {
+          const result = await setPostVote(postID, desiredVote);
+          const confirmed = { score: result.score, vote: result.vote };
+          confirmedVotes.set(postID, confirmed);
+          if (voteSequences.get(postID) === sequence) {
+            updateRetainedPost(postID, (current) => ({
+              ...current,
+              score: confirmed.score,
+              userVote: confirmed.vote,
+            }));
+          }
+        } catch (error) {
+          if (voteSequences.get(postID) !== sequence) return;
+          const confirmed = confirmedVotes.get(postID);
+          if (confirmed) {
+            updateRetainedPost(postID, (current) => ({
+              ...current,
+              score: confirmed.score,
+              userVote: confirmed.vote,
+            }));
+          }
+          if (error instanceof APIError && error.status === 401) {
+            setAuthState({ status: "signed-out" });
+            setVoteError({ postId: postID, message: "Authentication required" });
+          } else {
+            setVoteError({ postId: postID, message: "Vote update failed" });
+          }
+        }
+      })
+      .finally(() => {
+        if (voteQueues.get(postID) !== queued) return;
+        voteQueues.delete(postID);
+        voteSequences.delete(postID);
+        confirmedVotes.delete(postID);
+      });
+    voteQueues.set(postID, queued);
   };
 
   const replaceServerWindow = (nextPosts: PostSummary[]) => {
@@ -673,6 +762,7 @@ const App: Component = () => {
         selectRetainedPost(id, "push", true, benchmarkEnabled, benchmarkEnabled);
       },
       search: (query) => applySearch(query),
+      vote: (direction) => voteOnSelectedPost(direction),
       loadOlder: () => loadWindow("older"),
       loadNewer: () => loadWindow("newer"),
       run: runBenchmark,
@@ -761,7 +851,14 @@ const App: Component = () => {
               isSelectedPost={isSelectedPost}
               isSelectedRow={isSelectedRow}
               selectedPost={selectedPost}
+              canVote={() => authState().status === "signed-in"}
+              voteError={() => {
+                const error = voteError();
+                const post = selectedPost();
+                return error !== null && post?.id === error.postId ? error.message : null;
+              }}
               onSelect={(id) => selectRetainedPost(id, "push", false, benchmarkEnabled, benchmarkEnabled)}
+              onVote={voteOnSelectedPost}
               onClose={closePost}
               onMountRow={() => { rowMounts += 1; }}
               onUnmountRow={() => { rowUnmounts += 1; }}
@@ -784,7 +881,10 @@ interface BoardRowProps {
   isSelectedPost(id: number): boolean;
   isSelectedRow(rowKey: number): boolean;
   selectedPost: Accessor<PostSummary | null>;
+  canVote: Accessor<boolean>;
+  voteError: Accessor<string | null>;
   onSelect(id: number): void;
+  onVote(direction: -1 | 1): void;
   onClose(): void;
   onMountRow(): void;
   onUnmountRow(): void;
@@ -808,8 +908,14 @@ const BoardRow: Component<BoardRowProps> = (props) => {
         </For>
       </div>
 
-      <Show when={props.isSelectedRow(props.rowKey) && props.selectedPost()} keyed>
-        {(post: PostSummary) => <ExpandedPost post={post} onClose={props.onClose} />}
+      <Show when={props.isSelectedRow(props.rowKey)}>
+        <ExpandedPost
+          post={props.selectedPost}
+          canVote={props.canVote}
+          voteError={props.voteError}
+          onVote={props.onVote}
+          onClose={props.onClose}
+        />
       </Show>
     </section>
   );
@@ -836,50 +942,93 @@ const Thumbnail: Component<{ post: PostSummary; selected: boolean; onSelect(id: 
   );
 };
 
-const ExpandedPost: Component<{ post: PostSummary; onClose(): void }> = (props) => {
-  const mediaURL = createMemo(() => safeMediaPath(props.post.media.storageKey));
-  const thumbnailURL = createMemo(() => safeThumbnailPath(props.post.media.storageKey));
+interface ExpandedPostProps {
+  post: Accessor<PostSummary | null>;
+  canVote: Accessor<boolean>;
+  voteError: Accessor<string | null>;
+  onVote(direction: -1 | 1): void;
+  onClose(): void;
+}
+
+const ExpandedPost: Component<ExpandedPostProps> = (props) => {
+  const mediaURL = createMemo(() => {
+    const post = props.post();
+    return post === null ? null : safeMediaPath(post.media.storageKey);
+  });
+  const thumbnailURL = createMemo(() => {
+    const post = props.post();
+    return post === null ? null : safeThumbnailPath(post.media.storageKey);
+  });
   return (
-    <article class="expanded-post" data-expanded-post={props.post.id}>
-      <div class="expanded-media">
-        <Show when={mediaURL()} fallback={<p class="media-unavailable">Media unavailable</p>}>
-          {(url) => (
-            <Show
-              when={props.post.media.kind === 1}
-              fallback={
-                <img
-                  src={url()}
-                  width={props.post.media.width}
-                  height={props.post.media.height}
-                  alt={`Post ${props.post.id}`}
-                  decoding="async"
-                />
-              }
-            >
-              <video
-                src={url()}
-                width={props.post.media.width}
-                height={props.post.media.height}
-                controls
-                preload="metadata"
-                poster={thumbnailURL() ?? undefined}
-                aria-label={`Video post ${props.post.id}`}
-              />
+    <Show when={props.post()}>
+      {(post) => (
+        <article class="expanded-post" data-expanded-post={post().id}>
+          <div class="expanded-media">
+            <Show when={mediaURL()} fallback={<p class="media-unavailable">Media unavailable</p>}>
+              {(url) => (
+                <Show
+                  when={post().media.kind === 1}
+                  fallback={
+                    <img
+                      src={url()}
+                      width={post().media.width}
+                      height={post().media.height}
+                      alt={`Post ${post().id}`}
+                      decoding="async"
+                    />
+                  }
+                >
+                  <video
+                    src={url()}
+                    width={post().media.width}
+                    height={post().media.height}
+                    controls
+                    preload="metadata"
+                    poster={thumbnailURL() ?? undefined}
+                    aria-label={`Video post ${post().id}`}
+                  />
+                </Show>
+              )}
             </Show>
-          )}
-        </Show>
-      </div>
-      <aside class="expanded-meta">
-        <div>
-          <strong>#{props.post.id}</strong>
-          <span>{props.post.score} points</span>
-          <span>by user {props.post.authorId}</span>
-          <span>{props.post.media.width}×{props.post.media.height}</span>
-        </div>
-        <MediaStatus postId={props.post.id} />
-        <button type="button" onClick={props.onClose}>Close</button>
-      </aside>
-    </article>
+          </div>
+          <aside class="expanded-meta">
+            <div>
+              <strong>#{post().id}</strong>
+              <span>{post().score} points</span>
+              <span>by user {post().authorId}</span>
+              <span>{post().media.width}×{post().media.height}</span>
+            </div>
+            <div class="vote-controls" aria-label={`Vote on post ${post().id}`}>
+              <button
+                type="button"
+                data-vote-direction="-1"
+                aria-label="Downvote"
+                aria-pressed={post().userVote === -1}
+                disabled={!props.canVote()}
+                onClick={() => props.onVote(-1)}
+              >
+                Downvote
+              </button>
+              <button
+                type="button"
+                data-vote-direction="1"
+                aria-label="Upvote"
+                aria-pressed={post().userVote === 1}
+                disabled={!props.canVote()}
+                onClick={() => props.onVote(1)}
+              >
+                Upvote
+              </button>
+            </div>
+            <Show when={props.voteError()}>
+              {(message) => <p class="vote-error" role="alert">{message()}</p>}
+            </Show>
+            <MediaStatus postId={post().id} />
+            <button type="button" onClick={props.onClose}>Close</button>
+          </aside>
+        </article>
+      )}
+    </Show>
   );
 };
 

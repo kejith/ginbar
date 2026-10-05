@@ -197,6 +197,24 @@ input { font: inherit; }
 .expanded-meta > div:first-child { display: grid; gap: 0.25rem; }
 .expanded-meta span { color: #aeb6c1; }
 .expanded-meta button { padding: 0.55rem 0.75rem; color: inherit; border: 1px solid #343b46; background: #1a1f26; cursor: pointer; }
+.expanded-meta button:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.vote-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+}
+
+.expanded-meta .vote-controls button[aria-pressed="true"] {
+  border-color: #f4d35e;
+  box-shadow: inset 0 0 0 1px #f4d35e;
+}
+
+.vote-error {
+  margin: 0;
+  color: #e4b8b8;
+  font-size: 0.82rem;
+}
 
 .media-status {
   margin: 0;
@@ -252,6 +270,8 @@ input { font: inherit; }
   .route-shell { display: grid; gap: 0.3rem; }
   .expanded-post { grid-template-columns: 1fr; }
   .expanded-meta { position: static; grid-template-columns: 1fr auto; align-items: start; }
+  .vote-controls,
+  .vote-error,
   .media-status { grid-column: 1 / -1; }
 }
 

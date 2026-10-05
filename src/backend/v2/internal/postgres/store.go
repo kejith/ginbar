@@ -97,12 +97,14 @@ type rowScanner interface {
 func scanPost(row rowScanner) (model.PostSummary, error) {
 	var post model.PostSummary
 	var filter int16
+	var userVote int16
 	var kind int16
 	if err := row.Scan(
 		&post.ID,
 		&post.AuthorID,
 		&filter,
 		&post.Score,
+		&userVote,
 		&post.CreatedAt,
 		&kind,
 		&post.Media.StorageKey,
@@ -114,6 +116,7 @@ func scanPost(row rowScanner) (model.PostSummary, error) {
 		return model.PostSummary{}, err
 	}
 	post.Filter = model.ContentFilter(filter)
+	post.UserVote = model.PostVote(userVote)
 	post.Media.Kind = model.MediaKind(kind)
 	return post, nil
 }

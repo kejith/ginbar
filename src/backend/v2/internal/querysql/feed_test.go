@@ -35,6 +35,12 @@ func TestBuildFeedIsCursorBasedFilteredAndParameterized(t *testing.T) {
 	if !strings.Contains(sql, "JOIN LATERAL") || !strings.Contains(sql, "m.post_id = p.id") || !strings.Contains(sql, "LIMIT 1") {
 		t.Fatalf("missing bounded media lookup: %s", sql)
 	}
+	if strings.Contains(sql, "JOIN post_votes") || strings.Contains(sql, "LEFT JOIN post_votes") {
+		t.Fatalf("signed-out feed should not join post_votes: %s", sql)
+	}
+	if !strings.Contains(sql, "0::smallint AS user_vote") {
+		t.Fatalf("signed-out feed must project neutral user vote: %s", sql)
+	}
 	if !strings.Contains(sql, "p.id IN (") || !strings.Contains(sql, "pt.tag_id = (") || !strings.Contains(sql, "t.normalized_name = $4") {
 		t.Fatalf("missing tag-id resolved include filter: %s", sql)
 	}
@@ -43,6 +49,30 @@ func TestBuildFeedIsCursorBasedFilteredAndParameterized(t *testing.T) {
 	}
 	if got, want := len(args), 7; got != want {
 		t.Fatalf("args=%d want %d (%#v)", got, want, args)
+	}
+}
+
+func TestBuildFeedAuthenticatedViewerUsesBoundedVoteJoin(t *testing.T) {
+	sql, args := BuildFeed(feed.Query{
+		Before:       1000,
+		Limit:        60,
+		ViewerUserID: 42,
+		Filters:      []model.ContentFilter{model.FilterSFW},
+	})
+	if !strings.Contains(sql, "COALESCE(pv.value, 0)::smallint AS user_vote") {
+		t.Fatalf("missing viewer vote projection: %s", sql)
+	}
+	if !strings.Contains(sql, "LEFT JOIN post_votes pv ON pv.post_id = p.id AND pv.user_id = $1") {
+		t.Fatalf("missing parameterized viewer vote join: %s", sql)
+	}
+	if !strings.Contains(sql, "p.content_filter IN ($2)") || !strings.Contains(sql, "p.id < $3") {
+		t.Fatalf("viewer argument did not shift bounded feed placeholders: %s", sql)
+	}
+	if got, want := len(args), 4; got != want {
+		t.Fatalf("args=%d want %d (%#v)", got, want, args)
+	}
+	if got := args[0]; got != int64(42) {
+		t.Fatalf("viewer arg=%#v", got)
 	}
 }
 
@@ -89,8 +119,35 @@ func TestBuildAroundKeepsSelectedPostOutsideSearchButInsideVisibility(t *testing
 	if strings.Count(sql, "JOIN LATERAL") != 3 {
 		t.Fatalf("around query should bound media lookups for newer, selected, and older branches: %s", sql)
 	}
+	if strings.Contains(sql, "LEFT JOIN post_votes") || strings.Count(sql, "0::smallint AS user_vote") != 3 {
+		t.Fatalf("signed-out around query should project neutral vote without vote joins: %s", sql)
+	}
 	if got, want := len(args), 5; got != want {
 		t.Fatalf("args=%d want %d (%#v)", got, want, args)
+	}
+}
+
+func TestBuildAroundAuthenticatedViewerReusesVoteParameter(t *testing.T) {
+	sql, args := BuildAround(feed.AroundQuery{
+		PostID:       5000,
+		Radius:       30,
+		ViewerUserID: 77,
+		Filters:      []model.ContentFilter{model.FilterSFW},
+	})
+	if strings.Count(sql, "LEFT JOIN post_votes pv ON pv.post_id = p.id AND pv.user_id = $3") != 3 {
+		t.Fatalf("around query should use one viewer parameter for all bounded branches: %s", sql)
+	}
+	if strings.Count(sql, "COALESCE(pv.value, 0)::smallint AS user_vote") != 3 {
+		t.Fatalf("around query must project viewer vote in each branch: %s", sql)
+	}
+	if strings.Count(sql, "AND p.content_filter IN ($4)") != 3 {
+		t.Fatalf("viewer argument did not shift visibility placeholder: %s", sql)
+	}
+	if got, want := len(args), 4; got != want {
+		t.Fatalf("args=%d want %d (%#v)", got, want, args)
+	}
+	if args[2] != int64(77) {
+		t.Fatalf("viewer arg=%#v", args[2])
 	}
 }
 

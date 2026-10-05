@@ -9,11 +9,26 @@ import (
 	"github.com/kejith/ginbar/backend/v2/internal/search"
 )
 
-const postProjection = `
+const signedOutPostProjection = `
 p.id,
 	p.author_user_id,
 	p.content_filter,
 	p.score,
+	0::smallint AS user_vote,
+	p.created_at,
+	m.kind,
+	m.storage_key,
+	m.mime_type,
+	m.width,
+	m.height,
+	m.duration_ms`
+
+const signedInPostProjection = `
+p.id,
+	p.author_user_id,
+	p.content_filter,
+	p.score,
+	COALESCE(pv.value, 0)::smallint AS user_vote,
 	p.created_at,
 	m.kind,
 	m.storage_key,
@@ -31,12 +46,21 @@ JOIN LATERAL (
 ) m ON true`
 
 func BuildFeed(q feed.Query) (string, []any) {
-	args := make([]any, 0, 8+len(q.Search.IncludeTags)+len(q.Search.ExcludeTags))
+	args := make([]any, 0, 9+len(q.Search.IncludeTags)+len(q.Search.ExcludeTags))
+	projection := signedOutPostProjection
+	voteJoin := ""
+	if q.ViewerUserID > 0 {
+		args = append(args, q.ViewerUserID)
+		projection = signedInPostProjection
+		voteJoin = viewerVoteJoin(len(args))
+	}
+
 	var b strings.Builder
 	b.WriteString("SELECT ")
-	b.WriteString(postProjection)
+	b.WriteString(projection)
 	b.WriteString("\nFROM posts p")
 	b.WriteString(readyMediaJoin)
+	b.WriteString(voteJoin)
 	b.WriteString(`
 WHERE p.release_state = 1 AND p.deleted_at IS NULL`)
 	appendFilterSQL(&b, &args, q.Filters)
@@ -52,6 +76,14 @@ WHERE p.release_state = 1 AND p.deleted_at IS NULL`)
 
 func BuildAround(q feed.AroundQuery) (string, []any) {
 	args := []any{q.PostID, q.Radius}
+	projection := signedOutPostProjection
+	voteJoin := ""
+	if q.ViewerUserID > 0 {
+		args = append(args, q.ViewerUserID)
+		projection = signedInPostProjection
+		voteJoin = viewerVoteJoin(len(args))
+	}
+
 	var visibility strings.Builder
 	appendFilterSQL(&visibility, &args, q.Filters)
 	visibilitySQL := visibility.String()
@@ -62,20 +94,20 @@ func BuildAround(q feed.AroundQuery) (string, []any) {
 	contextSQL := context.String()
 
 	sql := `WITH newer AS (
-    SELECT ` + postProjection + `
-    FROM posts p` + readyMediaJoin + `
+    SELECT ` + projection + `
+    FROM posts p` + readyMediaJoin + voteJoin + `
     WHERE p.release_state = 1 AND p.deleted_at IS NULL
       AND p.id > $1` + contextSQL + `
     ORDER BY p.id ASC
     LIMIT $2
 ), selected AS (
-    SELECT ` + postProjection + `
-    FROM posts p` + readyMediaJoin + `
+    SELECT ` + projection + `
+    FROM posts p` + readyMediaJoin + voteJoin + `
     WHERE p.release_state = 1 AND p.deleted_at IS NULL
       AND p.id = $1` + visibilitySQL + `
 ), older AS (
-    SELECT ` + postProjection + `
-    FROM posts p` + readyMediaJoin + `
+    SELECT ` + projection + `
+    FROM posts p` + readyMediaJoin + voteJoin + `
     WHERE p.release_state = 1 AND p.deleted_at IS NULL
       AND p.id < $1` + contextSQL + `
     ORDER BY p.id DESC
@@ -90,6 +122,11 @@ SELECT * FROM (
 ) combined_posts
 ORDER BY id DESC`
 	return sql, args
+}
+
+func viewerVoteJoin(argPosition int) string {
+	return fmt.Sprintf(`
+LEFT JOIN post_votes pv ON pv.post_id = p.id AND pv.user_id = $%d`, argPosition)
 }
 
 func appendFilterSQL(b *strings.Builder, args *[]any, filters []model.ContentFilter) {

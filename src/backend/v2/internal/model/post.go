@@ -20,11 +20,22 @@ const (
 	MediaVideo
 )
 
+type PostVote int16
+
+const (
+	VoteDown    PostVote = -1
+	VoteNeutral PostVote = 0
+	VoteUp      PostVote = 1
+)
+
+func (v PostVote) Valid() bool { return v == VoteDown || v == VoteNeutral || v == VoteUp }
+
 type PostSummary struct {
 	ID        int64         `json:"id"`
 	AuthorID  int64         `json:"authorId"`
 	Filter    ContentFilter `json:"filter"`
 	Score     int32         `json:"score"`
+	UserVote  PostVote      `json:"userVote"`
 	CreatedAt time.Time     `json:"createdAt"`
 	Media     MediaSummary  `json:"media"`
 }

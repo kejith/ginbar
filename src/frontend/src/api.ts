@@ -1,5 +1,6 @@
 export type MediaKind = 0 | 1;
 export type ContentFilter = 0 | 1 | 2 | 3;
+export type PostVote = -1 | 0 | 1;
 
 export interface MediaSummary {
   kind: MediaKind;
@@ -15,6 +16,7 @@ export interface PostSummary {
   authorId: number;
   filter: ContentFilter;
   score: number;
+  userVote: PostVote;
   createdAt: string;
   media: MediaSummary;
 }
@@ -32,6 +34,12 @@ export interface AroundResult {
 export interface CurrentUser {
   id: number;
   username: string;
+}
+
+export interface PostVoteResult {
+  postId: number;
+  score: number;
+  vote: PostVote;
 }
 
 interface AuthResponse {
@@ -102,6 +110,21 @@ export async function fetchAround(
   });
   if (response.status === 404) return null;
   return parseJSON<AroundResult>(response, "around post");
+}
+
+export async function setPostVote(postId: number, vote: PostVote): Promise<PostVoteResult> {
+  return parseJSON<PostVoteResult>(
+    await fetch(`/api/v2/posts/${postId}/vote`, {
+      method: "PUT",
+      credentials: "same-origin",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ vote }),
+    }),
+    "post vote",
+  );
 }
 
 async function parseJSON<T>(response: Response, context: string): Promise<T> {

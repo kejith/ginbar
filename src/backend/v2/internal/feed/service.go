@@ -17,16 +17,18 @@ const (
 var ErrPostNotFound = errors.New("post not found")
 
 type Query struct {
-	Before int64
-	Limit  int
+	Before       int64
+	Limit        int
+	ViewerUserID int64
 	// Filters is the allowed content-visibility set for this request, not a search/context filter.
 	Filters []model.ContentFilter
 	Search  search.Query
 }
 
 type AroundQuery struct {
-	PostID int64
-	Radius int
+	PostID       int64
+	Radius       int
+	ViewerUserID int64
 	// Filters is the allowed content-visibility set for this request. It applies to the selected post too.
 	Filters []model.ContentFilter
 	Search  search.Query
