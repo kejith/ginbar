@@ -12,6 +12,12 @@ test("media status polling runs only while work is unresolved", () => {
   assert.equal(mediaStatusPollDelay(null), null);
 });
 
+test("retry presentation stays coarse and polling remains bounded", () => {
+  const status = { phase: "retrying", operation: "initial", usableMedia: false };
+  assert.equal(mediaStatusText(status), "Processing retry scheduled");
+  assert.equal(mediaStatusPollDelay(status), MEDIA_STATUS_POLL_MS);
+});
+
 test("regeneration copy never implies the existing media disappeared", () => {
   assert.equal(
     mediaStatusText({
