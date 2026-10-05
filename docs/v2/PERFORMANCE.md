@@ -1,6 +1,6 @@
 # Ginbar v2 performance record
 
-Last consolidated: 2026-10-04
+Last consolidated: 2026-10-05
 
 This file contains accepted performance evidence that should remain stable across handoff sessions. `STATE.md` should only carry facts needed for the immediate next task.
 
@@ -14,7 +14,8 @@ Measured and safe to state:
 - v2 backend/API/query performance from M2;
 - within-v2 SQL/query-shape improvements;
 - v2 media-ingestion/source-verification/publication/image/video processing costs;
-- API/media-worker coexistence and capacity tradeoffs on the target host.
+- API/media-worker coexistence and capacity tradeoffs on the target host;
+- v2 authentication KDF and auth lookup/query-plan costs from M4.
 
 A direct v1/v2 comparison should be added only when both versions can be exercised with the same dataset, endpoint/interaction semantics, host state, concurrency and measurement method.
 
@@ -242,6 +243,62 @@ Caveats:
 - host shared-workload evidence includes measurement-window samples plus pre-/post-cleanup observations, but the requested three separate raw before/during/after host snapshots were not captured; future target gates must capture them explicitly;
 - the outer ZIP hash mismatch described above remains an evidence-provenance caveat, although the uploaded package's internal manifest verified fully.
 
+## M4 authentication KDF and PostgreSQL query-plan gate
+
+Exact target-gated executable revision: `15e2d5d187d660fe81ecdc7864fe6f0e206a8a7b`.
+
+Exact pre-target CI run: `37257570130`, success including scoped v2 correctness, PostgreSQL-backed auth tests, migration-triggered checks, hermetic target-worker release build and clean tracked checkout.
+
+Evidence bundle: `m4-auth-gate-20261005T031229Z.zip`, SHA-256 `f792fa3d05da4db81f201bb983ec93f510c8a7c63074b6d32e0128f5479f3155`. Archive integrity was independently rechecked after upload.
+
+Environment: Ubuntu 24.04.3, kernel 6.8.0-88-generic, i7-7700 (4 cores / 8 threads), 62 GiB RAM with about 46 GiB available at the gate baseline. Native Go and `psql` were unavailable, so Go 1.25.14 ran in a container and PostgreSQL 17.11 ran in an isolated disposable container with no published host port. Wallium remained untouched.
+
+Accepted Argon2id default: **64 MiB memory, t=1, p=1, 16-byte salt, 32-byte output**.
+
+Ten-run default benchmark ranges:
+
+- hash: **43.65-44.46 ms/op**, about **67.1 MB/op**;
+- verify: **43.60-44.31 ms/op**, about **67.1 MB/op**.
+
+Parameter-candidate observations:
+
+| parameters | measured range |
+| --- | ---: |
+| 32 MiB, t=2, p=1 | **42.46-43.06 ms/op** |
+| 64 MiB, t=1, p=1 | **43.80-44.74 ms/op** |
+| 64 MiB, t=2, p=1 | **86.72-87.11 ms/op** |
+| 128 MiB, t=1, p=1 | **89.48-91.00 ms/op** |
+
+Fixed 32-operation parallel verification runs:
+
+| GOMAXPROCS | measured range |
+| ---: | ---: |
+| 1 | **43.96-44.53 ms/op** |
+| 2 | **23.86-26.35 ms/op** |
+| 4 | **13.90-19.21 ms/op** |
+| 8 | **11.28-20.19 ms/op** |
+
+Representative `/usr/bin/time -v` resource runs:
+
+- hash 10x: **49.08 ms/op**, max RSS **135,552 KiB**, about 102% CPU;
+- verify 10x: **43.63 ms/op**, max RSS **136,028 KiB**, about 101% CPU;
+- eight-way parallel verify, 32 ops: **19.55 ms/op**, max RSS **1,120,756 KiB**, about 553% CPU, no swapping observed.
+
+The eight-way run demonstrates material aggregate memory/CPU cost but did not create target-host memory pressure: its ~1.07 GiB peak was small relative to the ~46 GiB available baseline. This is not evidence that password work should remain unbounded under hostile traffic. Abuse/rate limiting and any admission/concurrency guard remain production-hardening concerns to design from real exposure requirements rather than weakening the KDF now.
+
+The committed disposable SQL fixture used 100,000 users, 100,000 password credentials, 100,000 invitations and 500,000 sessions. PostgreSQL 17.11 plans were:
+
+- session token hash -> active user: `user_sessions_token_hash_key` then `users_pkey`, **0.024 ms** execution;
+- case-insensitive username -> password credential: `users_username_lower_uidx` then `user_credentials_user_id_kind_key`, **0.042 ms**;
+- invitation availability: `invitations_token_hash_key`, **0.015 ms**;
+- invitation registration lock: `LockRows` over `invitations_token_hash_key`, **0.019 ms**.
+
+All four point paths were bounded and index-backed with no sequential scan, unexpected row growth, explicit sort or temp spill.
+
+Decision: accept the auth target gate and retain the measured 64 MiB/t=1/p=1 Argon2id default. Do not add auth lookup indexes, Redis/cache infrastructure, or a broader API coexistence rerun from this evidence. Revisit request-rate/admission controls during production hardening or earlier only if connected-product measurements show a concrete problem.
+
+Target cleanup removed the disposable PostgreSQL container and detached candidate worktree; the canonical checkout remained on its original branch/HEAD with no tracked changes and Wallium services were not modified. The retained raw target directory may be deleted now that the uploaded evidence archive has been independently validated.
+
 ## Scheduling/isolation experiments
 
 Earlier saturated-c8 experiments tested unrestricted worker execution, reduced cgroup CPU weight, a 0.5 CPU quota and physical-core partitioning. Low weight did not materially protect the API; the 0.5 CPU quota made the standalone worker roughly **3.69x slower**; reserving a physical core imposed a large API capacity tax before worker work began. `perf` call-stack profiling was unavailable because the host used `perf_event_paranoid=4`; that setting was intentionally not changed.
@@ -254,4 +311,5 @@ Earlier saturated-c8 experiments tested unrestricted worker execution, reduced c
 4. Still-image processing is CPU-heavy enough to reduce peak API capacity, but one job / one encoder thread preserves low absolute latency and zero-error behavior.
 5. Compatible-MP4 passthrough is accepted with one active media job: it avoids video transcoding, keeps memory small, and preserves correctness, while imposing a measurable c8 capacity cost that should be regression-tested.
 6. The PostgreSQL polling/lease-renewal runner remains the accepted baseline; current evidence does not justify scheduler/wakeup/admission infrastructure.
-7. There is still no valid overall v1-versus-v2 speedup number.
+7. M4 authentication accepts Argon2id 64 MiB/t=1/p=1 at about 44 ms for both hash and verify on the target; auth lookup SQL is bounded/index-backed. Eight concurrent verifications reached about 1.07 GiB RSS, so abuse/admission controls remain a production-hardening concern rather than a reason to weaken the KDF.
+8. There is still no valid overall v1-versus-v2 speedup number.
