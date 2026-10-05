@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-05
-Phase: **M4 connected core product in progress; connected board/API/session boundary accepted and integrated**
+Phase: **M4 connected core product in progress; search-connected board candidate is CI-green and browser-gate pending**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -15,7 +15,42 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
 - M4 connected core product: **in progress**.
   - authentication/session foundation: **accepted, target-gated and integrated**;
   - connected board/API/session boundary: **accepted, browser-gated and integrated**;
-  - filters/search, votes, tags, nested comments and profiles remain.
+  - search-connected board: **implemented on feature branch, CI green, browser gate pending**;
+  - votes, tag mutations, nested comments and profiles remain.
+
+## M4 search-connected board — candidate, browser gate pending
+
+Feature branch: `astra/m4-search-board`, branched from `v2` at:
+
+`69964e5d6c6d5358b7ef4b69bb739f86b5ab0618`
+
+Exact executable candidate:
+
+`e6355939e8e547cd50905ecbe1b0e10943da8743`
+
+Exact-candidate CI run `37266606785`: **success**. The correctness job completed the exact-revision checkout, scoped v2 correctness gate, applicable worker-build verification and clean tracked-checkout verification successfully.
+
+Candidate implementation boundary:
+
+- the frontend now carries the existing backend `q` contract through initial feed reads, cursor pagination and `/api/v2/posts/:id/around` reconstruction;
+- effective search text is represented canonically as the `q` browser query parameter on both `/` and `/post/:id`; copied URLs, reload and browser history therefore retain search context;
+- the frontend only trims the query string for canonical URL/state handling and does **not** duplicate the backend search lexer/parser/AST;
+- include/exclude tags, quoted tags and score predicates remain backend-defined; malformed search returns the existing structured `invalid_search` error and the board shows the backend parser message;
+- changing the effective query aborts stale initial/route/window work, bumps retained-window identity and clears the previous retained server window before rebuilding it under the new query;
+- retained-post selection under an unchanged query remains synchronous and network-independent; selecting/closing a post preserves `q` in history;
+- older pagination keeps post-ID cursor semantics and the active `q`; newer recovery and direct links use around with the same `q`;
+- the accepted 960-post retention bound, ID-descending ordering, stable row identity and existing selection instrumentation remain unchanged;
+- the existing backend search/feed/around SQL was not changed, so this candidate does not introduce a new hot SQL query shape requiring a new `EXPLAIN (ANALYZE, BUFFERS)` gate;
+- no votes, tag mutations, comments, uploads, profiles, moderation, Redis, speculative cache or new state-management dependency was added.
+
+Targeted automated coverage added for canonical query trimming/round-tripping and URL preservation, while existing backend tests continue to cover search grammar and malformed-query handling. Exact browser validation is still required before acceptance because this slice changes route/history/server-window behavior.
+
+Unresolved acceptance gate:
+
+- browser/DevTools evidence must verify empty/include/exclude/predicate/malformed searches, query changes, cursor pagination, searched `/post/:id` reconstruction, Back/Forward across query/post changes, Arrow/J/K inside searched windows, 960-post bounded retention, synchronous retained selection and stable row/update scope;
+- retain the existing selection/Long Task/row-mount instrumentation and check for a regression rather than claiming a v1-v2 speedup.
+
+Decision: **do not integrate this candidate into `v2` until the browser gate is accepted**.
 
 ## M4 connected board/API/session boundary — accepted and integrated
 
@@ -157,4 +192,4 @@ Use local/server agents for browser/DevTools, SSH, real PostgreSQL, target bench
 
 ## Single best next task
 
-Begin the next M4 slice from current `v2`: connect the existing search grammar to the real board with explicit query/route state, using the current `q` feed/around contract for include/exclude tags and score predicates. Preserve immediate selection, canonical post history, bounded 960-post retention and direct-link reconstruction under search context; do not add votes/tags/comments in the same slice. Browser-test query changes, direct links, Back/Forward and retention before proceeding to authenticated mutations.
+Run the browser/DevTools acceptance gate against exact executable candidate `e6355939e8e547cd50905ecbe1b0e10943da8743` on `astra/m4-search-board`, using read-only/execution-only local-agent permissions. Validate searched root/deep-link/history/pagination/keyboard/retention behavior and selection/update-scope instrumentation, return one retained evidence ZIP, then inspect and accept or fix the candidate before any fast-forward into `v2`.
