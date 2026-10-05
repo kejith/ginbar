@@ -1,287 +1,139 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-05
-Phase: **M3 media pipeline — progress/status candidate implemented; target status-query plan gate pending**
+Phase: **M3 media pipeline complete and integrated; begin M4 connected core product**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
-Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/architecture rules and [`PERFORMANCE.md`](PERFORMANCE.md) for accepted historical benchmark detail. Do not use chat history as project memory.
+Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rules and [`PERFORMANCE.md`](PERFORMANCE.md) for accepted benchmark history. Do not use chat history as project memory.
 
 ## Current rewrite status
 
 - M1 board performance prototype: **complete and integrated**.
 - M2 fresh PostgreSQL schema + core Go API: **complete and integrated**.
-- M3 durable PostgreSQL media jobs, ingestion/source verification, deterministic publication and generation fencing: **integrated**.
-- M3 still-image JPEG/PNG/WebP -> deterministic AVIF canonical + thumbnail processing: **accepted and integrated**.
-- M3 production worker runner, lease renewal, cancellation/recovery and hermetic release build: **accepted and integrated**.
-- M3 compatible-MP4 H.264/AAC zero-transcode publication + deterministic AVIF thumbnail: **accepted and integrated**.
-- M3 perceptual duplicate detection: **accepted after two target gates and integrated into `v2`**.
-- M3 regeneration: **accepted and integrated into `v2`**.
-- M3 progress/status exposure/UI is implemented on feature branch `astra/m3-progress-status`; exact candidate `ba3265910ed7ede38e08e925a7cbdc0b63fdc9ef` has applicable CI green. Integration is pending one target-server PostgreSQL `EXPLAIN (ANALYZE, BUFFERS)` gate for the selected-post status read.
-- Broader video transcoding remains deferred until a concrete product/input requirement defines its codec/container contract.
+- M3 media pipeline: **complete for the accepted v2 scope and integrated**.
+- M4 connected core product: **next**.
 
-## Progress/status — candidate pending target plan gate
+M3 accepted scope now includes:
+
+- durable PostgreSQL media jobs with transactional claiming, retry/recovery, leases and generation fencing;
+- upload/URL ingestion and durable source verification;
+- deterministic generation-fenced DB publication and atomic no-overwrite local-NVMe publication;
+- JPEG/PNG/WebP -> deterministic AVIF canonical + 256x256 AVIF thumbnail processing;
+- production Rust worker runner with renewal, cancellation, reconnect/backoff, graceful shutdown and crash/restart recovery;
+- compatible MP4 H.264/AAC zero-transcode canonical publication plus deterministic AVIF thumbnail;
+- exact perceptual-dHash duplicate candidates with bounded PostgreSQL lookup;
+- durable regeneration through the same processing/job/publication path while preserving last-known-good media;
+- authoritative coarse media progress/status exposure plus bounded selected-post polling UI.
+
+Broader video transcoding, exact WebM/EBML acceptance and operational orphan/janitor hardening remain deferred until concrete product/production requirements justify them; they do not block the accepted M3 gate.
+
+## M3 progress/status — accepted and integrated
 
 Feature branch: `astra/m3-progress-status`, branched from `v2` at `4e547d1d06f862950ff820897b12e401291c0bec`.
 
-Exact executable candidate awaiting target query-plan evidence:
+Exact executable candidate target-gated:
 
 `ba3265910ed7ede38e08e925a7cbdc0b63fdc9ef`
 
-Relevant commits:
+Integrated feature/docs head before this state-only commit:
 
-- `640171e2e07a42257a851d2fb844049d1157e81c` — authoritative media-status domain/store/API boundary plus reusable Solid status/polling UI;
-- `d3552bcec0fd3bc99a3373f81f26b308e50a0db9` — gofmt-only correction for the status service;
-- `9a8903f34c39d1a5ccaae4addd1ca3494c752df6` — gofmt-only correction for status tests;
-- `ba3265910ed7ede38e08e925a7cbdc0b63fdc9ef` — frontend coverage for bounded retry polling; no production behavior change from the initial feature commit.
+`cf3f3d40f573e58dd6feb7cbd74136059a531e0f`
 
-Contract and architecture:
+Relevant feature commits:
 
-- status is derived directly from authoritative `media_jobs`, post release/deletion state and ready media publication; there is no event table, progress table, SSE, WebSocket, Redis pub/sub, Kafka, second worker or synchronization process;
-- user-visible phases are coarse and truthful: `waiting`, `processing`, `retrying`, `failed`, `ready`; no fabricated numeric percentage exists;
-- initial ingestion and regeneration are distinguished by whether last-known-good released media is already usable;
-- released regeneration keeps authoritative media visible while replacement processing is waiting/running/retrying and after terminal failure;
-- terminal regeneration failure returns a safe message stating that existing media remains available; raw `last_error` is never exposed;
-- running status is based on an active lease; an expired non-final running lease derives as retrying and an expired max-attempt lease derives as failed, matching durable reclaim semantics without mutating ownership;
-- superseded generation does not require a separate status stream because regeneration reuses the same authoritative kind-0 job row and stale work remains fenced by the existing generation/ownership/source/post-state publication rules;
-- the current v2 HTTP API has no authentication, so `GET /api/v2/posts/{id}/media-status` exposes status only for already-released, non-deleted posts with ready media; unreleased initial-ingestion/deleted/non-visible posts return the same `404 post_not_found` shape to avoid existence leakage;
-- initial-ingestion status is still derived and PostgreSQL-tested behind the internal service boundary so M4 can expose it only after authenticated owner/visibility semantics exist;
-- status is not embedded into normal feed responses, so unused status adds zero normal-feed SQL/query cost;
-- the frontend helper/component polls one relevant selected post every 2 seconds only while status is `waiting`, `processing` or `retrying`; it stops on `failed`, `ready`, 404, post change or unmount and uses `AbortController` cleanup;
-- the reusable component is intentionally not mounted into the synthetic M1 benchmark `App.tsx`; M4 is where the real authenticated board/API replaces that harness, so this slice does not add throwaway network work or alter the accepted board benchmark surface.
-
-SQL/read shape:
-
-- one post lookup reads release/deletion state, checks ready media with `EXISTS`, and uses a lateral `ORDER BY id DESC LIMIT 1` lookup for the latest kind-0 `media_jobs` row;
-- the latest-job lookup is aligned with existing `media_jobs_post_kind_id_idx (post_id, kind, id DESC)` from migration `005_media_job_regeneration_lookup.sql`;
-- the read uses no row lock, performs no lease/job mutation, does not select raw `last_error`, and does no media decode/processing;
-- PostgreSQL-backed tests verify latest-kind-0 selection and that the status read does not change the job row's `updated_at`/lease state.
+- `640171e2e07a42257a851d2fb844049d1157e81c` — authoritative media-status domain/store/API boundary and reusable Solid status/polling UI;
+- `d3552bcec0fd3bc99a3373f81f26b308e50a0db9` — service formatting correction;
+- `9a8903f34c39d1a5ccaae4addd1ca3494c752df6` — status-test formatting correction;
+- `ba3265910ed7ede38e08e925a7cbdc0b63fdc9ef` — bounded retry-polling frontend coverage;
+- `cf3f3d40f573e58dd6feb7cbd74136059a531e0f` — candidate state documentation only; production code unchanged from `ba326591...`.
 
 Applicable CI:
 
-- all-scope run `37247908516` on `640171e2e07a42257a851d2fb844049d1157e81c`: Rust worker unit/PostgreSQL/regeneration/runner/video tests and clippy passed; the run then stopped at `gofmt` for the two new Go status files before backend compile/tests or frontend validation;
-- backend run `37248297712`: **success** on `9a8903f34c39d1a5ccaae4addd1ca3494c752df6`, including Go formatting, `go vet ./...`, PostgreSQL-backed `go test -v -count=1 ./...`, applicable hermetic worker release-build check and clean tracked checkout;
-- frontend run `37248392896`: **success** on exact candidate `ba3265910ed7ede38e08e925a7cbdc0b63fdc9ef`, including all 11 Node tests, `tsc --noEmit`, Vite production build, applicable worker-build skip because inputs were unchanged, and clean tracked checkout;
-- `d3552bcec0fd3bc99a3373f81f26b308e50a0db9` had only the remaining test-file gofmt failure; no correctness failure was exposed.
+- backend run `37248297712`: **success** on `9a8903f34c39d1a5ccaae4addd1ca3494c752df6`, including Go formatting/vet, PostgreSQL-backed tests, applicable hermetic worker-build check and clean tracked checkout;
+- exact candidate run `37248392896`: **success** on `ba3265910ed7ede38e08e925a7cbdc0b63fdc9ef`, including all frontend tests, TypeScript check, Vite production build and clean tracked checkout;
+- post-fast-forward `v2` run `37250108850`: **success** on `cf3f3d40f573e58dd6feb7cbd74136059a531e0f`, including scoped v2 correctness, hermetic target-worker release build and clean tracked checkout.
 
-Performance decision so far:
+Accepted contract:
 
-No normal-feed query, request count or current M1 board rendering behavior changes. The current synthetic board does not mount the status component, so no browser performance gate is justified for this feature-branch candidate. The selected-post status read can become a repeated 2-second query while media work is unresolved, so target-server `EXPLAIN (ANALYZE, BUFFERS)` evidence is required before integration. `PERFORMANCE.md` is unchanged until that evidence is accepted.
+- status derives directly from authoritative post/media/media-job state; no event table, progress table, SSE, WebSocket, Redis pub/sub, Kafka or second synchronization worker;
+- user-visible phases are `waiting`, `processing`, `retrying`, `failed`, `ready`; no fabricated percentage;
+- regeneration keeps last-known-good released media visible while replacement work is pending/running/retrying and after failure;
+- raw worker `last_error` is not exposed;
+- expired running leases derive as retrying/failed according to durable reclaim semantics without mutating the job;
+- current unauthenticated v2 HTTP exposure returns status only for released, non-deleted posts with ready media; unreleased/deleted/non-visible posts use the same `404 post_not_found` shape;
+- initial-ingestion status remains available behind the internal service boundary for later authenticated owner/visibility semantics;
+- normal feed responses do not include status, so unused status adds no normal-feed SQL cost;
+- frontend polling is one selected post every 2 seconds only while unresolved and stops on terminal state, 404, post change or unmount with `AbortController` cleanup;
+- the reusable component is intentionally not mounted into the synthetic M1 benchmark app; M4 will mount it into the real connected board.
 
-## Regeneration — accepted contract
+### Target status-query plan gate
 
-Feature branch: `astra/m3-regeneration`, branched from `v2` at `1b54204c84b45722cbac3af533e9515a8dbe3b3f`.
+Evidence package:
 
-Relevant commits:
-
-- `8b8ae1b66cdcc98717694d8b2ae9d28b6176558b` — durable regeneration primitive, PostgreSQL request semantics, lookup migration, publication replacement semantics and focused tests;
-- `217dc165c03f823e2d7a777a339fd5a32c4fb8c1` — rustfmt-only correction;
-- `36da67ea0c77774aca45cd1cb78d5e75ea33b31f` — first regeneration state/documentation integration commit;
-- `6dbed26bb1cceeb28e1b1b4899d32067d33a8987` — test-fixture-only PostgreSQL parameter typing correction; production code is unchanged from `217dc165c03f823e2d7a777a339fd5a32c4fb8c1`.
-
-Exact integrated executable state before this final state-only commit:
-
-`6dbed26bb1cceeb28e1b1b4899d32067d33a8987`
-
-Applicable CI:
-
-- feature run `37246198934`: **success** on `217dc165c03f823e2d7a777a339fd5a32c4fb8c1`, including scoped v2 correctness, PostgreSQL-backed tests, hermetic target-worker release build and clean tracked checkout;
-- initial post-fast-forward `v2` run `37246461451` on `36da67ea0c77774aca45cd1cb78d5e75ea33b31f`: **failure** in the new Go regeneration fixture before the request under test because one setup query reused `$1` as both a `smallint` job state and an untyped integer expression; worker regeneration tests and the production regeneration path passed in that run;
-- repair feature run `37246617978`: **success** on `6dbed26bb1cceeb28e1b1b4899d32067d33a8987`;
-- post-fast-forward `v2` run `37246694427`: **success** on the same `6dbed26bb1cceeb28e1b1b4899d32067d33a8987`, including scoped correctness, PostgreSQL-backed tests, release build and clean tracked checkout;
-- earlier run `37246073444` on `8b8ae1b66cdcc98717694d8b2ae9d28b6176558b` stopped at `cargo fmt --check` for one line wrap before compile/tests; it exposed no correctness failure.
-
-Contract and state transitions:
-
-- regeneration reuses the existing kind-0 media-processing job row and the existing worker/processor/publication path; there is no new job kind, table, worker, queue or event system;
-- a released, non-deleted post with authoritative `media_sources` and ready `media` can request regeneration;
-- succeeded or failed kind-0 work is reactivated by resetting the same job to pending, clearing prior claim/error state and resetting attempts;
-- a duplicate request while the job is already pending coalesces without resetting retry/backoff or lease generation;
-- a request while the job is running supersedes the running attempt by returning the same job to pending and incrementing `lease_generation`; stale ownership therefore fails the existing publication fence;
-- initial ingestion/processing without last-known-good ready media is not treated as regeneration and is left untouched;
-- the currently ready/released media remains authoritative while regeneration is pending/running and after regeneration failure; requesting regeneration never hides an already valid released post;
-- terminal regeneration failure changes only the durable job outcome and does not destroy the last known-good `media` publication;
-- unchanged source/current processing version follows the existing deterministic output-key path and verified file reuse; no overwrite or random output naming is introduced;
-- successful publication remains fenced by job state, worker ownership, `lease_generation`, authoritative source digest and post state;
-- publication conflict handling now atomically replaces the authoritative `media` storage key, output digest and metadata after all existing fences pass, so a future output-affecting processing-version/source change can replace prior media without a second pipeline;
-- regenerated still/video work therefore derives perceptual hash through the same accepted processors and publishes it through the same authoritative transaction;
-- processing version remains version 1 because this slice changes orchestration/publication semantics, not output bytes or codec behavior.
-
-SQL/index shape:
-
-- regeneration lookup prioritizes an active kind-0 job for the post, otherwise the latest durable kind-0 row, locks that job row, and performs the request transition transactionally;
-- migration `005_media_job_regeneration_lookup.sql` adds `media_jobs_post_kind_id_idx ON media_jobs (post_id, kind, id DESC)` so the common completed-job regeneration lookup is bounded instead of scanning durable job history;
-- the new query is request-only/cold-path work. It does not change normal feed queries, idle polling, worker claim shape, codec execution or steady-state dispatch cost.
-
-Performance decision:
-
-No target API-coexistence rerun or new performance gate was required. Regeneration is dormant when unused, reuses the existing processing/claim/codec path when invoked, and adds no polling table, worker, normal-feed query, source reread, copy or second encode/decode pass. The only new lookup is an explicit on-demand regeneration request and is backed by the dedicated `(post_id, kind, id DESC)` index. No new hot steady-state SQL shape was introduced, so an additional `EXPLAIN (ANALYZE, BUFFERS)` target gate was not justified for this slice. `PERFORMANCE.md` is unchanged.
-
-## Perceptual duplicate detection — accepted contract
-
-Feature branch: `astra/m3-perceptual-duplicates`, originally branched from `v2` at `ac980f99bf1706557a48eb420d4600b6d20a2f96`.
-
-Exact executable candidate validated on target and accepted:
-
-`2cef9a9d309639855a9e5b14cfa19191f40acbe5`
-
-Accepted feature/integration state before its final state-only commit:
-
-`a87036320ad1b3aa9ef07e4acafbb0c87cf67bcb`
-
-Applicable CI:
-
-- feature executable run `37237731218`: **success** on exact SHA `2cef9a9d309639855a9e5b14cfa19191f40acbe5`;
-- post-fast-forward `v2` run `37241640457`: **success** on exact SHA `a87036320ad1b3aa9ef07e4acafbb0c87cf67bcb`;
-- post-integration run passed scoped v2 correctness, PostgreSQL-backed tests, hermetic target-worker release build and clean tracked checkout.
-
-Hash contract:
-
-- explicit `PERCEPTUAL_HASH_VERSION = 1`;
-- 64-bit horizontal difference hash / dHash;
-- representative pixels resize directly to 9x8 with the existing `image` crate Triangle filter, convert to luma, then pack 64 left-vs-right comparisons row-major into PostgreSQL `bigint`;
-- still images hash the already-decoded/orientation-applied source before canonical resize;
-- videos hash the already-extracted bounded representative frame used for thumbnail generation;
-- no second source decode and no additional full-resolution copy solely for hashing;
-- successful current image/video processing produces a non-null hash;
-- output-affecting hash changes require a new explicit hash/processing contract; incompatible versions must not be exact-compared;
-- PostgreSQL publication remains generation/source-digest/lease fenced, so stale work cannot authoritatively publish a hash or release a post.
-
-Duplicate semantics:
-
-- exact perceptual-hash equality only; no Hamming-distance/ANN lookup in this slice;
-- a match is a **candidate**, never an automatic reject/merge/link decision;
-- cross-kind image/video matches are allowed because both use the same representative-pixel contract;
-- source post is excluded;
-- candidate media must be ready;
-- candidate post must be released and non-deleted;
-- caller-supplied content filters remain enforced;
-- default limit 20, hard maximum 100;
-- results order by post ID descending;
-- source `NULL` hash returns no candidates;
-- no public HTTP duplicate endpoint yet; the boundary remains internal until product/API visibility semantics require exposure.
-
-Accepted SQL/index shape:
-
-- source perceptual hash is resolved as a scalar subquery / PostgreSQL InitPlan;
-- candidate access is constrained by equality on that scalar hash;
-- `media_phash_post_idx ON media (perceptual_hash, post_id DESC) WHERE perceptual_hash IS NOT NULL` supplies both bucket selection and result order;
-- the old single-column `media_phash_idx` is removed by migration `004_media_perceptual_hash_lookup.sql`;
-- visibility checks remain against authoritative `posts` rows rather than denormalizing release/deletion/content-filter state into `media`.
-
-## Accepted target evidence
-
-### Processing/correctness gate
-
-Evidence package: `m3-perceptual-duplicates-20261004T203424Z.zip`
+`m3-media-status-plan-20261005T005900Z.zip`
 
 Uploaded SHA-256:
-`4544bcf2afdfdc11fcc53198be38b44de1da92505e0b0ce1ef3fe9de81707344`
 
-Manifest: **455/455 entries verified**.
+`8052f85a82d454c8431882b1756fb6491ee0183d62ec18a1586a4e4c79001ca7`
 
-Tested executable SHA: `4051dd6a86664809fce98823806f707d0b2947ff` before the later SQL/index-only correction.
+Manifest: **72/72 entries independently verified**. Exact tested executable SHA: `ba3265910ed7ede38e08e925a7cbdc0b63fdc9ef` in a detached candidate checkout.
 
-Accepted processing evidence:
+PostgreSQL 17.11 used the production-shaped selected-post status query against the standard 100k seed plus a deliberate 10,001-kind-0-job history fixture for one post.
 
-- still image, three paired 20-job rounds: median wall time **16.069143 -> 16.288370 s**, about **+1.36%**;
-- compatible video, three paired 20-job rounds: median wall time **10.977987 -> 10.959615 s**, about **-0.17%**;
-- CPU/RSS showed no meaningful regression;
-- all paired canonical/thumbnail byte-equivalence checks passed;
-- all measured jobs succeeded and max running jobs remained one;
-- repeated image/video processing produced deterministic non-null hashes;
-- cross-kind exact-match and visibility/null-hash correctness checks passed.
+Accepted evidence:
 
-Decision: **accept hashing/processing**. No additional 80,000-request API coexistence rerun is justified by the measured hash cost.
+- typical released post: one result; `posts_pkey`, `media_jobs_post_kind_id_idx`, `media_pkey`; **0.161 ms** plan execution;
+- history-heavy post with 10,001 matching kind-0 jobs: `Limit` directly above `media_jobs_post_kind_id_idx`, one index row visited/returned; **0.171 ms** plan execution;
+- no-job post: one released/ready result with null job fields; **0.143 ms** plan execution;
+- missing post: no result and lateral/media subplans not executed; **0.080 ms** plan execution;
+- all four plans had zero shared-buffer reads, zero temp spill, no sequential scan and no explicit sort;
+- thirty prepared history-heavy executions included one initial **2.483 ms** call; the following 29 ranged **0.161-0.406 ms**, median **0.186 ms**;
+- all correctness assertions passed and the status read is non-mutating.
 
-That first gate rejected the original duplicate SQL under a 50,001-row same-hash collision bucket because PostgreSQL used backward `media_pkey` access and scanned large ranges of unrelated media to satisfy ordering. A diagnostic composite index alone did not fix that join-shaped SQL.
+Decision: **accept the query-plan gate and the progress/status slice**. Durable job history does not increase rows visited for the selected-post latest-job lookup. This evidence is a PostgreSQL plan gate, not a broader HTTP throughput benchmark. No API-coexistence rerun, cache, event stream or extra status infrastructure is justified.
 
-### Corrected query-plan gate
-
-Evidence package: `m3-perceptual-query-recheck-20261004T220113Z.zip`
-
-Uploaded SHA-256:
-`709397fb3cd88b12f9017a083bbf0a2d513fd73b2d4170c6caf2164d761f0e06`
-
-Manifest: **252/252 entries verified**. Exact tested executable SHA: `2cef9a9d309639855a9e5b14cfa19191f40acbe5` in a detached worktree. The later docs-only feature tip was not used for execution.
-
-PostgreSQL 17.11, 100k standard seed plus representative and deliberate 50,001-row same-hash fixtures:
-
-| case | candidate index entries visited | median | p95 |
-| --- | ---: | ---: | ---: |
-| selective L20 | 4 | **0.163 ms** | **0.207 ms** |
-| selective L100 | 4 | **0.136 ms** | **0.192 ms** |
-| no candidates L20 | 1 | **0.142 ms** | **0.261 ms** |
-| visible collision L20 | 21 | **0.230 ms** | **0.327 ms** |
-| visible collision L100 | 101 | **0.481 ms** | **0.545 ms** |
-| restrictive collision L20 | 49,921 | **64.765 ms** | **71.978 ms** |
-| restrictive collision L100 | 50,001 | **64.572 ms** | **67.525 ms** |
-
-Plan evidence:
-
-- source lookup appears as `InitPlan 1` using `media_pkey` for exactly one source row;
-- candidate scans use `media_phash_post_idx` with equality on the InitPlan hash;
-- no explicit sort node appears; the composite index supplies descending post ID order;
-- visible collision stops after 21/101 bucket entries for limits 20/100;
-- restrictive collision scans most/all of the **matching hash bucket** because only 100 low-ID posts are visible;
-- no unrelated-hash/global backward `media_pkey` candidate scan remains;
-- all DB-only correctness spot checks passed.
-
-Decision: **accept corrected query/index shape**. The remaining ~65 ms restrictive case is a deliberately pathological 50k-collision bucket whose cost is now bounded by the matching bucket and authoritative visibility checks. Do not denormalize post visibility or add another cache/index solely for this synthetic case. Revisit only if real production collision distributions or a future high-rate public/ingestion duplicate lookup demonstrate material load.
-
-The target agent's canonical local checkout was clean but had a stale local `v2` ref at old commit `38c515afd2862cb6a3b6a6c677c9b34fa210b662`. This did not affect the gate: exact baseline/candidate detached worktrees were used. GitHub `v2` was verified at `ac980f99bf1706557a48eb420d4600b6d20a2f96` immediately before the fast-forward integration.
+Target cleanup removed the disposable PostgreSQL container and candidate checkout. Wallium PostgreSQL/Redis remained healthy and the canonical checkout remained clean. Raw target evidence may be deleted now that the uploaded ZIP has been independently validated.
 
 ## Retained architecture / invariants
 
 Keep unless new evidence justifies change:
 
 - nginx for TLS/static/media/reverse proxy;
+- SolidJS + TypeScript + Vite + plain CSS;
 - Go 1.25 + standard `net/http` + pgx/v5;
-- PostgreSQL authoritative for application state and durable jobs;
+- PostgreSQL authoritative for app state and durable jobs;
 - no Redis baseline dependency without measured need;
-- Rust media worker;
-- local NVMe media storage;
-- immutable numeric relational IDs; never usernames as foreign keys;
+- Rust media worker and local NVMe media storage;
+- immutable numeric relational IDs; never username as a foreign key;
 - post-ID cursor pagination, never OFFSET;
 - real search lexer/parser/AST and parameterized SQL only;
-- durable jobs use PostgreSQL ownership + generation fencing;
-- filesystem/codec work stays outside DB transactions;
-- stale work cannot release a post or authoritatively complete a job;
-- deterministic/idempotent no-overwrite filesystem effects for at-least-once work;
-- one active media job per worker;
-- one still-image/video-thumbnail AVIF encoder thread;
-- production idle poll 500 ms;
-- production lease baseline 30 s, heartbeat around one third of lease;
+- filesystem/codec work outside DB transactions;
+- stale/lost ownership can never release a post or authoritatively publish/complete work;
+- deterministic/idempotent no-overwrite filesystem effects for at-least-once processing;
+- one active media job per worker and one still-image/video-thumbnail AVIF encoder thread;
+- production worker idle poll 500 ms; lease baseline 30 s; heartbeat around one third of lease;
 - PostgreSQL worker connect/statement budget `min(lease / 10, 3s)`, 1 ms floor;
-- output-affecting media changes require explicit processing-version identity.
+- output-affecting media changes require explicit processing-version identity;
+- do not add Redis wakeups, cgroups, affinity, quotas, scheduler tuning or load admission without new evidence.
 
-Do not add Redis wakeups, cgroups, CPU affinity, quotas, scheduler tuning or load admission from current evidence.
+## Deferred work
 
-## Accepted media scope
+Do not pull these into the next slice unless a concrete requirement makes them necessary:
 
-Still-image processing version 1 supports non-animated JPEG/PNG/WebP -> AVIF canonical + 256x256 AVIF thumbnail with deterministic durable publication. Animated PNG/WebP, GIF and AVIF/HEIF input remain out of scope for this contract.
-
-Compatible-MP4 processing version 1 accepts MP4 with one H.264 8-bit 4:2:0 video stream, AAC or no audio, square pixels and supported orthogonal rotation. It publishes source bytes without transcoding plus one deterministic AVIF thumbnail. HEVC, 10-bit/other pixel formats, non-AAC audio, non-square pixels and unsupported/conflicting rotation are rejected rather than silently transcoded or mislabeled.
-
-Do not add broader video transcoding until a concrete required input/browser/product capability defines the exact output codec/container contract.
-
-## Remaining M3 work
-
-- accept the target query-plan evidence for the progress/status lookup and integrate the slice if it is bounded/indexed as designed;
-- decide whether broader video transcoding is required only from concrete product/input evidence;
-- exact WebM/EBML acceptance remains deferred until container distinction and browser-compatibility behavior are explicit.
-
-Deferred operational cleanup:
-
-- ingestion-source, processed-staging and superseded deterministic-output orphan reconciliation/janitor;
+- broader video transcoding;
+- exact WebM/EBML acceptance;
+- ingestion-source, processed-staging and superseded-output orphan janitor;
 - deployment UID/GID/media-storage permissions;
-- stronger `openat2`/`O_NOFOLLOW` hardening only if the local media-tree threat model changes;
-- v1-v2 apples-to-apples benchmark once equivalent end-to-end behavior exists.
+- stronger `openat2`/`O_NOFOLLOW` hardening if the media-tree threat model changes;
+- v1-v2 apples-to-apples end-to-end benchmark once equivalent behavior exists.
 
 ## Local-agent rule
 
-Use local/server agents for browser/DevTools, SSH, real PostgreSQL, target-server benchmarks, temporary deployments or unavailable toolchains. Before handoff, exact-revision applicable CI must be green. Default is read-only/execution-only; agents must not modify tracked source/docs/config, branches, deployments or persistent state without explicit approval. Return one retained evidence ZIP with exact SHA, commands, raw outputs, environment, measurements, errors and cleanup/restoration evidence.
+Use local/server agents for browser/DevTools, SSH, real PostgreSQL, target benchmarks, temporary deployment or unavailable toolchains. Exact handed revisions must have applicable CI green first. Default permission is read-only/execution-only; no tracked/source/config/branch/deployment/persistent-state writes without explicit user approval. Return one evidence ZIP with exact SHA/status, commands, raw output, versions/environment, measurements/plans, errors and cleanup proof.
 
 ## Single best next task
 
-Run the **target-server disposable-PostgreSQL `EXPLAIN (ANALYZE, BUFFERS)` gate for the exact status query at executable SHA `ba3265910ed7ede38e08e925a7cbdc0b63fdc9ef`**, return one retained evidence ZIP, then use that evidence to decide whether the M3 progress/status slice is acceptable for fast-forward integration.
+Begin **M4 authenticated identity/session + invitation-registration boundary** from current `v2`.
+
+Inspect the M2 users/roles/credentials/invitations schema and current HTTP boundaries first. Implement the smallest coherent authentication/session architecture that supports invitation-only registration now while keeping user identity independent from credentials so passkeys/OIDC/OAuth/email can be added later without redesigning users. Do not connect the full board, votes, tags or comments in the same slice. Validate password/session security parameters on the target host if the chosen primitive has hardware-sensitive cost.
