@@ -34,7 +34,7 @@ const (
 )
 
 var (
-	ErrPostNotFound     = errors.New("post not found")
+	ErrPostNotFound      = errors.New("post not found")
 	ErrInconsistentState = errors.New("inconsistent media status state")
 )
 
