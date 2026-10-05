@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-05
-Phase: **M4 connected core product in progress; search-connected board browser gate accepted, integration pending**
+Phase: **M4 connected core product in progress; search-connected board accepted, browser-gated and integrated**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -15,10 +15,10 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
 - M4 connected core product: **in progress**.
   - authentication/session foundation: **accepted, target-gated and integrated**;
   - connected board/API/session boundary: **accepted, browser-gated and integrated**;
-  - search-connected board: **accepted by exact-candidate CI + browser/DevTools gate; integration into `v2` is the immediate remaining action**;
+  - search-connected board: **accepted, browser-gated and integrated**;
   - post/comment votes, tag mutations, nested comments and profiles remain.
 
-## M4 search-connected board — accepted browser gate
+## M4 search-connected board — accepted and integrated
 
 Feature branch: `astra/m4-search-board`, branched from `v2` at:
 
@@ -29,6 +29,12 @@ Exact executable candidate:
 `e6355939e8e547cd50905ecbe1b0e10943da8743`
 
 Exact-candidate CI run `37266606785`: **success**. It completed the exact-revision checkout, scoped v2 correctness gate, applicable worker-build verification and clean tracked-checkout verification.
+
+Accepted feature/evidence head fast-forwarded into `v2`:
+
+`83a6b7fb3d61b1f356b7a03a28739ce5352b015d`
+
+Post-fast-forward `v2` CI run `37268889533`: **success**.
 
 Browser evidence package:
 
@@ -50,7 +56,7 @@ Accepted implementation boundary:
 - retained-post selection under an unchanged query stays synchronous and does not issue feed/around requests;
 - older pagination keeps post-ID cursor semantics plus the active `q`; newer-edge recovery and direct links use around with the same `q`;
 - the accepted 960-post bound, ID-descending ordering, stable row identity and targeted selected-post reactivity are preserved;
-- no backend search/feed/around SQL changed, so this slice introduces no new hot SQL shape requiring another `EXPLAIN (ANALYZE, BUFFERS)` gate;
+- no backend search/feed/around SQL changed, so this slice introduced no new hot SQL shape requiring another `EXPLAIN (ANALYZE, BUFFERS)` gate;
 - no votes, tag mutations, comments, uploads, profiles, moderation, Redis or new state-management dependency was added.
 
 Accepted browser/DevTools evidence:
@@ -76,9 +82,9 @@ Expected/nonblocking evidence noise:
 - one media-status request was `net::ERR_ABORTED` during rapid benchmark reselection, matching designed `AbortController` cancellation;
 - the main-script `newer-edge-q` check had no around request in that particular window and was therefore vacuous, but the dedicated retention gate explicitly forced newer-edge recovery and verified `/around?...&q=common`.
 
-The disposable browser runtime, API, nginx, database, fixtures and worktree were cleaned up successfully. The agent reported no tracked-source/config/branch writes and no production/persistent application-state changes. Its canonical local checkout had a pre-existing local `v2` HEAD different from GitHub; remote GitHub `v2` remained authoritative and was independently verified before integration work.
+The disposable browser runtime, API, nginx, database, fixtures and worktree were cleaned up successfully. The agent reported no tracked-source/config/branch writes and no production/persistent application-state changes. Its canonical local checkout had a pre-existing local `v2` HEAD different from GitHub; remote GitHub `v2` was independently verified and used as the integration authority.
 
-Decision: **accept the M4 search-connected board slice**. The evidence shows no meaningful selection/update-scope regression relative to the accepted connected-board harness, and no additional frontend architecture or backend search changes are justified.
+Decision: **accept and retain the M4 search-connected board slice**. The evidence shows no meaningful selection/update-scope regression relative to the accepted connected-board harness, and no additional frontend architecture or backend search changes are justified.
 
 ## Retained M4 connected-board/auth decisions
 
@@ -131,4 +137,4 @@ Use local/server agents for browser/DevTools, SSH, real PostgreSQL, target bench
 
 ## Single best next task
 
-Fast-forward the accepted `astra/m4-search-board` evidence head into current GitHub `v2`, run/verify the resulting `v2` CI, then record the integrated head and leave the next product slice explicit before further feature work.
+Begin the next M4 slice from current `v2`: implement **post voting** as the smallest authenticated mutation. First inspect the existing fresh schema/auth/feed contracts; add a thin Go mutation/workflow using numeric user/post IDs and transactional PostgreSQL state, expose the requesting user's current post vote in board data without extra per-post round trips, and connect optimistic SolidJS vote controls while preserving search/history/960-post retention and targeted row updates. Keep comment voting, tag voting/mutations and comments out of this slice. Check any new hot SQL with `EXPLAIN (ANALYZE, BUFFERS)` and browser-test rollback/error behavior plus retained-row update scope before integration.
