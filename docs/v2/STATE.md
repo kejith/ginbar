@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-05
-Phase: **M4 connected core product in progress; post-voting executable candidate is CI-green, SQL/browser acceptance pending**
+Phase: **M4 connected core product in progress; post voting accepted, integration fast-forward pending only because the GitHub ref-update connector cannot update top-level `v2`**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -11,182 +11,143 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
 
 - M1 board performance prototype: **complete and integrated**.
 - M2 fresh PostgreSQL schema + core Go API: **complete and integrated**.
-- M3 media pipeline: **complete for the accepted v2 scope and integrated**.
+- M3 media pipeline accepted scope: **complete and integrated**.
 - M4 connected core product: **in progress**.
-  - authentication/session foundation: **accepted, target-gated and integrated**;
-  - connected board/API/session boundary: **accepted, browser-gated and integrated**;
-  - search-connected board: **accepted, browser-gated and integrated**;
-  - post voting: **implemented on `astra/m4-post-voting`, exact executable CI green, SQL/browser acceptance pending**;
+  - authentication/session foundation: **accepted and integrated**;
+  - connected board/API/session boundary: **accepted and integrated**;
+  - search-connected board: **accepted and integrated**;
+  - post voting: **accepted; feature history ready for fast-forward into `v2`**;
   - comment voting, tag mutations, nested comments and profiles remain.
 
-## M4 post voting — implementation complete, acceptance pending
+## M4 post voting — accepted
 
-Feature branch: `astra/m4-post-voting`, branched from `v2` at:
+Feature branch: `astra/m4-post-voting`, branched from GitHub `v2` at:
 
 `a1043990f4deafb4ba19a84877fdd61fe015236e`
+
+Reviewed history before this state-only update:
+
+- `146e6afc3d9b1afde122728814ffbacf9aded5a1` — `feat(v2): add authenticated post voting`
+- `e1c5d1f65e72a81615164bc6445bcdc2d8218381` — exact executable candidate; test-fixture correction only
+- `9b584bd937c7bcc812a10ed7509b7f73c5569cd7` — documentation-only candidate record
 
 Exact executable candidate:
 
 `e1c5d1f65e72a81615164bc6445bcdc2d8218381`
 
-Exact-candidate CI run `37313953385`: **success**. It completed the exact-revision checkout, full scoped v2 correctness gate, PostgreSQL-backed Go tests, frontend validation/tests/build, worker checks, target-worker release-build verification and clean tracked-checkout verification.
+Exact-candidate CI run `37313953385`: **success**. The run matched the exact SHA and completed the scoped v2 correctness gate, PostgreSQL-backed Go tests, frontend validation/tests/build, worker checks, target-worker release-build verification and clean tracked-checkout verification.
 
-An earlier executable `146e6afc3d9b1afde122728814ffbacf9aded5a1` failed CI run `37313602695` only because two new PostgreSQL test fixture usernames exceeded the existing schema length constraint. Production code was unchanged; the fixture generator was bounded and the corrected exact candidate above passed.
+An earlier executable `146e6afc3d9b1afde122728814ffbacf9aded5a1` failed CI run `37313602695` only because two PostgreSQL test fixture usernames exceeded the existing username-length constraint. Production code did not change; the bounded fixture correction produced the accepted executable above.
 
-Implemented boundary:
+### Accepted implementation boundary
 
-- `PUT /api/v2/posts/:id/vote` is an authenticated same-origin mutation with an explicit requested state `-1`, `0` or `+1`;
-- voting uses immutable numeric `users.id` and post IDs; no username identity or Redis/cache/write-behind path was introduced;
-- the PostgreSQL mutation is one transaction: lock the released/nondeleted post row, read that user's current vote after the lock, delete/upsert `post_votes` as needed, derive the exact score delta as `newVote-currentVote`, update `posts.score`, then commit;
-- the post row lock serializes competing score mutations on the same post, while the existing `(post_id, user_id)` primary key provides the point lookup/upsert key;
-- explicit repeated requested state is idempotent; the frontend contract maps clicking the already-active direction to an explicit neutral request;
-- feed and around accept an optional viewer identity resolved once from the existing session boundary; authenticated reads left-join the existing `post_votes` primary key and expose `userVote` in the same bounded query;
-- signed-out feed/around reads project literal neutral `userVote=0` and do not join `post_votes` at all;
-- no schema redesign or new index was added because the existing `post_votes(post_id,user_id)` primary key matches the new read/mutation point lookups;
-- the SolidJS board applies optimistic score/vote feedback immediately to the retained post state, and selected expanded state continues to derive from that same retained result rather than a duplicate post copy;
-- per-post mutation queues preserve user action order at the server boundary, while per-post sequence numbers prevent older responses from overwriting newer optimistic intent;
-- latest failures reconcile to the last confirmed authoritative state; a 401 also transitions the UI auth state to signed out;
-- vote requests do not invoke feed/around, and the existing search `q`, canonical `/post/:id`, Back/Forward, Arrow/J/K navigation, stable row keys and 960-post retention logic were left intact;
-- comment voting, tag voting/mutations, comments, profiles, moderation/admin, uploads and Redis remain out of scope.
+- `PUT /api/v2/posts/:id/vote` is an authenticated same-origin mutation with explicit requested state `-1`, `0` or `+1`.
+- PostgreSQL remains authoritative; no Redis/cache/write-behind voting path was added.
+- The mutation is one transaction: lock the released/nondeleted post row, read the user's current vote after that lock, delete/upsert `post_votes`, derive score delta as `newVote-currentVote`, update `posts.score`, and commit.
+- The post row lock serializes competing score mutations on one post; existing vote indexes/constraints are reused with no schema migration.
+- Repeating an explicit requested state is idempotent. The frontend maps clicking the active direction to neutral.
+- Feed and around resolve optional viewer identity once through the existing session boundary and expose `userVote` in the same bounded query; signed-out reads return literal neutral state without joining `post_votes`.
+- Optimistic UI updates mutate only the retained post object. Expanded state continues to derive from the same retained post state, not a duplicate copy.
+- Per-post mutation queues preserve server request order and sequence numbers prevent stale responses from overwriting newer intent.
+- Latest failures reconcile to the last confirmed authoritative state. A 401 transitions auth UI state to signed out.
+- Voting a retained post does not trigger feed/around reloads and does not change search `q`, canonical `/post/:id`, Back/Forward, Arrow/J/K navigation, stable row identity, or the 960-post retention architecture.
+- Comment voting, tag mutations, comments, profiles, moderation/admin, uploads and Redis remain out of this slice.
 
-Correctness coverage in the green candidate includes:
+### Correctness coverage
 
-- `0 -> +1`, `0 -> -1`, `+1 -> 0`, `-1 -> 0`, `+1 -> -1`, `-1 -> +1` with exact score assertions;
-- repeated explicit vote-state idempotence;
-- nonexistent post, unauthenticated mutation, cross-origin mutation, malformed/missing/null/out-of-range vote values;
-- two distinct users voting on the same post;
-- concurrent mixed vote mutations with the invariant `posts.score == baseScore + SUM(post_votes.value)`;
-- authenticated feed and around returning the requesting user's vote;
-- signed-out feed and around returning neutral vote state;
-- existing auth/search/feed/around/media/worker correctness suites.
+Green candidate coverage includes:
 
-Performance/SQL preparation:
+- all six transitions: `0 -> +1`, `0 -> -1`, `+1 -> 0`, `-1 -> 0`, `+1 -> -1`, `-1 -> +1`, with exact score deltas;
+- repeated explicit state idempotence;
+- nonexistent post;
+- unauthenticated and cross-origin mutation rejection;
+- malformed, missing, null and out-of-range vote values;
+- two users voting on one post;
+- concurrent mixed mutations with `posts.score == baseScore + SUM(post_votes.value)`;
+- authenticated feed/around returning viewer vote;
+- signed-out feed/around returning neutral viewer vote;
+- retained existing auth/search/feed/around/media/worker suites.
 
-- `src/backend/v2/bench/post_vote_seed.sql` adds 200,000 deterministic vote rows over the existing realistic 100,000-post/1,000-user benchmark fixture and analyzes `post_votes`;
-- `src/backend/v2/bench/post_vote_explain.sql` captures `EXPLAIN (ANALYZE, BUFFERS)` for authenticated first-page feed, old-cursor feed, around reconstruction, post-row lock, current-vote point lookup, vote upsert and score update;
-- those plans have **not yet been accepted** on the real PostgreSQL gate; no performance claim is recorded yet.
+## Accepted SQL/browser gate
 
-Browser acceptance is also **pending**. The gate still must establish immediate optimistic up/down/remove, success reconciliation, failure rollback/reconciliation, rapid opposite-direction behavior without stale corruption, retained-post persistence after navigating away/back, searched-board `q` preservation, Back/Forward coherence, no feed/around request caused merely by voting a retained post, row mount/unmount delta, Long Task/update scope, and unchanged 960-post retention invariants.
+Evidence package:
 
-Decision: **do not integrate post voting into `v2` yet**. The exact executable candidate is eligible for the read-only local SQL/browser acceptance gate because applicable CI is green, but SQL plans and browser evidence remain mandatory integration gates.
+`m4-post-voting-20261005T133638Z.zip`
 
-## M4 search-connected board — accepted and integrated
+Independently validated SHA-256:
 
-Feature branch: `astra/m4-search-board`, branched from `v2` at:
+`4cf5c5839e7cfc427465821600bcf08a3bb56e9b5a22dbdead4fd185ca396b14`
 
-`69964e5d6c6d5358b7ef4b69bb739f86b5ab0618`
+Archive integrity check passed. The package contains raw SQL plans, browser traces/results, CI metadata, commands, versions and cleanup proof. The exact tested executable is `e1c5d1f65e72a81615164bc6445bcdc2d8218381`.
 
-Exact executable candidate:
+### SQL-plan evidence
 
-`e6355939e8e547cd50905ecbe1b0e10943da8743`
+Disposable fixture size: 100,000 posts, 100,000 media rows, 200,000 post-vote rows, 1,000 users.
 
-Exact-candidate CI run `37266606785`: **success**. It completed the exact-revision checkout, scoped v2 correctness gate, applicable worker-build verification and clean tracked-checkout verification.
+- authenticated first feed page: 61 rows, execution **0.188 ms**, index-backed `posts_pkey` + `media_pkey` + `post_votes_user_idx`;
+- authenticated old-cursor feed: 61 rows, execution **0.136 ms**, same bounded/index-backed shape with `id < 50000`;
+- authenticated around post 49999: 61 rows, execution **0.577 ms**; only 25–28 kB in-memory quicksorts, no spill; posts/media/votes remain index-backed;
+- post-row lock: `posts_pkey`, execution **0.016 ms**;
+- current-vote lookup: `post_votes_user_idx`, execution **0.005 ms**;
+- upsert conflict arbiter: `post_votes_pkey`, execution **0.146 ms**;
+- score update: `posts_pkey`, execution **0.119 ms**;
+- no large-table sequential scans, temp spills, or unbounded row growth attributable to viewer vote state.
 
-Accepted feature/evidence head fast-forwarded into `v2`:
+These numbers establish boundedness/regression acceptance only; they are not a performance-improvement claim.
 
-`83a6b7fb3d61b1f356b7a03a28739ce5352b015d`
+### Browser evidence
 
-Post-fast-forward `v2` CI run `37268889533`: **success**.
+Isolated API/nginx/frontend runtime backed by a disposable PostgreSQL database established:
 
-Browser evidence package:
+- all six vote transitions correct in DOM and database;
+- optimistic upvote visible about 250 ms after click while a deliberately delayed 1,200 ms response was still pending, followed by authoritative reconciliation;
+- intentional HTTP 500 mutation failure rolled back to the last confirmed neutral score/vote and surfaced an error;
+- rapid up-then-down produced two mutation requests and ended at the last intent in DOM and database without stale-response corruption;
+- vote state survived select-away-and-return;
+- searched-board voting preserved `q=score:>=35`;
+- Back/Forward and Arrow/J/K remained coherent;
+- canonical `/post/40` path/query remained unchanged by voting;
+- authenticated feed and around exposed the current viewer vote;
+- signed-out reads returned neutral `userVote`, signed-out mutation returned 401 without score change, and vote buttons were disabled;
+- a warmed vote added **0 feed requests / 0 around requests**, **0 row mounts / 0 row unmounts**, and Long Tasks stayed **0 -> 0**;
+- retained state stayed ordered/unique and within the 960-post bound.
 
-`m4-search-board-20261005T052100Z.zip`
+One raw browser check initially reported `expandedScore=4041`; this is accepted as a harness regex artifact caused by concatenating `#40` and `41 points`. The same raw record had coherent score fields, and a dedicated re-probe confirmed expanded and thumbnail score equality (`40 == 40`). No application defect is indicated.
 
-Uploaded/independently validated SHA-256:
+### Cleanup / gate hygiene
 
-`e18d10e57c963dffecc22c309c2710659a8c0eb3f0c095f6387728d1acf6009b`
+The local agent removed both disposable databases, stopped the temporary API/nginx runtime, removed the detached worktree and temporary API binary, and verified no `m4_%` databases remained. The canonical checkout was tracked-clean after the gate. No tracked source/config/docs, commit/ref, deployment or production-state write occurred during the acceptance gate.
 
-Archive integrity check passed with no corrupt ZIP entries. Raw JSON contains **45/45 passing check records** across the main, retention, direct-link, copied-root and media-status runs. `findings.md` says 41/41; that count is stale, but there are no failed raw checks.
+Decision: **accept M4 post voting**. The SQL shapes are bounded/index-backed, mutation correctness and concurrency coverage are sufficient, optimistic/failure/rapid-action behavior is correct, and the board update scope preserves accepted M4 invariants. No additional architecture, cache layer, index or frontend store is justified by the evidence.
 
-Accepted implementation boundary:
+## Integration status
 
-- the frontend carries the existing backend `q` contract through initial feed reads, post-ID cursor pagination and `/api/v2/posts/:id/around` reconstruction;
-- effective search text is represented canonically as `q` on both `/` and `/post/:id`, so copied URLs, reload and browser history retain search context;
-- the frontend only trims the query for canonical state and does **not** duplicate the backend search lexer/parser/AST;
-- include/exclude tags and score predicates remain backend-defined; malformed search surfaces the structured backend `invalid_search` parser message instead of silently falling back to an unfiltered feed;
-- changing the effective query aborts stale route/window work and replaces the retained server window before rebuilding under the new query;
-- retained-post selection under an unchanged query stays synchronous and does not issue feed/around requests;
-- older pagination keeps post-ID cursor semantics plus the active `q`; newer-edge recovery and direct links use around with the same `q`;
-- the accepted 960-post bound, ID-descending ordering, stable row identity and targeted selected-post reactivity are preserved;
-- no backend search/feed/around SQL changed, so this slice introduced no new hot SQL shape requiring another `EXPLAIN (ANALYZE, BUFFERS)` gate;
-- no votes, tag mutations, comments, uploads, profiles, moderation, Redis or new state-management dependency was added.
+GitHub `v2` was re-verified at `a1043990f4deafb4ba19a84877fdd61fe015236e`; `astra/m4-post-voting` is a clean linear descendant with only the reviewed post-voting slice and documentation.
 
-Accepted browser/DevTools evidence:
+The primary GitHub `update_ref` connector rejected attempts to move the top-level `v2` ref during argument binding even though `refs/heads/v2` exists and the target is a verified descendant. Do **not** substitute a merge commit, squash/rebase, or reconstructed file-by-file history merely to bypass that connector limitation. The remaining integration operation is a true fast-forward of `v2` to the accepted feature head, followed by the normal post-fast-forward `v2 CI` verification and a final state-only record of that run.
 
-- normal empty-query board, include `sunset`, exclude `-anime`, combined `sunset -anime`, and `score:>=100` all returned the expected fixture subsets;
-- malformed `score:100` retained the query in the URL, showed the backend parser error and retained zero posts;
-- searched feed pagination preserved `q`; the separate retention run explicitly exercised newer-edge around recovery with `q=common`;
-- query changes rebuilt from a fresh cursor with no stale nonmatching retained posts;
-- Back/Forward restored search windows and searched post selections coherently;
-- fresh `/post/1000?q=sunset` boot issued no initial feed request, showed the route shell before the deliberately delayed around response completed, and reconstructed through around with `q=sunset`;
-- reload of the searched post used around only, and a copied searched root reconstructed through feed with the same query;
-- Arrow/J/K navigation stayed inside the searched retained window;
-- the `common` 1,100-result drain reached a maximum retained count of **960**, ended at 956 after full drain, preserved strict descending unique IDs, exercised both-edge trimming and successfully recovered the newer edge;
-- warmed searched selection produced **0 row mounts / 0 row unmounts** and **0 Long Tasks**;
-- desktop 1440x900, 120 iterations each: same-row sync p95 **0.5 ms**, cross-row sync p95 **0.5 ms**, both frame p95 **16.8 ms**; cross-row sync max **0.8 ms** and frame max **17.2 ms**;
-- end-of-main-run reported heap was about **6.7 MB**;
-- ready selected media status fetched once and did not repeat; unresolved regeneration polled at ~2.0 s gaps; terminal state stopped repeating; Escape stopped polling in all tested modes.
-
-Expected/nonblocking evidence noise:
-
-- signed-out `/api/v2/auth/me` produced the expected 401 console resource entry;
-- the intentional malformed search produced the expected 400 console resource entry;
-- one media-status request was `net::ERR_ABORTED` during rapid benchmark reselection, matching designed `AbortController` cancellation;
-- the main-script `newer-edge-q` check had no around request in that particular window and was therefore vacuous, but the dedicated retention gate explicitly forced newer-edge recovery and verified `/around?...&q=common`.
-
-The disposable browser runtime, API, nginx, database, fixtures and worktree were cleaned up successfully. The agent reported no tracked-source/config/branch writes and no production/persistent application-state changes. Its canonical local checkout had a pre-existing local `v2` HEAD different from GitHub; remote GitHub `v2` was independently verified and used as the integration authority.
-
-Decision: **accept and retain the M4 search-connected board slice**. The evidence shows no meaningful selection/update-scope regression relative to the accepted connected-board harness, and no additional frontend architecture or backend search changes are justified.
-
-## Retained M4 connected-board/auth decisions
-
-Keep the already accepted boundaries unless new evidence requires change:
-
-- session identity is immutable numeric `users.id`; usernames are never relational authorization identity;
-- invitation, identity and credentials remain separate for later OAuth/OIDC/passkey/email expansion;
-- opaque PostgreSQL-backed session tokens remain the baseline; no JWT/Redis auth cache;
-- board root uses post-ID cursor feed; direct post reconstruction uses around without an unnecessary initial feed;
-- selected-post shell updates immediately before network work;
-- route, ephemeral UI and retained server state remain separate;
-- feed pages are 120 posts and retained server state is bounded at 960 posts before considering virtualization;
-- stable row identity and viewport-anchor correction remain required;
-- selected-post media-status polling remains bounded and abortable;
-- nginx exposes processed `media/` only, not ingestion `sources/`;
-- the isolated non-default-port nginx auth caveat remains: `$host` omits an explicit non-default port, while production default-port HTTPS is unaffected.
+The local agent's reported canonical local `v2` at `2b15aeef5662844bfc39fb62d05b5c53d49295a4` is a local-only divergence and is not integration authority; GitHub `v2` remains authoritative.
 
 ## Retained architecture / invariants
 
-- nginx for TLS/static/media/reverse proxy;
+- nginx for TLS/static frontend/media/reverse proxy;
 - SolidJS + TypeScript + Vite + plain CSS;
-- Go 1.25 + standard `net/http` + pgx/v5;
+- Go + standard `net/http` + pgx/v5;
 - PostgreSQL authoritative for application state and durable jobs;
 - no Redis baseline dependency without measured need;
-- Rust media worker + local NVMe media storage;
 - immutable numeric relational IDs; never username as a foreign key;
 - post-ID cursor pagination, never OFFSET;
 - real search lexer/parser/AST and parameterized SQL only;
 - selected-post UI updates immediately and never waits for network;
-- bounded 960-post board retention is accepted before virtualization;
-- hot SQL must be bounded/indexed for actual query shapes and checked with `EXPLAIN (ANALYZE, BUFFERS)` when changed;
-- filesystem/codec work stays outside DB transactions;
-- one active media job per worker remains the accepted baseline until measurements justify otherwise.
+- bounded 960-post board retention before virtualization;
+- stable row identity and targeted retained-post updates;
+- hot SQL bounded/indexed for actual query shapes and checked with `EXPLAIN (ANALYZE, BUFFERS)` when changed;
+- media worker concurrency remains explicitly bounded.
 
-## Deferred work
+## Unresolved issues
 
-Do not pull these into the next M4 slice without a concrete requirement:
-
-- broader video transcoding or exact WebM/EBML acceptance;
-- media orphan/janitor hardening;
-- deployment UID/GID/media-storage permissions;
-- stronger filesystem hardening if the media-tree threat model changes;
-- auth abuse/rate limits and KDF admission controls before production-hardening evidence requires them;
-- virtualization, Redis synchronization, event streams or a large frontend store;
-- v1-v2 end-to-end speedup claims before an apples-to-apples benchmark exists.
-
-## Local-agent rule
-
-Use local/server agents for browser/DevTools, SSH, real PostgreSQL, target benchmarks, temporary deployment or unavailable toolchains. Exact handed executable revisions must have applicable CI green first. Default permission is read-only/execution-only; no tracked/source/config/branch/deployment/persistent-state writes without explicit user approval. Return one evidence ZIP with exact SHA/status, commands, raw output, versions/environment, measurements/plans, errors and cleanup proof.
+- Complete the accepted post-voting fast-forward into GitHub `v2` using a mechanism that preserves the existing reviewed commit history, then verify post-fast-forward CI. This is an integration-mechanics issue only; no product/code defect remains in the post-voting slice.
 
 ## Single best next task
 
-Run the **read-only M4 post-voting SQL/browser acceptance gate** against exact executable `e1c5d1f65e72a81615164bc6445bcdc2d8218381` (CI run `37313953385` green). Execute the committed realistic vote seed and `EXPLAIN (ANALYZE, BUFFERS)` scripts, exercise optimistic/reconciliation/failure/rapid-vote behavior plus retained-board/search/history/update-scope invariants in the browser, and return one retained `.local-agent-results/` ZIP with raw evidence and `findings.md`. Do not modify tracked source/config/docs, branches, deployments or persistent application state during this gate.
+After the post-voting fast-forward and post-fast-forward CI succeed, implement the **M4 nested comments read/create slice** for the selected post. Add bounded/indexed comment retrieval using the existing `comments(post_id, id)` / parent indexes, authenticated comment creation with numeric user/post/parent IDs and parent-post validation, and nested SolidJS rendering without introducing comment voting yet. Keep comment voting as a later slice once the v2 comment read/create path exists and is browser-gated.
