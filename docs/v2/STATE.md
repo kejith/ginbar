@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-05
-Phase: **M4 connected core product in progress; nested comments read/create accepted, browser/SQL-gated and integrated**
+Phase: **M4 connected core product in progress; comment voting executable candidate is CI-green and pending SQL/browser acceptance**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -18,7 +18,78 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - search-connected board: **accepted and integrated**;
   - post voting: **accepted, SQL/browser-gated and integrated**;
   - nested comments read/create: **accepted, SQL/browser-gated and integrated**;
-  - comment voting, tag mutations and profiles remain.
+  - comment voting: **implemented on a CI-green executable candidate; SQL/browser acceptance pending**;
+  - tag mutations and profiles remain.
+
+## M4 comment voting — executable candidate pending acceptance
+
+Verified GitHub `v2` base:
+
+`06f5ab361448cf6578626f792304b39b4ee9c164`
+
+Implementation branch:
+
+`astra/m4-comment-voting`
+
+Exact executable candidate:
+
+`005b10ffa4b6f344d64ae6b0e9b5246a15527244`
+
+Exact-candidate `v2 CI` run `37342739594`, job `111873754474`: **success**.
+
+- exact SHA checkout/verification passed;
+- scoped v2 correctness gate passed, including PostgreSQL-backed comment-vote concurrency/read tests and retained suites;
+- frontend comment-vote helper tests, TypeScript/build checks and existing board/comment tests passed through the normal v2 gate;
+- hermetic target-worker release build passed;
+- tracked checkout remained clean.
+
+### Candidate implementation boundary
+
+- Authenticated explicit-state mutation is `PUT /api/v2/posts/:id/comments/:commentId/vote` with requested vote `-1`, `0` or `+1`; `0` removes the stored vote and repeated requested state is idempotent.
+- A dedicated `commentvote` service/store boundary keeps vote mechanics separate from comment read/create semantics and keeps the HTTP handler thin.
+- PostgreSQL remains authoritative. The mutation transaction validates a released/nondeleted post plus the target nondeleted comment belonging to that post, locks only the target comment row, then reads the current user/comment vote, applies insert/update/delete, updates `comments.score` by `newVote - previousVote`, and commits the exact authoritative result.
+- Missing, cross-post, deleted-comment and unavailable-post targets collapse to a non-votable not-found boundary. Deleted tombstones remain structural read nodes and never expose vote controls or non-neutral viewer state.
+- Ambiguous commit outcome handling follows the accepted post-vote architecture. No Redis, write-behind, asynchronous score repair or schema/index change was introduced.
+- Public bounded comment reads retain the existing ascending immutable-ID cursor/order/tree contract. Signed-out reads use a distinct query shape with neutral `userVote=0` and no `comment_votes` join. Authenticated reads add viewer vote state with a bounded join and no per-comment SQL.
+- Comment creation returns the unified comment shape with authoritative neutral viewer vote state.
+- Frontend vote state remains local to the selected expanded post. No retained-board comment vote state, global comment store or global vote store was added.
+- Comment voting is optimistic. Clicking the active direction requests explicit neutral state; direct opposite-direction switches apply the exact ±2 optimistic score delta.
+- Mutation sequencing is per comment rather than global. Different comments can mutate independently; each comment retains a last-confirmed authoritative score/vote, older responses cannot overwrite newer intent, and the latest failed mutation restores the last confirmed state.
+- Selection/post teardown aborts and invalidates in-flight vote work. Successful voting does not request feed, around or a replacement comment page merely to reconcile state.
+- Targeted comment replacement preserves sibling comment objects, and a bounded row cache preserves unrelated row identity where the existing keyed Solid path can reuse it.
+- Existing comment pagination, parent IDs, tree order/depth, tombstones, orphan handling, delayed-read/create merge and iterative tree construction were not redesigned.
+
+### Candidate correctness coverage
+
+The green exact-candidate suites cover:
+
+- all six explicit transitions plus repeated `+1`, `-1` and `0` idempotence;
+- exact score deltas and authoritative response identity/state;
+- two users voting one comment;
+- concurrent mixed voting with final `comments.score = base + SUM(stored votes)` consistency;
+- nonexistent, cross-post, deleted-comment and unavailable/deleted-post targets;
+- malformed post/comment IDs and malformed/missing/null/out-of-range vote values;
+- unauthenticated and cross-origin mutation rejection;
+- authenticated comment reads with viewer vote state, signed-out neutral state and pagination-bound viewer state;
+- deleted tombstones remaining non-votable/neutral despite historical votes;
+- newly created comments normalizing to neutral viewer vote;
+- frontend explicit-transition and exact optimistic-delta helpers;
+- retained auth/feed/search/post-vote/comment/media/worker correctness through the normal v2 CI gate.
+
+### Pending SQL/browser gate
+
+The candidate adds reusable realistic PostgreSQL plan inputs:
+
+- `src/backend/v2/bench/comment_vote_seed.sql` adds 200,000 comments plus comment-vote rows to the existing 100,000-post benchmark fixture and analyzes both tables;
+- `src/backend/v2/bench/comment_vote_explain.sql` runs `EXPLAIN (ANALYZE, BUFFERS)` for signed-out and authenticated bounded comment pages, target comment lock/validation, current-vote lookup, vote delete/upsert and score update, with writes rolled back.
+
+No SQL-plan or browser/DevTools acceptance claim has been made yet. The exact executable candidate must be exercised in an isolated disposable PostgreSQL/browser environment and raw retained evidence inspected here before any acceptance or integration decision.
+
+The SQL gate must establish bounded/index-backed comment reads and point mutations with no attributable large-table sequential scan, unbounded sort, temp spill or N+1 behavior, and should keep existing indexes unless the actual plan demonstrates otherwise.
+
+The browser gate must establish correct viewer vote state, all six transitions, toggle-to-neutral, immediate optimistic feedback under a delayed mutation, authoritative reconciliation, failure rollback, rapid competing intent correctness, independent voting on different comments, load-more/selection/close stale isolation, tombstone and signed-out behavior, 401/403 no-mutation boundaries, unchanged route/search/history/navigation invariants, zero feed/around refreshes, no whole-comment-page reconciliation GET, unrelated board-row stability, representative sibling comment DOM stability where practical, retained-ID/960-post invariants, `window.__ginbarM4.assertInvariants()` and representative Long Task/update-scope evidence.
+
+Decision: **candidate only; do not fast-forward `v2` until SQL/browser evidence is retained and accepted here**.
 
 ## M4 nested comments read/create — accepted and integrated
 
@@ -56,7 +127,7 @@ Exact-candidate `v2 CI` run `37334651076`, job `111846241798`: **success**.
 - Comment GET/POST requests are abortable and epoch-guarded across selection/close/route changes. Selection still renders the expanded shell before comment network work completes.
 - Tree construction builds parent/children maps once and uses iterative preorder traversal; tests cover 20,000 nesting levels without recursive traversal.
 - Initial and incremental GET paths merge authoritative rows by immutable ID, preventing a delayed initial read from erasing a newer successful create.
-- Comment voting remains outside this slice.
+- Comment voting remains outside this accepted slice.
 
 ### Correctness and SQL-plan evidence
 
@@ -188,8 +259,8 @@ Do not pull these into the next slice without a concrete requirement:
 
 ## Unresolved issues
 
-No unresolved correctness, SQL-plan, browser-performance, integration or architecture blocker remains from the nested comments read/create slice.
+The comment-voting executable candidate is CI-green, but the required real PostgreSQL `EXPLAIN (ANALYZE, BUFFERS)` gate and isolated browser/DevTools acceptance have not yet been run and inspected. No acceptance or integration claim is valid until those retained raw results are reviewed here.
 
 ## Single best next task
 
-Begin the **M4 comment voting** slice from current GitHub `v2`. Add authenticated explicit-state comment voting with PostgreSQL-authoritative score consistency and bounded/indexed viewer-vote reads, then connect it to the existing nested comment UI without introducing feed/around reloads, board-row remounts, a global comment store, Redis, tag mutations or profiles. Preserve the accepted comments pagination/tree/stale-request behavior and browser-gate the slice before integration.
+Run the isolated **M4 comment-voting PostgreSQL-plan and browser/DevTools acceptance gate** against exact executable `005b10ffa4b6f344d64ae6b0e9b5246a15527244`, retain the raw evidence ZIP, and inspect it here before deciding whether the slice is acceptable for fast-forward into `v2`.
