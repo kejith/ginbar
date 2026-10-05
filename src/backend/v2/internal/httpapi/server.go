@@ -17,6 +17,7 @@ import (
 	"github.com/kejith/ginbar/backend/v2/internal/mediastatus"
 	"github.com/kejith/ginbar/backend/v2/internal/postvote"
 	"github.com/kejith/ginbar/backend/v2/internal/search"
+	"github.com/kejith/ginbar/backend/v2/internal/tag"
 )
 
 type Store interface {
@@ -26,6 +27,7 @@ type Store interface {
 	postvote.Store
 	comment.Store
 	commentvote.Store
+	tag.Store
 }
 
 type Config struct {
@@ -49,6 +51,7 @@ type Server struct {
 	postVote       *postvote.Service
 	comments       *comment.Service
 	commentVote    *commentvote.Service
+	tags           *tag.Service
 	mux            *http.ServeMux
 	requestTimeout time.Duration
 	cookieSecure   bool
@@ -84,6 +87,7 @@ func NewWithConfig(store Store, cfg Config) *Server {
 		postVote:       postvote.New(store),
 		comments:       comment.New(store),
 		commentVote:    commentvote.New(store),
+		tags:           tag.New(store),
 		mux:            http.NewServeMux(),
 		requestTimeout: cfg.RequestTimeout,
 		cookieSecure:   cfg.CookieSecure,
@@ -97,6 +101,9 @@ func NewWithConfig(store Store, cfg Config) *Server {
 	s.mux.Handle("POST /api/v2/posts/{id}/comments", s.requireAuth(http.HandlerFunc(s.createComment)))
 	s.mux.Handle("PUT /api/v2/posts/{id}/comments/{commentId}/vote", s.requireAuth(http.HandlerFunc(s.setCommentVote)))
 	s.mux.Handle("PUT /api/v2/posts/{id}/vote", s.requireAuth(http.HandlerFunc(s.setPostVote)))
+	s.mux.HandleFunc("GET /api/v2/posts/{id}/tags", s.listPostTags)
+	s.mux.Handle("POST /api/v2/posts/{id}/tags", s.requireAuth(http.HandlerFunc(s.addPostTag)))
+	s.mux.Handle("DELETE /api/v2/posts/{id}/tags/{tagId}", s.requireAuth(http.HandlerFunc(s.removePostTag)))
 	s.mux.HandleFunc("POST /api/v2/auth/register", s.register)
 	s.mux.HandleFunc("POST /api/v2/auth/login", s.login)
 	s.mux.HandleFunc("POST /api/v2/auth/logout", s.logout)
