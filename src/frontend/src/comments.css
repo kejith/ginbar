@@ -10,7 +10,9 @@
 .comments-header,
 .comment-meta,
 .comment-composer-actions,
-.comment-reply-target {
+.comment-reply-target,
+.comment-actions,
+.comment-vote {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -55,6 +57,7 @@
 
 .comment-composer button,
 .comment-reply,
+.comment-vote button,
 .comments-load-more {
   padding: 0.45rem 0.65rem;
   border: 1px solid #343b46;
@@ -102,6 +105,10 @@
 .comment--orphaned { border-inline-start-color: #765353; }
 .comment-orphan-warning,
 .comment-error { color: #e4b8b8; font-size: 0.82rem; }
+.comment-actions { justify-content: flex-start; }
+.comment-vote { gap: 0.25rem; }
+.comment-vote button { min-width: 2rem; padding: 0.3rem 0.45rem; }
+.comment-vote button.comment-vote--active { border-color: #8e9bad; background: #29313b; }
 .comment-reply { justify-self: start; }
 .comments-load-more { justify-self: start; }
 
