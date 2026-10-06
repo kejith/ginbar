@@ -16,6 +16,7 @@ import (
 	"github.com/kejith/ginbar/backend/v2/internal/feed"
 	"github.com/kejith/ginbar/backend/v2/internal/mediastatus"
 	"github.com/kejith/ginbar/backend/v2/internal/postvote"
+	"github.com/kejith/ginbar/backend/v2/internal/profile"
 	"github.com/kejith/ginbar/backend/v2/internal/search"
 	"github.com/kejith/ginbar/backend/v2/internal/tag"
 )
@@ -28,6 +29,7 @@ type Store interface {
 	comment.Store
 	commentvote.Store
 	tag.Store
+	profile.Store
 }
 
 type Config struct {
@@ -52,6 +54,7 @@ type Server struct {
 	comments       *comment.Service
 	commentVote    *commentvote.Service
 	tags           *tag.Service
+	profiles       *profile.Service
 	mux            *http.ServeMux
 	requestTimeout time.Duration
 	cookieSecure   bool
@@ -88,6 +91,7 @@ func NewWithConfig(store Store, cfg Config) *Server {
 		comments:       comment.New(store),
 		commentVote:    commentvote.New(store),
 		tags:           tag.New(store),
+		profiles:       profile.New(store),
 		mux:            http.NewServeMux(),
 		requestTimeout: cfg.RequestTimeout,
 		cookieSecure:   cfg.CookieSecure,
@@ -95,6 +99,7 @@ func NewWithConfig(store Store, cfg Config) *Server {
 	}
 	s.mux.HandleFunc("GET /healthz", s.health)
 	s.mux.HandleFunc("GET /api/v2/feed", s.listFeed)
+	s.mux.HandleFunc("GET /api/v2/users/{id}", s.getProfile)
 	s.mux.HandleFunc("GET /api/v2/posts/{id}/around", s.aroundPost)
 	s.mux.HandleFunc("GET /api/v2/posts/{id}/media-status", s.postMediaStatus)
 	s.mux.HandleFunc("GET /api/v2/posts/{id}/comments", s.listComments)
