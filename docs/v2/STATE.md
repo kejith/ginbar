@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-06
-Phase: **M4 connected core product in progress; profiles accepted and integrated; consolidated M4 gate next**
+Phase: **M4 connected core product complete and integrated; M5 moderation/admin/imports next**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -12,7 +12,7 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
 - M1 board performance prototype: **complete and integrated**.
 - M2 fresh PostgreSQL schema + core Go API: **complete and integrated**.
 - M3 media pipeline accepted scope: **complete and integrated**.
-- M4 connected core product: **in progress**.
+- M4 connected core product: **complete and integrated**.
   - authentication/session foundation: **accepted and integrated**;
   - connected board/API/session boundary: **accepted and integrated**;
   - search-connected board: **accepted and integrated**;
@@ -20,7 +20,50 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - nested comments read/create: **accepted, SQL/browser-gated and integrated**;
   - comment voting: **accepted, SQL/browser-gated and integrated**;
   - tag mutations: **accepted, SQL/API/browser-gated and integrated**;
-  - public read-only profiles: **accepted, SQL/API/browser-gated and integrated**.
+  - public read-only profiles: **accepted, SQL/API/browser-gated and integrated**;
+  - consolidated connected-core milestone gate: **accepted; M4 closed**.
+
+## M4 connected-core milestone gate — accepted; M4 complete
+
+Exact executable tested:
+
+`6fb51b6c11891f7ab47d071d8964ed1bd83f94d2`
+
+Gate-time documentation/state head:
+
+`38372bc3976cf26de4b1fefb39b84c05ad0d9924`
+
+Applicable post-integration `v2 CI` run `37472400920`, job `112298986709`: **success** on the exact executable SHA.
+
+Evidence package:
+
+`m4-consolidated-20261006T155814Z.zip`
+
+Independently verified SHA-256:
+
+`deabd4abede53b30e9d4205e8cb5454c30c3563753243dbd1c5e4ec577a6dd98`
+
+Archive integrity passed with 40 retained files. Raw API/database evidence, committed EXPLAIN output, real-browser assertions/traces, stale-response ordering, CI metadata and cleanup findings were inspected.
+
+### Consolidated gate facts
+
+- Isolated PostgreSQL 16.15 applied migrations `001` through `006` and used the committed 100,000-post / 1,000-user / 100,000-media / 300,000-post-tag fixture plus committed vote/comment seeds and gate-specific disposable rows.
+- Invitation-only registration, login, immutable numeric session identity, session continuity and logout invalidation were exercised. Signed-out auth and mutation boundaries returned the expected 401 responses.
+- Public feed IDs were descending and unique; direct around-post reconstruction and included-tag, excluded-tag and numeric-predicate search all succeeded.
+- Authenticated post voting, nested comment read/create, comment voting, tag add, ordinary-user tag-removal rejection, moderator tag removal and repeated idempotent removal all matched authoritative PostgreSQL state.
+- Public profiles returned only the accepted `id` / `username` / `createdAt` metadata and two 33-post cursor pages with descending unique IDs and zero overlap.
+- The primary real-Chromium scenario preserved board selection placement, same-row/cross-row navigation, canonical post routes, Back/Forward, Arrow/J/K navigation, search canonicality, mutation update scope, profile navigation and return-to-board invariants.
+- Initial browser checks for nested-comment proof, comment score text and profile ordering contained gate-script selector/type mistakes. Follow-up evidence established nested depth-1 replies and reply creation, authoritative comment score/vote `1` with the intended upvote pressed and tree intact, and integer-descending profile IDs. These were harness defects, not application defects.
+- A delayed real tag response for post 99996 was released after selection moved to 99992; selection remained 99992, the tag panel remained fenced to 99992 and application invariants stayed clean. The observed `ERR_ABORTED` was the intended cancellation.
+- Main/follow-up/moderator browser runs recorded zero failed requests; representative real AVIF media was served by the isolated nginx fixture. The stale test's console 401 was the expected signed-out `/auth/me` probe.
+- `PerformanceObserver(type=longtask)` observed **0 Long Tasks** across representative warmed board, mutation, comment/tag and profile interactions. Final retained board state was **120 posts**, below the established **960-post** bound, with `assertInvariants()` clean.
+- Candidate hot SQL remained bounded/index-backed. The only sequential scans were the 100-row `tags` dimension, sorts were bounded in-memory quicksorts, and no temp spill was observed. Current feed/search/vote/comment/profile/auth shapes in the committed fixtures remained sub-millisecond on this gate host.
+- `explain_compare.sql` also intentionally retains a historical comparison shape whose older-cursor media merge scanned about 50,077 media rows and took **4.507 ms**; its bounded counterpart in the same fixture took **0.059 ms**. This comparison baseline is not the active candidate query shape and is retained here to avoid mischaracterizing every plan in the archive as sub-millisecond.
+- No application-level N+1 pattern, large-relation sequential scan, unbounded sort, pool/transaction deviation or concrete cross-slice regression was found.
+- The M4 requirement review matched `PLAN.md`: auth/invite registration, connected board, filters/search, votes, tags, nested comments and profiles were all exercised. **No concrete unimplemented M4 requirement was found.**
+- Cleanup findings record the disposable database dropped, temporary API/nginx processes stopped, detached gate worktree removed/pruned, unrelated services untouched and canonical tracked status clean.
+
+Decision: **accept the consolidated M4 connected-core milestone gate and close M4**. The integrated product preserves the accepted correctness, authorization, navigation, bounded-state, stale-response and representative browser-performance invariants. No cache, index, schema, global-store, virtualization or other architecture change is justified by this gate.
 
 ## M4 profiles — accepted and integrated
 
@@ -193,7 +236,7 @@ Do not pull these into the next task without a concrete requirement:
 
 ## Unresolved issues
 
-No unresolved correctness, SQL-plan, browser-performance, integration or architecture blocker remains from the accepted profile, tag-mutation, vote, or comment slices.
+No unresolved correctness, SQL-plan, browser-performance, integration or architecture blocker remains from M4 after the accepted consolidated milestone gate.
 
 The profile older-cursor plan can inspect filtered author rows before finding an eligible SFW/ready row. Current 100,000-post evidence remains small and index-backed; do not add a partial profile index without a real distribution/latency signal that justifies it.
 
@@ -201,4 +244,4 @@ The profile browser gate's media 404 console messages came from benchmark storag
 
 ## Single best next task
 
-Run the consolidated **M4 connected-core milestone gate** from current `v2`: verify the accepted auth/session, board/direct-link/search, post voting, nested comments, comment voting, tag mutations, and public-profile flows together in one real-browser/API/PostgreSQL pass; confirm established board update-scope/navigation/retention invariants and representative long-task behavior still hold; inspect remaining M4 requirements in `PLAN.md` for any actual gap; then either close M4 and begin M5 or address only the concrete blocker found. Do not start M5 before this milestone gate is accepted.
+Begin **M5 moderation/admin/imports** from current `v2`. First inventory the already-accepted role and moderator tag-removal foundations, then define and implement the smallest coherent missing moderation slice—prefer post/comment moderation before combining it with imports/jobs/admin observability. Keep authorization PostgreSQL-authoritative on immutable numeric user IDs, make moderation/release state explicit, gate any hot SQL with real query plans, preserve board update-scope/navigation invariants, and do not pull M6 private messages or deferred production-hardening work into M5 without a concrete requirement.
