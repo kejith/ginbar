@@ -38,20 +38,20 @@ Implementation branch:
 
 Exact executable candidate:
 
-`999a9620f9de9c1133fa4138fa28c688f80ac64d`
+`064a277ad17a85dc41bafe78bd28e7c7fb027e57`
 
 Exact-candidate `v2 CI`:
 
-- run `37541542640`, attempt 1;
-- job `112535472647`;
-- `head_sha=999a9620f9de9c1133fa4138fa28c688f80ac64d`;
+- run `37542075015`, attempt 1;
+- job `112537209596`;
+- `head_sha=064a277ad17a85dc41bafe78bd28e7c7fb027e57`;
 - workflow/job conclusion: **success**;
 - exact checkout/verification: success;
 - scoped correctness: **backend**;
 - Go formatting check, `go vet ./...`, and `go test -v -count=1 ./...`: success with PostgreSQL-backed tests active;
 - target-worker build applicability check: success;
 - tracked checkout unchanged: success;
-- `v2-ci: PASS sha=999a9620f9de9c1133fa4138fa28c688f80ac64d scope=backend`.
+- `v2-ci: PASS sha=064a277ad17a85dc41bafe78bd28e7c7fb027e57 scope=backend`.
 
 ### Implemented application boundary
 
@@ -92,7 +92,7 @@ Operational overrides:
 - `GINBAR_URL_RESPONSE_HEADER_TIMEOUT`;
 - `GINBAR_URL_MAX_REDIRECTS`.
 
-The URL fetch byte cap is tied to the same source-byte limit. The server write timeout is bounded above the ingestion request timeout so the transport layer does not terminate an otherwise valid long-running ingestion response.
+The URL fetch byte cap is tied to the same source-byte limit. The production HTTP server also sets a bounded request-body read timeout equal to the ingestion request timeout so a stalled multipart socket cannot hold an ingestion slot indefinitely. Its write timeout includes the ingestion request timeout, configured cleanup timeout, and response slack so definite-failure cleanup can finish before an error response is written.
 
 ### Correctness/resource evidence
 
@@ -483,4 +483,4 @@ The profile browser gate's media 404 console messages came from benchmark storag
 
 ## Single best next task
 
-Run the isolated local acceptance gate for exact executable `999a9620f9de9c1133fa4138fa28c688f80ac64d` after explicit user authorization for disposable PostgreSQL and isolated filesystem/process writes. Validate live authenticated multipart upload, controlled safe URL import where practical without weakening SSRF protections, authoritative post/source/job state, definite-failure cleanup, unreleased feed/search/profile invisibility, and bounded concurrency/resource behavior. Do not write production/shared state and do not integrate into `v2` until this evidence is reviewed and accepted here.
+Run the isolated local acceptance gate for exact executable `064a277ad17a85dc41bafe78bd28e7c7fb027e57` after explicit user authorization for disposable PostgreSQL and isolated filesystem/process writes. Validate live authenticated multipart upload, controlled safe URL import where practical without weakening SSRF protections, authoritative post/source/job state, definite-failure cleanup, unreleased feed/search/profile invisibility, stalled/slow-body boundedness, and bounded concurrency/resource behavior. Do not write production/shared state and do not integrate into `v2` until this evidence is reviewed and accepted here.
