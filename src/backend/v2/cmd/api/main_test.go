@@ -127,12 +127,16 @@ func TestLoadRuntimeConfigRejectsInvalidOrIncoherentLimits(t *testing.T) {
 	}
 }
 
-func TestIngestWriteTimeoutAllowsResponseSlack(t *testing.T) {
-	if got := ingestWriteTimeout(2 * time.Minute); got != 2*time.Minute+5*time.Second {
+func TestIngestWriteTimeoutAllowsCleanupAndResponseSlack(t *testing.T) {
+	if got := ingestWriteTimeout(2*time.Minute, 5*time.Second); got != 2*time.Minute+10*time.Second {
 		t.Fatalf("write timeout=%s", got)
 	}
-	if got := ingestWriteTimeout(time.Second); got != 10*time.Second {
+	if got := ingestWriteTimeout(time.Second, time.Second); got != 10*time.Second {
 		t.Fatalf("minimum write timeout=%s", got)
+	}
+	maxDuration := time.Duration(1<<63 - 1)
+	if got := ingestWriteTimeout(maxDuration-time.Second, 2*time.Second); got != maxDuration {
+		t.Fatalf("overflow-safe write timeout=%s", got)
 	}
 }
 

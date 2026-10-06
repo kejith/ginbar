@@ -80,8 +80,9 @@ func run() error {
 		Addr:              cfg.listenAddr,
 		Handler:           httpapi.NewWithConfig(store, cfg.api).Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       cfg.api.IngestRequestTimeout,
 		IdleTimeout:       60 * time.Second,
-		WriteTimeout:      ingestWriteTimeout(cfg.api.IngestRequestTimeout),
+		WriteTimeout:      ingestWriteTimeout(cfg.api.IngestRequestTimeout, cfg.ingest.CleanupTimeout),
 	}
 
 	errCh := make(chan error, 1)
@@ -243,13 +244,18 @@ func envPositiveDuration(getenv func(string) string, key string, fallback time.D
 	return value, nil
 }
 
-func ingestWriteTimeout(requestTimeout time.Duration) time.Duration {
+func ingestWriteTimeout(requestTimeout, cleanupTimeout time.Duration) time.Duration {
 	const minimum = 10 * time.Second
 	const responseSlack = 5 * time.Second
-	if requestTimeout > time.Duration(1<<63-1)-responseSlack {
-		return requestTimeout
+	maxDuration := time.Duration(1<<63 - 1)
+	if cleanupTimeout > maxDuration-responseSlack {
+		return maxDuration
 	}
-	value := requestTimeout + responseSlack
+	extra := cleanupTimeout + responseSlack
+	if requestTimeout > maxDuration-extra {
+		return maxDuration
+	}
+	value := requestTimeout + extra
 	if value < minimum {
 		return minimum
 	}
