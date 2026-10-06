@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-06
-Phase: **M5 moderation/admin/imports in progress; moderation integrated, CI runner root cause proven and remediation authorization pending**
+Phase: **M5 moderation/admin/imports in progress; moderation accepted/integrated and post-integration CI restored; imports next**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -23,7 +23,7 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - public read-only profiles: **accepted, SQL/API/browser-gated and integrated**;
   - consolidated connected-core milestone gate: **accepted; M4 closed**.
 - M5 moderation/admin/imports: **in progress**.
-  - first post/comment moderation slice: **accepted and integrated; post-integration CI verification is infrastructure-blocked**.
+  - first post/comment moderation slice: **accepted, integrated, and post-integration CI verified green after runner remediation**.
 
 ## M5 post/comment moderation — accepted and integrated; CI runner verification blocked
 
@@ -119,7 +119,7 @@ Integration therefore used a two-parent commit rather than discarding either his
 
 The integrated executable files are therefore identical to the accepted local-gate candidate.
 
-### Post-integration CI blocker — root cause proven
+### Post-integration CI verification — runner remediated and exact-SHA CI green
 
 Post-integration `v2 CI` run:
 
@@ -129,50 +129,53 @@ Exact integrated executable SHA:
 
 `8bd3643060d10844769920dfffb0a7ed50c68e55`
 
-The run remains **not green**, but the infrastructure root cause has now been established.
-
-Diagnostic evidence package:
+Accepted runner diagnostic evidence:
 
 `ci-runner-diag-20261006T215043Z.zip`
 
-Independently verified SHA-256:
+SHA-256:
 
 `a37abb0fb419795fd8e051f854d70dbf8423149e4be9de50c140ea71612f42bd`
 
-Archive integrity passed with 68 retained entries. Runner logs, GitHub job/check metadata, process/service inspection, filesystem/resource evidence, correlation tables and cleanup evidence were inspected.
+Accepted runner remediation evidence:
 
-Root cause:
+`ci-runner-remediate-20261006T220241Z.zip`
 
-- the `ginbar-ci` VM has **two live `Runner.Listener` processes using the same single GitHub runner registration `ginbar-ci-vm` (runner id 3)**;
-- a stale boot-era stack `run-helper.sh` PID 1707 → `Runner.Listener` PID 1711 has survived since October 3;
-- the systemd-managed stack `run.sh` PID 260169 → `Runner.Listener` PID 260177 has been active since October 6 18:01 UTC;
-- both listeners acknowledge and execute the same dispatched job messages concurrently in the same `/opt/actions-runner/_work`, `_temp` and `_diag` paths;
-- raw listener logs show both listeners receiving the same job IDs in the same second;
-- twin workers collide on `_diag/pages/<plan>_<job>_1.log`, producing `PagingLogger.NewPage()` “already exists” exceptions and the GitHub failure annotations;
-- they also race on `_temp/_runner_file_commands/set_output_*`, producing the observed `actions/checkout@v5` “Missing file” errors;
-- all 10 inspected failed/cancelled jobs had duplicate `Set up job` entries plus the page-collision annotation; the one inspected successful job had neither;
-- disk, inode and memory capacity were healthy, no host/VM reboot or external cleanup interference was found, and repository workflow/product scripts do not touch the runner-owned `_temp` or `_diag` paths.
+Independently verified SHA-256:
 
-The service definition explains the leak:
+`228ac0c72f7638464fa36ef28e4a241d9eb29e435a8da055d5887d8762504b0b`
 
-- `gha-runner.service` uses `Restart=always`;
-- it has accumulated `NRestarts=464`;
-- it is configured with `KillMode=process`, so a service restart kills only the main `run.sh` process and can leave child `Runner.Listener` processes behind.
+Archive integrity passed. Retained service/process evidence, exact CI metadata/logs, annotation output, cleanup proof, and repository-cleanliness evidence were inspected.
 
-Decision: **accept the diagnostic root cause**. This is a host runner lifecycle defect, not a Ginbar application/workflow defect. Do not modify repository code to work around it.
+The proven root cause was two live `Runner.Listener` processes sharing the single `ginbar-ci-vm` runner registration and the same runner-owned `_work`, `_temp`, and `_diag` paths. The stale listener survived service restarts because `gha-runner.service` used `KillMode=process`.
 
-Smallest safe remediation design:
+Authorized remediation completed successfully:
 
-1. stop `gha-runner` and terminate the stale boot-era `run-helper.sh` / `Runner.Listener` stack so no duplicate listener remains;
-2. change the service to `KillMode=control-group` so future service stops/restarts reap the complete runner process tree;
-3. daemon-reload and start `gha-runner`;
-4. verify exactly one `Runner.Listener` is live for runner id 3;
-5. re-run `v2 CI` for exact executable SHA `8bd3643060d10844769920dfffb0a7ed50c68e55`;
-6. require a trustworthy green exact-SHA run before beginning another M5 implementation slice.
+- stopped `gha-runner`;
+- terminated the stale `run-helper.sh` / `Runner.Listener` stack after confirming service stop alone left the leaked children alive;
+- changed only `gha-runner.service` from `KillMode=process` to `KillMode=control-group`;
+- daemon-reloaded and started the service;
+- verified one listener for runner registration `ginbar-ci-vm`, id 3;
+- performed one controlled service restart and proved the old listener was reaped and exactly one fresh listener remained in the service cgroup;
+- left the corrected service running with one listener.
 
-The diagnostic gate made no runner/service/config/database or repository changes. The canonical checkout remained tracked-clean.
+Post-remediation exact-SHA CI:
 
-The remediation above is a persistent host/service change and **has not been authorized or executed yet**.
+- run `37535985807`, attempt 4;
+- job `112525700832`;
+- `head_sha=8bd3643060d10844769920dfffb0a7ed50c68e55`;
+- workflow/job conclusion: **success**;
+- checkout exact revision: success;
+- exact SHA verification: success;
+- scoped correctness gate: success;
+- `v2-ci: PASS sha=8bd3643060d10844769920dfffb0a7ed50c68e55 scope=all`;
+- target-worker build applicability check: success;
+- tracked checkout unchanged: success;
+- one `Set up job` step, zero annotations, no `_diag/pages/... already exists` and no `_runner_file_commands/set_output_*` failures.
+
+The available local-agent token lacked `actions:write`, so its rerun API attempts returned 403 and the user triggered attempt 4 through the GitHub UI. This affects only how the rerun was initiated, not the validity of the exact-SHA CI result.
+
+Decision: **runner blocker resolved; post-integration moderation CI accepted green**. No Ginbar repository/workflow workaround is required.
 
 ## M4 connected-core milestone gate — accepted; M4 complete
 
@@ -387,8 +390,6 @@ Do not pull these into the next task without a concrete requirement:
 
 ## Unresolved issues
 
-The self-hosted `v2 CI` runner remains the only current integration blocker, but its root cause is now proven: two `Runner.Listener` processes share one runner registration and collide in runner-owned `_diag` / `_temp` paths because the systemd unit uses `KillMode=process`. The accepted remediation is to remove the stale listener stack, change the unit to `KillMode=control-group`, restart with exactly one listener, and rerun exact-SHA CI. This persistent host/service change requires explicit user authorization and has not been executed. Do not begin another M5 product slice before a trustworthy green run or an explicit waiver.
-
 No unresolved correctness, SQL-plan, browser-performance, integration or architecture blocker remains from M4 after the accepted consolidated milestone gate.
 
 The profile older-cursor plan can inspect filtered author rows before finding an eligible SFW/ready row. Current 100,000-post evidence remains small and index-backed; do not add a partial profile index without a real distribution/latency signal that justifies it.
@@ -397,4 +398,4 @@ The profile browser gate's media 404 console messages came from benchmark storag
 
 ## Single best next task
 
-After explicit user authorization, remediate the self-hosted runner by stopping `gha-runner`, removing the stale duplicate listener stack, changing `gha-runner.service` from `KillMode=process` to `KillMode=control-group`, daemon-reloading and restarting the service, verifying exactly one listener remains, then rerun `v2 CI` for exact executable SHA `8bd3643060d10844769920dfffb0a7ed50c68e55` and retain raw proof of the service state and CI result.
+Implement the first M5 imports slice by wiring the already-accepted M3 `internal/ingest` upload and URL-ingestion boundary into authenticated v2 HTTP API routes and `cmd/api` configuration. Preserve immutable numeric session identity, same-origin mutation protection, streaming/bounded source staging, URL SSRF protections, short PostgreSQL transactions, durable initial `media_jobs`, unreleased-post visibility, cancellation/deadline semantics, ambiguous-commit source retention, and bounded concurrency. Return authoritative post/job IDs, add targeted HTTP/service/PostgreSQL tests and exact-candidate CI, but do not add release UI, job/admin observability, pr0gramm bulk import, Redis, or unrelated M5 work in this slice.
