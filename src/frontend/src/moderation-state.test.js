@@ -42,6 +42,7 @@ test("moderating a parent preserves its structural node and descendants", () => 
   assert.equal(moderated.deleted, true);
   assert.equal(moderated.body, undefined);
   assert.equal(moderated.userVote, 0);
+  assert.equal(withModeratedComment(moderated), moderated);
 
   const rows = buildCommentRows([moderated, child]);
   assert.equal(rows.length, 2);
