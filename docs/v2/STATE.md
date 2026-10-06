@@ -110,7 +110,7 @@ Implementation correctness and exact-candidate CI are green. No known compiler, 
 
 The slice is **not yet accepted or integrated into `v2`**. One isolated local acceptance gate is still required for live multipart HTTP behavior with real filesystem staging and disposable PostgreSQL, definite-failure source cleanup, unreleased visibility, controlled safe URL-import behavior where practical without weakening SSRF protections, and bounded-concurrency/resource observations. That gate requires explicit user authorization for its disposable PostgreSQL and isolated persistent host writes; production/shared database or media writes are prohibited.
 
-## M5 post/comment moderation — accepted and integrated; CI runner verification blocked
+## M5 post/comment moderation — accepted and integrated; exact-SHA CI green
 
 Verified implementation base:
 
