@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-06
-Phase: **M5 moderation/admin/imports in progress; first post/comment moderation slice awaiting local acceptance gate**
+Phase: **M5 moderation/admin/imports in progress; first post/comment moderation slice accepted and integrated, post-integration CI runner blocker open**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -23,9 +23,9 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - public read-only profiles: **accepted, SQL/API/browser-gated and integrated**;
   - consolidated connected-core milestone gate: **accepted; M4 closed**.
 - M5 moderation/admin/imports: **in progress**.
-  - first post/comment moderation slice: **implemented on candidate branch; local PostgreSQL/API/real-browser acceptance gate pending**.
+  - first post/comment moderation slice: **accepted and integrated; post-integration CI verification is infrastructure-blocked**.
 
-## M5 post/comment moderation — candidate awaiting local acceptance gate
+## M5 post/comment moderation — accepted and integrated; CI runner verification blocked
 
 Verified implementation base:
 
@@ -35,34 +35,107 @@ Implementation branch:
 
 `astra/m5-post-comment-moderation`
 
-Exact executable candidate:
+Exact locally tested executable candidate:
 
 `baeed61e7c3684a4b973937ee56aa47f73be93c9`
 
-Implementation boundary:
+Accepted evidence package:
+
+`m5-moderation-20261006T213331Z.zip`
+
+Independently verified SHA-256:
+
+`ae2fc0047b560eaac38995c98be1d3f2f8b37c8f8b40815d07fb49e549edda11`
+
+Archive integrity passed with 51 retained files. Raw API/database results, SQL plans, real-browser assertion logs/traces, CI metadata and cleanup findings were inspected.
+
+### Accepted implementation boundary
 
 - moderator/admin-only idempotent post and comment hide mutations;
 - PostgreSQL-authoritative authorization using immutable numeric `users.id`;
-- new moderation audit fields record first moderation time and moderator numeric user ID while existing `deleted_at` remains the visibility/tombstone primitive;
-- one atomic PostgreSQL mutation statement per target returns authoritative resulting state without a reconciliation read;
-- post moderation reuses existing feed/search/around/profile public visibility predicates;
-- comment moderation preserves the existing structural tombstone model so descendants remain accessible and new replies to a moderated parent are rejected;
-- selected-post frontend moderation state stays local, abortable and epoch/selection-fenced;
-- moderated retained post rows stay in board layout as disabled hidden placeholders until normal bounded window replacement removes them; board-wide/global state machinery was not added;
+- moderation audit fields preserve first-action moderation time and moderator numeric user ID while existing `deleted_at` remains the visibility/tombstone primitive;
+- each moderation mutation is one atomic PostgreSQL statement that returns authoritative resulting state without a reconciliation read;
+- post moderation reuses existing public feed/search/around/profile visibility predicates;
+- comment moderation preserves structural tombstones, descendants and parent relationships, and rejects new replies to a moderated parent;
+- frontend moderation handling remains selected-post-local, abortable and epoch/selection-fenced;
+- moderated retained posts stay in board layout as disabled hidden placeholders until bounded-window replacement removes them; keyboard navigation skips them;
 - restore/unmoderate, imports/jobs/admin observability, private messages and unrelated production-hardening work remain deferred.
 
-Validation already completed:
+### Accepted PostgreSQL/API/browser gate
 
-- server/PostgreSQL CI on backend candidate `ec9d6b75100c0612f424da57c492067cd4e9793c`: `v2 CI` run `37532689068`, attempt 2, job `112507601335`, **success**;
-- moderation tests cover moderator/admin authorization, ordinary-user rejection, signed-out/same-origin HTTP boundaries, missing targets, repeated/idempotent mutation, concurrent post moderation, authoritative state, immediate feed/around invisibility, structural comment tombstones and rejected replies to moderated parents;
-- committed PostgreSQL tests execute `EXPLAIN (ANALYZE, BUFFERS)` against 5,000-row disposable post/comment fixtures and require primary-key-backed target access with no large-relation sequential scan, external merge or disk spill;
-- the same server gate passed retained Go/PostgreSQL and Rust worker correctness plus tracked-checkout cleanliness;
-- frontend CI logs on exact final candidate `baeed61e7c3684a4b973937ee56aa47f73be93c9` show 37/37 Node tests, `tsc --noEmit`, Vite production build, worker-build applicability check and clean tracked checkout all passing, with `v2-ci: PASS`;
-- GitHub nevertheless records fresh run `37533816318`, job `112509565110`, as `failure` despite every named workflow step being `success` and the logs containing no application/test failure. This is treated as a CI status-reporting infrastructure blocker, not as green CI.
+The detached local gate tested exact SHA `baeed61e7c3684a4b973937ee56aa47f73be93c9` with a tracked-clean worktree and migrations `001` through `007`.
 
-The user explicitly authorized proceeding with the local validation handoff despite that CI status-reporting blocker, and explicitly authorized creation, mutation and deletion of an isolated disposable PostgreSQL database for this gate only.
+API/database evidence passed **38/38** checks:
 
-Acceptance/integration decision: **not yet accepted and not integrated**. The candidate must remain off `v2` until the returned local gate evidence is inspected and accepted here.
+- signed-out moderation returned 401;
+- ordinary-member moderation returned 403;
+- cross-origin moderator mutation returned 403 with zero database mutation;
+- missing post/comment targets returned 404;
+- moderator/admin post hides returned authoritative numeric-user audit state;
+- repeated and 12-worker concurrent post moderation preserved one first-action `moderatedAt` and `moderatedByUserId`;
+- moderated posts disappeared immediately from feed, controlled tag search, around-post reconstruction and author profile while unrelated rows remained correct;
+- moderated comments became body-less structural tombstones, preserved their descendants under the same parent, and rejected new replies with the accepted 409 `parent_comment_deleted` contract;
+- unrelated comments remained unchanged.
+
+Measured mutation plans were bounded/index-backed:
+
+- post hide: `posts_pkey` + `user_roles_pkey`, execution 0.357 ms, no sequential scan, sort or temp spill;
+- comment hide: `comments_post_idx` / `comments_pkey` + `user_roles_pkey`, execution 0.342 ms, no sequential scan, sort or temp spill;
+- both mutations remain single-statement UPDATE…RETURNING shapes with no application-level N+1 or post-mutation reconciliation read.
+
+Real Chromium evidence passed:
+
+- ordinary-member scenario: **8/8**;
+- moderator scenario: **17/17**;
+- stale-response scenario: **11/11**.
+
+Browser evidence established authorized-control visibility, server-side ordinary-user rejection, structural comment tombstones with preserved depth, targeted post-hide state, unchanged unrelated retained rows, keyboard skipping of hidden retained posts, direct moderated-post unavailability, clean board invariants and zero observed Long Tasks in the retained member/moderator runs.
+
+The stale-response gate held a real post-moderation request, moved selection to another post, then released it. The request ended as the application's expected `ERR_ABORTED` cancellation; selection, expanded state and route remained on the newer post. Only post-hide staleness was browser-tested because it exercises the broader route/shell/retained-thumbnail transition; comment-hide uses the same shared moderation result fence and remained unit-covered.
+
+The retained `findings.md` states that the stale target was also confirmed unmutated in PostgreSQL, but that specific SQL check was not retained as a separate raw artifact. The route-layer abort plus retained browser evidence and the separately proven backend mutation semantics are sufficient for acceptance; this evidence-retention omission is not treated as a product defect.
+
+Cleanup evidence established the disposable database was dropped and absent, isolated API/nginx ports were stopped, the detached worktree was removed/pruned, unrelated services remained untouched, and no prohibited tracked write was made by the local gate.
+
+Decision: **accept the first M5 post/comment moderation slice**. No cache, new index, global store, Redis dependency, virtualization change or other architecture change is justified by the measured evidence.
+
+### Integration
+
+Before integration, `v2` had documentation/state-only HEAD:
+
+`0bbf95d42f2fa72e63d40b1e2cf1545a864035bf`
+
+Its executable parent was the original candidate base `b498c67f12cadb1e227433d1e529bdc57aee99a2`, so the tested candidate and the state commit had diverged only because the state record was created after the implementation branch.
+
+Integration therefore used a two-parent commit rather than discarding either history:
+
+`8bd3643060d10844769920dfffb0a7ed50c68e55`
+
+- first parent: documentation/state HEAD `0bbf95d42f2fa72e63d40b1e2cf1545a864035bf`;
+- second parent: exact tested candidate `baeed61e7c3684a4b973937ee56aa47f73be93c9`;
+- the integration tree is the exact candidate tree plus the already-recorded `docs/v2/STATE.md`;
+- GitHub compare confirms `8bd3643…` differs from the tested candidate only by `docs/v2/STATE.md`;
+- remote `v2` moved non-force with an expected-SHA lease from `0bbf95d…` to `8bd3643…`.
+
+The integrated executable files are therefore identical to the accepted local-gate candidate.
+
+### Post-integration CI blocker
+
+Post-integration `v2 CI` run:
+
+`37535985807`
+
+Exact integrated SHA:
+
+`8bd3643060d10844769920dfffb0a7ed50c68e55`
+
+The run is **not green** because the self-hosted runner is malfunctioning:
+
+- attempts 1 and 2 successfully fetched/checked out the exact integrated SHA, then `actions/checkout@v5` failed when the runner reported a missing internal `_runner_file_commands/set_output_*` file; the correctness gate never ran;
+- attempt 3 reported checkout and exact-SHA verification successful, then GitHub marked the job/run completed-failure while the scoped correctness step remained reported `in_progress` and later steps remained `pending`; the attempt's logs were not retrievable;
+- this is consistent with the earlier candidate-run status-reporting anomaly and is infrastructure evidence, not a product test failure.
+
+Do not describe post-integration CI as green. The application slice is accepted and integrated, but its normal post-integration CI verification remains open until the runner/check-reporting failure is diagnosed and a trustworthy exact-SHA run completes.
 
 ## M4 connected-core milestone gate — accepted; M4 complete
 
@@ -277,6 +350,8 @@ Do not pull these into the next task without a concrete requirement:
 
 ## Unresolved issues
 
+The self-hosted `v2 CI` runner is currently an integration blocker. Exact integrated SHA `8bd3643060d10844769920dfffb0a7ed50c68e55` cannot obtain trustworthy post-integration CI because `actions/checkout@v5` intermittently reports missing internal `_runner_file_commands/set_output_*` files, and one retry was marked completed-failure while its correctness step remained reported in progress. Diagnose the runner/check-reporting path before starting another implementation slice; do not alter Ginbar product code merely to mask an unproven runner defect.
+
 No unresolved correctness, SQL-plan, browser-performance, integration or architecture blocker remains from M4 after the accepted consolidated milestone gate.
 
 The profile older-cursor plan can inspect filtered author rows before finding an eligible SFW/ready row. Current 100,000-post evidence remains small and index-backed; do not add a partial profile index without a real distribution/latency signal that justifies it.
@@ -285,4 +360,4 @@ The profile browser gate's media 404 console messages came from benchmark storag
 
 ## Single best next task
 
-Inspect the returned local-agent evidence for exact candidate `baeed61e7c3684a4b973937ee56aa47f73be93c9`, decide acceptance of the first M5 post/comment moderation slice, and only if accepted fast-forward it into current `v2`, verify post-integration CI, and update this state before starting another M5 slice.
+Diagnose the self-hosted `v2 CI` runner/check-reporting failure for exact integrated executable SHA `8bd3643060d10844769920dfffb0a7ed50c68e55`, retain raw evidence identifying the root cause and the smallest safe remediation, and do not begin another M5 implementation slice until this blocker is resolved or explicitly waived.
