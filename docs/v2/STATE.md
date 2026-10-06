@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-06
-Phase: **M4 connected core product in progress; tag mutations accepted and integrated**
+Phase: **M4 connected core product in progress; profiles candidate implemented, acceptance gate pending**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -20,7 +20,67 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - nested comments read/create: **accepted, SQL/browser-gated and integrated**;
   - comment voting: **accepted, SQL/browser-gated and integrated**;
   - tag mutations: **accepted, SQL/API/browser-gated and integrated**;
-  - profiles remain next.
+  - profiles: **candidate implemented; realistic SQL/browser gate pending**.
+
+## M4 profiles — candidate implemented; acceptance gate pending
+
+Verified live GitHub `v2` base before this slice:
+
+`ae42dc67afc4885196e9580dad79ec83ea66befd`
+
+That commit is documentation-only; its executable parent is `7045fe2a47668d90b079dbedf2b19ed3e149cb92`, whose post-fast-forward `v2 CI` run `37423060375`, job `112136510174`, succeeded.
+
+Implementation branch:
+
+`astra/m4-profiles`
+
+Exact executable candidate:
+
+`6fb51b6c11891f7ab47d071d8964ed1bd83f94d2`
+
+Exact-candidate `v2 CI` run `37429479017`, job `112156704423`: **success**.
+
+- exact SHA checkout/verification passed;
+- full mixed-scope v2 correctness gate passed, including Rust worker checks, Go/PostgreSQL tests, frontend tests/typecheck/build, and retained v2 suites;
+- target-worker release-build verification passed;
+- tracked checkout remained clean.
+
+The immediately preceding candidate `9982c7c5a0db8449c0837850532ebe1c9563e4df` failed only in the new PostgreSQL profile test fixture because one reused parameter had ambiguous integer/smallint inference. Commit `6fb51b6c11891f7ab47d071d8964ed1bd83f94d2` adds the explicit `smallint` cast; the full exact-candidate gate then passed. No production query or contract change was required for that failure.
+
+### Candidate contract and implementation boundary
+
+- Public profile identity is addressed by immutable numeric user ID, with canonical frontend route `/user/:id` and backend `GET /api/v2/users/:id`.
+- Username remains mutable presentation data rather than relational or URL identity. This slice therefore does not require username-rename redirect/collision semantics beyond the existing case-insensitive uniqueness used by registration.
+- Public profile metadata is intentionally minimal: numeric `id`, current `username`, and account `createdAt`. Roles, moderation state, invitations, credentials, external identities and other private account data are not exposed.
+- Missing or inactive users return `404 user_not_found`; malformed/nonpositive IDs and cursor/limit inputs return bounded 400 errors. The same public representation is used for signed-out readers, authenticated self reads and other authenticated readers.
+- No profile mutation is introduced. Bio/about text, display-name separation, avatar/media references, username rename, credential/account settings and moderation/admin controls remain out of this slice because neither the current v2 schema nor recovered v1 product behavior requires them for the smallest coherent M4 profile surface.
+- Public profile posts are bounded SFW/released/nondeleted/ready-media rows for one numeric `author_user_id`, ordered by post ID descending with a post-ID `before` cursor. Default page size is 33 and maximum is 120; the service uses `limit + 1` to derive `nextBefore`.
+- The PostgreSQL read path is two fixed queries per page: one primary-key user lookup followed by one bounded author post query. It reuses the existing ready-media projection and shared post scanner; there is no application-level N+1 path or aggregate/count query.
+- Existing `posts_author_idx (author_user_id, id DESC)` is the intended large-table access path. No migration, cache, Redis dependency, event stream, aggregate table or speculative index was added.
+- The frontend profile surface is standalone selected route/server state rather than a global profile/user store. Profile requests use AbortController plus request identity sequencing, post pagination is bounded, and the board retained-post state is not replaced or hydrated merely to show a profile.
+- Profile post thumbnails use known square layout and lazy image loading; selecting a profile post navigates to its existing canonical `/post/:id` route.
+- Existing hot board/comment author rows remain unchanged in this candidate. The slice does not hydrate usernames into feed/comment rows or add a DOM-level author-link workaround. Numeric profile links from those surfaces are a possible later UI follow-up, not a requirement for this initial public profile contract.
+
+### Candidate correctness coverage
+
+Targeted service/HTTP/PostgreSQL/query-shape/frontend-route coverage includes:
+
+- public signed-out profile lookup and authenticated self lookup with the same public shape;
+- missing/inactive user handling;
+- malformed/nonpositive user ID, cursor and limit handling;
+- bounded/default/max page sizes and `limit + 1` cursor derivation;
+- descending numeric post-ID pagination;
+- exclusion of NSFW, unreleased, deleted, non-ready-media and other-user posts from the public profile page;
+- stable numeric route parsing that rejects username/invalid-ID profile routes;
+- retained auth/feed/search/vote/comment/tag suites through the normal v2 correctness gate.
+
+Profile-edit authorization, same-origin mutation rejection, rename collisions, Unicode rename boundaries, idempotent updates and concurrent conflicting edits are intentionally not applicable because this candidate contains no profile mutation.
+
+### Pending acceptance evidence
+
+`src/backend/v2/bench/profile_explain.sql` was added for realistic `EXPLAIN (ANALYZE, BUFFERS)` evidence against the existing 1,000-user / 100,000-post benchmark seed. That gate has **not yet been executed outside CI**. Acceptance still requires inspection of the exact candidate on a disposable realistic PostgreSQL fixture, including both first-page and old-cursor profile post shapes, plus real-browser evidence for the direct profile route, bounded pagination, missing-user behavior, post navigation/history and absence of stale profile-response contamination.
+
+Do not accept or integrate the profile candidate until the retained local-agent evidence ZIP is returned and inspected here. No target-server or browser performance claim has been made yet.
 
 ## M4 tag mutations — accepted and integrated
 
@@ -183,6 +243,8 @@ Exact executable `e1c5d1f65e72a81615164bc6445bcdc2d8218381`; exact-candidate CI 
 
 Do not pull these into the next slice without a concrete requirement:
 
+- profile mutation fields/settings (bio/about, avatar, display-name separation, rename, credential/account settings) until a concrete product requirement establishes their contract;
+- board/comment author-to-profile link polish unless acceptance evidence shows it is required for the initial profile slice;
 - broader video transcoding or exact WebM/EBML acceptance;
 - media orphan/janitor hardening;
 - deployment UID/GID/media-storage permissions;
@@ -193,10 +255,12 @@ Do not pull these into the next slice without a concrete requirement:
 
 ## Unresolved issues
 
-No unresolved correctness, SQL-plan, browser-performance, integration or architecture blocker remains from the accepted tag-mutation, post-voting or comment slices.
+Profile acceptance is blocked only on external evidence that this session cannot produce directly: realistic PostgreSQL `EXPLAIN (ANALYZE, BUFFERS)` for the exact executable candidate and real-browser route/pagination/history/stale-response checks. Exact-candidate CI is green, so a read-only/execution-only local-agent handoff is now permitted.
 
-No SQL/index/schema change is justified by the retained tag evidence. Revisit a numeric per-post tag cap/pagination only if future product requirements or measurements justify it.
+No SQL/index/schema change is currently justified by the candidate design. Reassess only if the realistic profile plans show an unexpected large-table sequential scan, unbounded sort/temp spill, or another measured query-shape problem.
+
+No unresolved correctness, SQL-plan, browser-performance, integration or architecture blocker remains from the accepted tag-mutation, post-voting or comment slices.
 
 ## Single best next task
 
-Begin the M4 **profiles** slice from the current `v2` head. Inspect the existing user/schema/auth boundaries and v1 product behavior only as reference, define the smallest coherent v2 profile read/edit contract without making username a relational key, implement it behind explicit Go/PostgreSQL boundaries with bounded SQL and selected frontend state, run targeted correctness checks, and gate any performance-sensitive query shape with measurements before integration.
+Run the read-only/execution-only local-agent **M4 profile acceptance gate** against exact executable `6fb51b6c11891f7ab47d071d8964ed1bd83f94d2`: collect realistic profile SQL plans and direct-profile browser evidence in one retained `.local-agent-results/` ZIP, return its exact path and SHA-256, then inspect that raw evidence here and decide whether the candidate is accepted or needs revision before integration.
