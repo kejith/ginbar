@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-06
-Phase: **M4 connected core product in progress; tag mutations accepted, integration pending**
+Phase: **M4 connected core product in progress; tag mutations accepted and integrated**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -19,10 +19,10 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - post voting: **accepted, SQL/browser-gated and integrated**;
   - nested comments read/create: **accepted, SQL/browser-gated and integrated**;
   - comment voting: **accepted, SQL/browser-gated and integrated**;
-  - tag mutations: **accepted after SQL/API and supplemental browser gates; integration pending**;
-  - profiles remain afterward.
+  - tag mutations: **accepted, SQL/API/browser-gated and integrated**;
+  - profiles remain next.
 
-## M4 tag mutations — accepted; integration pending
+## M4 tag mutations — accepted and integrated
 
 Verified live GitHub `v2` base before this slice:
 
@@ -113,9 +113,24 @@ Both gate runs cleaned their disposable databases/services/worktrees and preserv
 
 Decision: **accept M4 tag mutations**. The candidate is PostgreSQL-authoritative, concurrency-safe for the tested mutation shapes, bounded/index-backed at realistic scale, correctly reconciles ambiguous commit outcomes, fences stale selected-post work, preserves board/navigation/update-scope invariants, and introduces no measured representative Long Task. No additional cache, global tag store, index, event stream, polling layer, pagination/cap, or virtualization change is justified by the evidence.
 
-### Integration status
+### Integration verification
 
-Acceptance is complete. Integration is still pending at this documentation commit. Before updating `v2`, re-verify that remote `v2` is still `e7da7d7ed80599cffd0caf9c32e0db586366265a` and that the accepted branch is a pure fast-forward descendant. Use a non-force ref update only; then require post-fast-forward `v2 CI` success before closing the slice.
+Accepted history was non-force fast-forwarded on remote `v2`:
+
+`e7da7d7ed80599cffd0caf9c32e0db586366265a -> 7045fe2a47668d90b079dbedf2b19ed3e149cb92`
+
+The range was a pure fast-forward containing the exact executable candidate plus documentation-only state commits. No force update or merge commit was used.
+
+Post-fast-forward `v2 CI` run `37423060375`, job `112136510174`: **success** on exact integrated head `7045fe2a47668d90b079dbedf2b19ed3e149cb92`.
+
+- `head_branch=v2` and `head_sha=7045fe2a47668d90b079dbedf2b19ed3e149cb92`;
+- exact checkout and SHA verification succeeded;
+- scoped v2 correctness gate succeeded;
+- target-worker release-build verification succeeded;
+- tracked checkout remained clean;
+- all workflow job steps completed successfully.
+
+Integration decision: **tag mutations are fully accepted and integrated; the slice is closed**.
 
 ## Other accepted M4 slices
 
@@ -178,9 +193,10 @@ Do not pull these into the next slice without a concrete requirement:
 
 ## Unresolved issues
 
-- No unresolved correctness, SQL-plan, browser-performance or architecture blocker remains for tag mutations. Integration and post-fast-forward CI are the only remaining closure steps.
-- No SQL/index/schema change is justified by the retained tag evidence. Revisit a numeric per-post tag cap/pagination only if future product requirements or measurements justify it.
+No unresolved correctness, SQL-plan, browser-performance, integration or architecture blocker remains from the accepted tag-mutation, post-voting or comment slices.
+
+No SQL/index/schema change is justified by the retained tag evidence. Revisit a numeric per-post tag cap/pagination only if future product requirements or measurements justify it.
 
 ## Single best next task
 
-Non-force fast-forward the accepted `astra/m4-tag-mutations` history into the still-current `v2` ref, verify the resulting exact `v2` head with the normal `v2 CI`, record that integration result here, then begin the M4 profiles slice.
+Begin the M4 **profiles** slice from the current `v2` head. Inspect the existing user/schema/auth boundaries and v1 product behavior only as reference, define the smallest coherent v2 profile read/edit contract without making username a relational key, implement it behind explicit Go/PostgreSQL boundaries with bounded SQL and selected frontend state, run targeted correctness checks, and gate any performance-sensitive query shape with measurements before integration.
