@@ -18,6 +18,7 @@ func TestMigrationSet(t *testing.T) {
 		"004_media_perceptual_hash_lookup.sql",
 		"005_media_job_regeneration_lookup.sql",
 		"006_auth_sessions.sql",
+		"007_moderation_audit.sql",
 	}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("got %#v want %#v", names, want)
@@ -106,6 +107,20 @@ func TestMigrationSet(t *testing.T) {
 	} {
 		if !bytes.Contains(authSessions, required) {
 			t.Fatalf("auth sessions migration missing %q", required)
+		}
+	}
+
+	moderationAudit, err := Migration(names[6])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range [][]byte{
+		[]byte("posts_moderation_consistent"),
+		[]byte("comments_moderation_consistent"),
+		[]byte("moderated_by_user_id bigint REFERENCES users(id)"),
+	} {
+		if !bytes.Contains(moderationAudit, required) {
+			t.Fatalf("moderation audit migration missing %q", required)
 		}
 	}
 }

@@ -143,7 +143,25 @@ input { font: inherit; }
   background: linear-gradient(135deg, #242a33, #11151b);
 }
 
+.thumbnail--moderated {
+  cursor: default;
+  filter: none;
+}
+
+.thumbnail-hidden-label {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  color: #aeb6c1;
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
 .thumbnail:hover { filter: brightness(1.08); }
+.thumbnail--moderated:hover { filter: none; }
 .thumbnail:focus-visible { outline: 3px solid #f4d35e; outline-offset: -3px; z-index: 2; }
 .thumbnail--selected { box-shadow: inset 0 0 0 4px #f4d35e; }
 .thumbnail-id,

@@ -15,6 +15,7 @@ import (
 	"github.com/kejith/ginbar/backend/v2/internal/commentvote"
 	"github.com/kejith/ginbar/backend/v2/internal/feed"
 	"github.com/kejith/ginbar/backend/v2/internal/mediastatus"
+	"github.com/kejith/ginbar/backend/v2/internal/moderation"
 	"github.com/kejith/ginbar/backend/v2/internal/postvote"
 	"github.com/kejith/ginbar/backend/v2/internal/profile"
 	"github.com/kejith/ginbar/backend/v2/internal/search"
@@ -30,6 +31,7 @@ type Store interface {
 	commentvote.Store
 	tag.Store
 	profile.Store
+	moderation.Store
 }
 
 type Config struct {
@@ -55,6 +57,7 @@ type Server struct {
 	commentVote    *commentvote.Service
 	tags           *tag.Service
 	profiles       *profile.Service
+	moderation     *moderation.Service
 	mux            *http.ServeMux
 	requestTimeout time.Duration
 	cookieSecure   bool
@@ -92,6 +95,7 @@ func NewWithConfig(store Store, cfg Config) *Server {
 		commentVote:    commentvote.New(store),
 		tags:           tag.New(store),
 		profiles:       profile.New(store),
+		moderation:     moderation.New(store),
 		mux:            http.NewServeMux(),
 		requestTimeout: cfg.RequestTimeout,
 		cookieSecure:   cfg.CookieSecure,
@@ -105,7 +109,9 @@ func NewWithConfig(store Store, cfg Config) *Server {
 	s.mux.HandleFunc("GET /api/v2/posts/{id}/comments", s.listComments)
 	s.mux.Handle("POST /api/v2/posts/{id}/comments", s.requireAuth(http.HandlerFunc(s.createComment)))
 	s.mux.Handle("PUT /api/v2/posts/{id}/comments/{commentId}/vote", s.requireAuth(http.HandlerFunc(s.setCommentVote)))
+	s.mux.Handle("PUT /api/v2/posts/{id}/comments/{commentId}/moderation", s.requireAuth(http.HandlerFunc(s.moderateComment)))
 	s.mux.Handle("PUT /api/v2/posts/{id}/vote", s.requireAuth(http.HandlerFunc(s.setPostVote)))
+	s.mux.Handle("PUT /api/v2/posts/{id}/moderation", s.requireAuth(http.HandlerFunc(s.moderatePost)))
 	s.mux.HandleFunc("GET /api/v2/posts/{id}/tags", s.listPostTags)
 	s.mux.Handle("POST /api/v2/posts/{id}/tags", s.requireAuth(http.HandlerFunc(s.addPostTag)))
 	s.mux.Handle("DELETE /api/v2/posts/{id}/tags/{tagId}", s.requireAuth(http.HandlerFunc(s.removePostTag)))

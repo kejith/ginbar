@@ -20,6 +20,7 @@
 }
 
 .comments-header span,
+.comments-header-actions span,
 .comment-meta span,
 .comment-composer-actions span,
 .comments-auth-note,
@@ -57,6 +58,7 @@
 
 .comment-composer button,
 .comment-reply,
+.comment-moderate,
 .comment-vote button,
 .comments-load-more {
   padding: 0.45rem 0.65rem;
@@ -67,6 +69,7 @@
 }
 
 .comment-composer button:disabled,
+.comment-moderate:disabled,
 .comments-load-more:disabled {
   opacity: 0.5;
   cursor: not-allowed;
@@ -105,7 +108,9 @@
 .comment--orphaned { border-inline-start-color: #765353; }
 .comment-orphan-warning,
 .comment-error { color: #e4b8b8; font-size: 0.82rem; }
+.comments-header-actions { display: flex; align-items: center; gap: 0.6rem; }
 .comment-actions { justify-content: flex-start; }
+.comment-moderate { border-color: #765353; }
 .comment-vote { gap: 0.25rem; }
 .comment-vote button { min-width: 2rem; padding: 0.3rem 0.45rem; }
 .comment-vote button.comment-vote--active { border-color: #8e9bad; background: #29313b; }

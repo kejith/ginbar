@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/kejith/ginbar/backend/v2/internal/comment"
 	"github.com/kejith/ginbar/backend/v2/internal/model"
+	"github.com/kejith/ginbar/backend/v2/internal/role"
 )
 
 const listCommentsSQL = `
@@ -21,7 +22,8 @@ const listCommentsSQL = `
 		COALESCE(c.score, 0),
 		0::smallint,
 		COALESCE(c.created_at, 'epoch'::timestamptz),
-		c.deleted_at IS NOT NULL
+		c.deleted_at IS NOT NULL,
+		false AS can_moderate
 	FROM posts AS p
 	LEFT JOIN LATERAL (
 		SELECT id, user_id, parent_comment_id, body, score, created_at, deleted_at
@@ -46,7 +48,13 @@ const listCommentsWithViewerSQL = `
 		COALESCE(c.score, 0),
 		CASE WHEN c.deleted_at IS NULL THEN COALESCE(cv.value, 0) ELSE 0 END::smallint,
 		COALESCE(c.created_at, 'epoch'::timestamptz),
-		c.deleted_at IS NOT NULL
+		c.deleted_at IS NOT NULL,
+		EXISTS (
+			SELECT 1
+			FROM user_roles AS ur
+			WHERE ur.user_id = $4
+			  AND ur.role IN ($5, $6)
+		) AS can_moderate
 	FROM posts AS p
 	LEFT JOIN LATERAL (
 		SELECT id, user_id, parent_comment_id, body, score, created_at, deleted_at
@@ -110,37 +118,61 @@ const createCommentSQL = `
 	LEFT JOIN inserted ON true
 `
 
-func (s *Store) ListComments(ctx context.Context, query comment.Query) ([]comment.Comment, error) {
+func (s *Store) ListComments(ctx context.Context, query comment.Query) (comment.ListResult, error) {
 	var (
 		rows pgx.Rows
 		err  error
 	)
 	if query.ViewerUserID > 0 {
-		rows, err = s.pool.Query(ctx, listCommentsWithViewerSQL, query.PostID, query.After, query.Limit+1, query.ViewerUserID)
+		rows, err = s.pool.Query(
+			ctx,
+			listCommentsWithViewerSQL,
+			query.PostID,
+			query.After,
+			query.Limit+1,
+			query.ViewerUserID,
+			role.Moderator,
+			role.Admin,
+		)
 	} else {
 		rows, err = s.pool.Query(ctx, listCommentsSQL, query.PostID, query.After, query.Limit+1)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("query comments: %w", err)
+		return comment.ListResult{}, fmt.Errorf("query comments: %w", err)
 	}
 	defer rows.Close()
 
 	comments := make([]comment.Comment, 0, query.Limit+1)
 	postFound := false
+	canModerate := false
 	for rows.Next() {
 		postFound = true
 		var (
-			id        int64
-			authorID  int64
-			parentID  pgtype.Int8
-			body      string
-			score     int32
-			userVote  int16
-			createdAt time.Time
-			deleted   bool
+			id          int64
+			authorID    int64
+			parentID    pgtype.Int8
+			body        string
+			score       int32
+			userVote    int16
+			createdAt   time.Time
+			deleted     bool
+			rowModerate bool
 		)
-		if err := rows.Scan(&id, &authorID, &parentID, &body, &score, &userVote, &createdAt, &deleted); err != nil {
-			return nil, fmt.Errorf("scan comment row: %w", err)
+		if err := rows.Scan(
+			&id,
+			&authorID,
+			&parentID,
+			&body,
+			&score,
+			&userVote,
+			&createdAt,
+			&deleted,
+			&rowModerate,
+		); err != nil {
+			return comment.ListResult{}, fmt.Errorf("scan comment row: %w", err)
+		}
+		if rowModerate {
+			canModerate = true
 		}
 		if id == 0 {
 			continue
@@ -165,12 +197,12 @@ func (s *Store) ListComments(ctx context.Context, query comment.Query) ([]commen
 		comments = append(comments, entry)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("read comment rows: %w", err)
+		return comment.ListResult{}, fmt.Errorf("read comment rows: %w", err)
 	}
 	if !postFound {
-		return nil, comment.ErrPostNotFound
+		return comment.ListResult{}, comment.ErrPostNotFound
 	}
-	return comments, nil
+	return comment.ListResult{Comments: comments, CanModerate: canModerate}, nil
 }
 
 func (s *Store) CreateComment(ctx context.Context, request comment.CreateRequest) (comment.Comment, error) {

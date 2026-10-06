@@ -68,12 +68,28 @@ export interface Comment {
 export interface CommentPage {
   comments: Comment[];
   nextAfter?: number;
+  canModerate: boolean;
 }
 
 export interface CommentVoteResult {
   commentId: number;
   score: number;
   vote: PostVote;
+}
+
+export interface PostModerationResult {
+  postId: number;
+  deleted: boolean;
+  moderatedAt: string;
+  moderatedByUserId: number;
+}
+
+export interface CommentModerationResult {
+  postId: number;
+  commentId: number;
+  deleted: boolean;
+  moderatedAt: string;
+  moderatedByUserId: number;
 }
 
 interface AuthResponse {
@@ -257,6 +273,34 @@ export async function setCommentVote(
       body: JSON.stringify({ vote }),
     }),
     "comment vote",
+  );
+}
+
+export async function hidePost(postId: number, signal?: AbortSignal): Promise<PostModerationResult> {
+  return parseJSON<PostModerationResult>(
+    await fetch(`/api/v2/posts/${postId}/moderation`, {
+      method: "PUT",
+      signal,
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    }),
+    "post moderation",
+  );
+}
+
+export async function hideComment(
+  postId: number,
+  commentId: number,
+  signal?: AbortSignal,
+): Promise<CommentModerationResult> {
+  return parseJSON<CommentModerationResult>(
+    await fetch(`/api/v2/posts/${postId}/comments/${commentId}/moderation`, {
+      method: "PUT",
+      signal,
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    }),
+    "comment moderation",
   );
 }
 

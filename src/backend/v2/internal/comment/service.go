@@ -44,8 +44,14 @@ type Query struct {
 }
 
 type Page struct {
-	Comments  []Comment `json:"comments"`
-	NextAfter int64     `json:"nextAfter,omitempty"`
+	Comments    []Comment `json:"comments"`
+	NextAfter   int64     `json:"nextAfter,omitempty"`
+	CanModerate bool      `json:"canModerate"`
+}
+
+type ListResult struct {
+	Comments    []Comment
+	CanModerate bool
 }
 
 type CreateRequest struct {
@@ -56,7 +62,7 @@ type CreateRequest struct {
 }
 
 type Store interface {
-	ListComments(context.Context, Query) ([]Comment, error)
+	ListComments(context.Context, Query) (ListResult, error)
 	CreateComment(context.Context, CreateRequest) (Comment, error)
 }
 
@@ -75,14 +81,14 @@ func (s *Service) List(ctx context.Context, q Query) (Page, error) {
 		return Page{}, fmt.Errorf("viewer user id must not be negative")
 	}
 	q.Limit = normalizeLimit(q.Limit)
-	comments, err := s.store.ListComments(ctx, q)
+	result, err := s.store.ListComments(ctx, q)
 	if err != nil {
 		return Page{}, err
 	}
-	if comments == nil {
-		comments = []Comment{}
+	if result.Comments == nil {
+		result.Comments = []Comment{}
 	}
-	page := Page{Comments: comments}
+	page := Page{Comments: result.Comments, CanModerate: result.CanModerate}
 	if len(page.Comments) > q.Limit {
 		page.Comments = page.Comments[:q.Limit]
 		page.NextAfter = page.Comments[len(page.Comments)-1].ID
