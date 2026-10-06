@@ -37,7 +37,7 @@ func TestProfileReadIsPublicMetadataOnlyAndPostPageIsBounded(t *testing.T) {
 		}
 		if err := store.pool.QueryRow(ctx, `
 			INSERT INTO posts (author_user_id, content_filter, release_state, released_at, deleted_at)
-			VALUES ($1, $2, $3, CASE WHEN $3 = 1 THEN now() ELSE NULL END, $4)
+			VALUES ($1, $2, $3, CASE WHEN $3::smallint = 1 THEN now() ELSE NULL END, $4)
 			RETURNING id
 		`, authorID, filter, releaseState, deletedAt).Scan(&postID); err != nil {
 			t.Fatal(err)
