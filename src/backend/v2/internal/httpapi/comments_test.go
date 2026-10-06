@@ -14,13 +14,13 @@ import (
 )
 
 // Keep the shared apiStore satisfying Server's aggregate Store interface for all existing HTTP tests.
-func (s *apiStore) ListComments(_ context.Context, query comment.Query) ([]comment.Comment, error) {
+func (s *apiStore) ListComments(_ context.Context, query comment.Query) (comment.ListResult, error) {
 	for _, post := range s.posts {
 		if post.ID == query.PostID {
-			return []comment.Comment{}, nil
+			return comment.ListResult{Comments: []comment.Comment{}}, nil
 		}
 	}
-	return nil, comment.ErrPostNotFound
+	return comment.ListResult{}, comment.ErrPostNotFound
 }
 
 func (s *apiStore) CreateComment(_ context.Context, request comment.CreateRequest) (comment.Comment, error) {
@@ -36,6 +36,7 @@ func (s *apiStore) CreateComment(_ context.Context, request comment.CreateReques
 type commentAPIStore struct {
 	*apiStore
 	comments    []comment.Comment
+	canModerate bool
 	listErr     error
 	createErr   error
 	lastQuery   comment.Query
@@ -43,12 +44,12 @@ type commentAPIStore struct {
 	createValue comment.Comment
 }
 
-func (s *commentAPIStore) ListComments(_ context.Context, query comment.Query) ([]comment.Comment, error) {
+func (s *commentAPIStore) ListComments(_ context.Context, query comment.Query) (comment.ListResult, error) {
 	s.lastQuery = query
 	if s.listErr != nil {
-		return nil, s.listErr
+		return comment.ListResult{}, s.listErr
 	}
-	return s.comments, nil
+	return comment.ListResult{Comments: s.comments, CanModerate: s.canModerate}, nil
 }
 
 func (s *commentAPIStore) CreateComment(_ context.Context, request comment.CreateRequest) (comment.Comment, error) {
@@ -87,12 +88,13 @@ func TestCommentsReadResolvesAuthenticatedViewer(t *testing.T) {
 	body := "one"
 	base := &apiStore{}
 	store := &commentAPIStore{
-		apiStore: base,
-		comments: []comment.Comment{{ID: 10, PostID: 42, AuthorID: 7, Body: &body, UserVote: model.VoteDown}},
+		apiStore:    base,
+		canModerate: true,
+		comments:    []comment.Comment{{ID: 10, PostID: 42, AuthorID: 7, Body: &body, UserVote: model.VoteDown}},
 	}
 	res := httptest.NewRecorder()
 	newAuthTestServer(store).Handler().ServeHTTP(res, authenticatedRequest(base, http.MethodGet, "/api/v2/posts/42/comments?limit=1", ""))
-	if res.Code != http.StatusOK || store.lastQuery.ViewerUserID != 42 || !strings.Contains(res.Body.String(), `"userVote":-1`) {
+	if res.Code != http.StatusOK || store.lastQuery.ViewerUserID != 42 || !strings.Contains(res.Body.String(), `"userVote":-1`) || !strings.Contains(res.Body.String(), `"canModerate":true`) {
 		t.Fatalf("status=%d query=%#v body=%s", res.Code, store.lastQuery, res.Body.String())
 	}
 }

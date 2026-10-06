@@ -16,9 +16,9 @@ type testStore struct {
 	createValue Comment
 }
 
-func (s *testStore) ListComments(_ context.Context, query Query) ([]Comment, error) {
+func (s *testStore) ListComments(_ context.Context, query Query) (ListResult, error) {
 	s.lastQuery = query
-	return s.comments, s.listErr
+	return ListResult{Comments: s.comments}, s.listErr
 }
 
 func (s *testStore) CreateComment(_ context.Context, request CreateRequest) (Comment, error) {

@@ -7,14 +7,16 @@ import (
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"github.com/kejith/ginbar/backend/v2/internal/role"
 )
 
 const (
 	MaxNameRunes = 80
 
-	// Role values are the v2 user_roles values reserved for elevated tag removal.
-	RoleModerator int16 = 1
-	RoleAdmin     int16 = 2
+	// Keep these aliases for the accepted tag API while role values remain centralized.
+	RoleModerator = role.Moderator
+	RoleAdmin     = role.Admin
 )
 
 var (

@@ -20,8 +20,8 @@ func TestListCommentsDistinguishesEmptyPostFromUnavailablePost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 0 {
-		t.Fatalf("comments=%#v", got)
+	if len(got.Comments) != 0 {
+		t.Fatalf("comments=%#v", got.Comments)
 	}
 
 	if _, err := store.ListComments(ctx, comment.Query{PostID: postID + 999999, Limit: 10}); !errors.Is(err, comment.ErrPostNotFound) {
