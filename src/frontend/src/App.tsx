@@ -170,6 +170,7 @@ const App: Component = () => {
   const [searchDraft, setSearchDraft] = createSignal(initialSearchQuery);
   const [searchError, setSearchError] = createSignal<string | null>(null);
   const [voteError, setVoteError] = createSignal<VoteError | null>(null);
+  const [moderatedPostIDs, setModeratedPostIDs] = createSignal<ReadonlySet<number>>(new Set());
   const [stats, setStats] = createSignal<BenchmarkStats>({
     selectionSamples: [],
     longTasks: 0,
@@ -195,6 +196,7 @@ const App: Component = () => {
   });
   const isSelectedPost = createSelector(selectedId);
   const isSelectedRow = createSelector(selectedRowKey);
+  const isModeratedPost = (id: number) => moderatedPostIDs().has(id);
 
   const rowMap = createMemo(() => {
     const value = new Map<number, PostSummary[]>();
@@ -263,7 +265,7 @@ const App: Component = () => {
     measure = false,
     recordSample = measure,
   ): Promise<SelectionTiming> | null => {
-    if (!postById().has(id)) return null;
+    if (!postById().has(id) || isModeratedPost(id)) return null;
 
     const startedAt = performance.now();
     setRoutePostId(id);
@@ -276,11 +278,25 @@ const App: Component = () => {
     return measure ? recordNextFrame(startedAt, syncMs, recordSample) : null;
   };
 
-  const closePost = () => {
+  const closePost = (mode: HistoryMode = "push") => {
     setSelectedId(null);
     setRoutePostId(null);
     setRouteStatus("idle");
-    writeHistory(null, "push");
+    writeHistory(null, mode);
+  };
+
+  const markPostModerated = (postId: number) => {
+    if (selectedId() !== postId || !postById().has(postId)) return;
+    setModeratedPostIDs((previous) => {
+      if (previous.has(postId)) return previous;
+      const next = new Set(previous);
+      next.add(postId);
+      return next;
+    });
+    voteQueues.delete(postId);
+    voteSequences.delete(postId);
+    confirmedVotes.delete(postId);
+    closePost("replace");
   };
 
   const updateRetainedPost = (id: number, update: (post: PostSummary) => PostSummary) => {
@@ -357,6 +373,17 @@ const App: Component = () => {
   const replaceServerWindow = (nextPosts: PostSummary[]) => {
     windowEpoch += 1;
     setPosts(nextPosts);
+    if (moderatedPostIDs().size === 0) return;
+    const retained = new Set(nextPosts.map((post) => post.id));
+    setModeratedPostIDs((previous) => {
+      let changed = false;
+      const next = new Set<number>();
+      for (const id of previous) {
+        if (retained.has(id)) next.add(id);
+        else changed = true;
+      }
+      return changed ? next : previous;
+    });
   };
 
   const resetForSearchChange = () => {
@@ -468,7 +495,7 @@ const App: Component = () => {
       if (posts().length === 0) void loadInitialFeed(nextQuery);
       return;
     }
-    if (postById().has(id)) {
+    if (postById().has(id) && !isModeratedPost(id)) {
       selectRetainedPost(id, "none", true);
       return;
     }
@@ -574,19 +601,27 @@ const App: Component = () => {
     return windowLoadPromise;
   };
 
+  const navigableIndex = (list: PostSummary[], start: number, direction: -1 | 1) => {
+    for (let index = start; index >= 0 && index < list.length; index += direction) {
+      if (!isModeratedPost(list[index].id)) return index;
+    }
+    return -1;
+  };
+
   const navigate = async (direction: -1 | 1) => {
     let list = posts();
     if (list.length === 0) return;
     const currentId = selectedId();
     if (currentId === null) {
-      selectRetainedPost(list[0].id, "push", true, benchmarkEnabled, benchmarkEnabled);
+      const first = navigableIndex(list, direction === 1 ? 0 : list.length - 1, direction);
+      if (first >= 0) selectRetainedPost(list[first].id, "push", true, benchmarkEnabled, benchmarkEnabled);
       return;
     }
 
     let index = list.findIndex((post) => post.id === currentId);
     if (index < 0) return;
-    let target = index + direction;
-    if (target >= 0 && target < list.length) {
+    let target = navigableIndex(list, index + direction, direction);
+    if (target >= 0) {
       selectRetainedPost(list[target].id, "push", true, benchmarkEnabled, benchmarkEnabled);
       return;
     }
@@ -597,8 +632,9 @@ const App: Component = () => {
 
     list = posts();
     index = list.findIndex((post) => post.id === currentId);
-    target = index + direction;
-    if (index >= 0 && target >= 0 && target < list.length) {
+    if (index < 0) return;
+    target = navigableIndex(list, index + direction, direction);
+    if (target >= 0) {
       selectRetainedPost(list[target].id, "push", true, benchmarkEnabled, benchmarkEnabled);
     }
   };
@@ -852,6 +888,7 @@ const App: Component = () => {
               posts={() => rowMap().get(rowKey) ?? []}
               isSelectedPost={isSelectedPost}
               isSelectedRow={isSelectedRow}
+              isModeratedPost={isModeratedPost}
               selectedPost={selectedPost}
               canVote={() => authState().status === "signed-in"}
               voteError={() => {
@@ -861,6 +898,7 @@ const App: Component = () => {
               }}
               onSelect={(id) => selectRetainedPost(id, "push", false, benchmarkEnabled, benchmarkEnabled)}
               onVote={voteOnSelectedPost}
+              onPostModerated={markPostModerated}
               onClose={closePost}
               onMountRow={() => { rowMounts += 1; }}
               onUnmountRow={() => { rowUnmounts += 1; }}
@@ -882,11 +920,13 @@ interface BoardRowProps {
   posts: Accessor<PostSummary[]>;
   isSelectedPost(id: number): boolean;
   isSelectedRow(rowKey: number): boolean;
+  isModeratedPost(id: number): boolean;
   selectedPost: Accessor<PostSummary | null>;
   canVote: Accessor<boolean>;
   voteError: Accessor<string | null>;
   onSelect(id: number): void;
   onVote(direction: -1 | 1): void;
+  onPostModerated(postId: number): void;
   onClose(): void;
   onMountRow(): void;
   onUnmountRow(): void;
@@ -905,7 +945,12 @@ const BoardRow: Component<BoardRowProps> = (props) => {
       <div class="thumbnail-row">
         <For each={props.posts()}>
           {(post: PostSummary) => (
-            <Thumbnail post={post} selected={props.isSelectedPost(post.id)} onSelect={props.onSelect} />
+            <Thumbnail
+              post={post}
+              selected={props.isSelectedPost(post.id)}
+              moderated={props.isModeratedPost(post.id)}
+              onSelect={props.onSelect}
+            />
           )}
         </For>
       </div>
@@ -916,6 +961,7 @@ const BoardRow: Component<BoardRowProps> = (props) => {
           canVote={props.canVote}
           voteError={props.voteError}
           onVote={props.onVote}
+          onPostModerated={props.onPostModerated}
           onClose={props.onClose}
         />
       </Show>
@@ -923,19 +969,32 @@ const BoardRow: Component<BoardRowProps> = (props) => {
   );
 };
 
-const Thumbnail: Component<{ post: PostSummary; selected: boolean; onSelect(id: number): void }> = (props) => {
-  const thumbnailURL = createMemo(() => safeThumbnailPath(props.post.media.storageKey));
+const Thumbnail: Component<{
+  post: PostSummary;
+  selected: boolean;
+  moderated: boolean;
+  onSelect(id: number): void;
+}> = (props) => {
+  const thumbnailURL = createMemo(() => props.moderated ? null : safeThumbnailPath(props.post.media.storageKey));
   return (
     <button
       type="button"
       class="thumbnail"
-      classList={{ "thumbnail--selected": props.selected }}
+      classList={{ "thumbnail--selected": props.selected, "thumbnail--moderated": props.moderated }}
       data-post-id={props.post.id}
-      aria-label={`Open post ${props.post.id}`}
+      aria-label={props.moderated ? `Post ${props.post.id} hidden by moderation` : `Open post ${props.post.id}`}
       aria-pressed={props.selected}
+      disabled={props.moderated}
       onClick={() => props.onSelect(props.post.id)}
     >
-      <Show when={thumbnailURL()} fallback={<span class="thumbnail-placeholder" aria-hidden="true" />}>
+      <Show
+        when={thumbnailURL()}
+        fallback={
+          <span class="thumbnail-placeholder" aria-hidden="true">
+            <Show when={props.moderated}><span class="thumbnail-hidden-label">Hidden</span></Show>
+          </span>
+        }
+      >
         {(url) => <img src={url()} width="256" height="256" alt="" loading="lazy" decoding="async" />}
       </Show>
       <span class="thumbnail-id">#{props.post.id}</span>
@@ -949,6 +1008,7 @@ interface ExpandedPostProps {
   canVote: Accessor<boolean>;
   voteError: Accessor<string | null>;
   onVote(direction: -1 | 1): void;
+  onPostModerated(postId: number): void;
   onClose(): void;
 }
 
@@ -1029,7 +1089,11 @@ const ExpandedPost: Component<ExpandedPostProps> = (props) => {
             <MediaStatus postId={post().id} />
             <button type="button" onClick={props.onClose}>Close</button>
           </aside>
-          <Comments postId={post().id} canCreate={props.canVote} />
+          <Comments
+            postId={post().id}
+            canCreate={props.canVote}
+            onPostModerated={props.onPostModerated}
+          />
         </article>
       )}
     </Show>

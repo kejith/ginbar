@@ -5,17 +5,21 @@ import {
   APIError,
   createComment,
   fetchComments,
+  hideComment,
+  hidePost,
   setCommentVote,
   type Comment,
   type PostVote,
 } from "./api";
 import { buildCommentRows, mergeCommentsByID } from "./comment-tree.js";
 import { nextCommentVoteForDirection, withOptimisticCommentVote } from "./comment-vote.js";
+import { canApplyModerationResult, withModeratedComment } from "./moderation-state.js";
 import "./comments.css";
 
 interface CommentsProps {
   postId: number;
   canCreate: Accessor<boolean>;
+  onPostModerated(postId: number): void;
 }
 
 interface ConfirmedVoteState {
@@ -34,6 +38,7 @@ const Comments: Component<CommentsProps> = (props) => {
   let composer!: HTMLTextAreaElement;
   let readController: AbortController | undefined;
   let createController: AbortController | undefined;
+  let moderationController: AbortController | undefined;
   let epoch = 0;
   const voteQueues = new Map<number, Promise<void>>();
   const voteSequences = new Map<number, number>();
@@ -51,6 +56,9 @@ const Comments: Component<CommentsProps> = (props) => {
   const [submitError, setSubmitError] = createSignal<string | null>(null);
   const [voteError, setVoteError] = createSignal<VoteError | null>(null);
   const [authBlocked, setAuthBlocked] = createSignal(false);
+  const [canModerate, setCanModerate] = createSignal(false);
+  const [moderatingTarget, setModeratingTarget] = createSignal<"post" | number | null>(null);
+  const [moderationError, setModerationError] = createSignal<string | null>(null);
 
   const canCreate = createMemo(() => props.canCreate() && !authBlocked());
   const rows = createMemo(() => {
@@ -106,6 +114,7 @@ const Comments: Component<CommentsProps> = (props) => {
       if (controller.signal.aborted || requestEpoch !== epoch || props.postId !== postId) return;
       setComments((current) => mergeCommentsByID(current, page.comments));
       setNextAfter(page.nextAfter ?? 0);
+      setCanModerate(page.canModerate);
     } catch (error) {
       if (controller.signal.aborted || requestEpoch !== epoch || props.postId !== postId) return;
       if (error instanceof APIError && error.status === 404) setLoadError("Comments are unavailable for this post");
@@ -121,6 +130,8 @@ const Comments: Component<CommentsProps> = (props) => {
     const requestEpoch = ++epoch;
     readController?.abort();
     createController?.abort();
+    moderationController?.abort();
+    moderationController = undefined;
     abortVotes();
     rowCache.clear();
     setComments([]);
@@ -133,11 +144,16 @@ const Comments: Component<CommentsProps> = (props) => {
     setSubmitError(null);
     setVoteError(null);
     setAuthBlocked(false);
+    setCanModerate(false);
+    setModeratingTarget(null);
+    setModerationError(null);
     void loadPage(postId, 0, requestEpoch);
 
     onCleanup(() => {
       readController?.abort();
       createController?.abort();
+      moderationController?.abort();
+      moderationController = undefined;
       abortVotes();
       rowCache.clear();
     });
@@ -206,6 +222,7 @@ const Comments: Component<CommentsProps> = (props) => {
       .catch(() => undefined)
       .then(async () => {
         if (requestEpoch !== epoch || props.postId !== postId) return;
+        if (comments().find((entry) => entry.id === commentId)?.deleted !== false) return;
         const controller = new AbortController();
         voteControllers.set(commentId, controller);
         try {
@@ -254,12 +271,118 @@ const Comments: Component<CommentsProps> = (props) => {
     voteQueues.set(commentId, queued);
   };
 
+  const moderationFailure = (error: unknown, missingMessage: string) => {
+    if (error instanceof APIError && (error.status === 401 || error.status === 403)) {
+      setCanModerate(false);
+      setModerationError(error.status === 401 ? "Authentication required" : "Moderation is not authorized");
+      return;
+    }
+    if (error instanceof APIError && error.status === 404) {
+      setModerationError(missingMessage);
+      return;
+    }
+    setModerationError("Moderation update failed");
+  };
+
+  const moderatePost = async () => {
+    if (!canModerate() || moderatingTarget() !== null) return;
+    const postId = props.postId;
+    const requestEpoch = epoch;
+    moderationController?.abort();
+    const controller = new AbortController();
+    moderationController = controller;
+    setModeratingTarget("post");
+    setModerationError(null);
+
+    try {
+      const result = await hidePost(postId, controller.signal);
+      if (!canApplyModerationResult(
+        props.postId,
+        postId,
+        result.postId,
+        requestEpoch,
+        epoch,
+        controller.signal.aborted,
+      )) return;
+      if (!result.deleted) throw new Error("post moderation response was not deleted");
+      props.onPostModerated(postId);
+    } catch (error) {
+      if (controller.signal.aborted || requestEpoch !== epoch || props.postId !== postId) return;
+      moderationFailure(error, "Post is no longer available");
+    } finally {
+      if (moderationController === controller) moderationController = undefined;
+      if (!controller.signal.aborted && requestEpoch === epoch && props.postId === postId) {
+        setModeratingTarget(null);
+      }
+    }
+  };
+
+  const moderateComment = async (commentId: number) => {
+    if (!canModerate() || moderatingTarget() !== null) return;
+    const current = comments().find((entry) => entry.id === commentId);
+    if (!current || current.deleted) return;
+
+    const postId = props.postId;
+    const requestEpoch = epoch;
+    moderationController?.abort();
+    const controller = new AbortController();
+    moderationController = controller;
+    setModeratingTarget(commentId);
+    setModerationError(null);
+
+    try {
+      const result = await hideComment(postId, commentId, controller.signal);
+      if (!canApplyModerationResult(
+        props.postId,
+        postId,
+        result.postId,
+        requestEpoch,
+        epoch,
+        controller.signal.aborted,
+      )) return;
+      if (result.commentId !== commentId || !result.deleted) {
+        throw new Error("comment moderation response mismatch");
+      }
+
+      voteControllers.get(commentId)?.abort();
+      voteControllers.delete(commentId);
+      voteSequences.delete(commentId);
+      confirmedVotes.delete(commentId);
+      updateCommentByID(commentId, withModeratedComment);
+      if (replyTo() === commentId) setReplyTo(null);
+    } catch (error) {
+      if (controller.signal.aborted || requestEpoch !== epoch || props.postId !== postId) return;
+      moderationFailure(error, "Comment is no longer available");
+    } finally {
+      if (moderationController === controller) moderationController = undefined;
+      if (!controller.signal.aborted && requestEpoch === epoch && props.postId === postId) {
+        setModeratingTarget(null);
+      }
+    }
+  };
+
   return (
     <section class="comments" aria-label={`Comments for post ${props.postId}`}>
       <div class="comments-header">
         <strong>Comments</strong>
-        <span>{comments().length.toLocaleString()} loaded</span>
+        <div class="comments-header-actions">
+          <span>{comments().length.toLocaleString()} loaded</span>
+          <Show when={canModerate()}>
+            <button
+              type="button"
+              class="comment-moderate"
+              disabled={moderatingTarget() !== null}
+              onClick={() => void moderatePost()}
+            >
+              {moderatingTarget() === "post" ? "Hiding…" : "Hide post"}
+            </button>
+          </Show>
+        </div>
       </div>
+
+      <Show when={moderationError()}>
+        {(message) => <p class="comment-error" role="alert">{message()}</p>}
+      </Show>
 
       <Show when={canCreate()} fallback={<p class="comments-auth-note">Sign in to comment, reply, or vote.</p>}>
         <form class="comment-composer" onSubmit={submit}>
@@ -346,6 +469,16 @@ const Comments: Component<CommentsProps> = (props) => {
                   </Show>
                   <Show when={canCreate() && !row.orphaned}>
                     <button type="button" class="comment-reply" onClick={() => beginReply(row.comment.id)}>Reply</button>
+                  </Show>
+                  <Show when={canModerate()}>
+                    <button
+                      type="button"
+                      class="comment-moderate"
+                      disabled={moderatingTarget() !== null}
+                      onClick={() => void moderateComment(row.comment.id)}
+                    >
+                      {moderatingTarget() === row.comment.id ? "Hiding…" : "Hide"}
+                    </button>
                   </Show>
                 </div>
               </Show>
