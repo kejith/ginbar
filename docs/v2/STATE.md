@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
-Last updated: 2026-10-06
-Phase: **M5 moderation/admin/imports in progress; moderation accepted/integrated and post-integration CI restored; imports next**
+Last updated: 2026-10-07
+Phase: **M5 moderation/admin/imports in progress; first imports HTTP/config slice implemented with exact-SHA CI green; local acceptance gate next**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -23,7 +23,92 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - public read-only profiles: **accepted, SQL/API/browser-gated and integrated**;
   - consolidated connected-core milestone gate: **accepted; M4 closed**.
 - M5 moderation/admin/imports: **in progress**.
-  - first post/comment moderation slice: **accepted, integrated, and post-integration CI verified green after runner remediation**.
+  - first post/comment moderation slice: **accepted, integrated, and post-integration CI verified green after runner remediation**;
+  - first imports HTTP/config slice: **implemented on `astra/m5-ingest-http`, exact-candidate CI green, local acceptance gate pending**.
+
+## M5 imports — first HTTP/config slice implemented; acceptance gate pending
+
+Verified implementation base:
+
+`e9ffcf336271b66893e47f9cb21037692f4c1959`
+
+Implementation branch:
+
+`astra/m5-ingest-http`
+
+Exact executable candidate:
+
+`999a9620f9de9c1133fa4138fa28c688f80ac64d`
+
+Exact-candidate `v2 CI`:
+
+- run `37541542640`, attempt 1;
+- job `112535472647`;
+- `head_sha=999a9620f9de9c1133fa4138fa28c688f80ac64d`;
+- workflow/job conclusion: **success**;
+- exact checkout/verification: success;
+- scoped correctness: **backend**;
+- Go formatting check, `go vet ./...`, and `go test -v -count=1 ./...`: success with PostgreSQL-backed tests active;
+- target-worker build applicability check: success;
+- tracked checkout unchanged: success;
+- `v2-ci: PASS sha=999a9620f9de9c1133fa4138fa28c688f80ac64d scope=backend`.
+
+### Implemented application boundary
+
+- authenticated upload route: `POST /api/v2/posts/upload?filter=sfw|nsfp|nsfw|secret`;
+- upload body is multipart and accepts the file as the `file` part; the part reader is passed directly into `internal/ingest.Service`, without `ParseMultipartForm`, whole-file buffering, or a second full-file copy;
+- authenticated URL-import route: `POST /api/v2/posts/import-url` with JSON `{"url":"https://...","filter":"sfw|nsfp|nsfw|secret"}`;
+- both mutations use the authenticated numeric session `users.id`, require the existing same-origin policy, and return HTTP 201 with authoritative `postId` / `jobId` directly from `CreateIngestion`;
+- HTTP parsing and stable API-error mapping stay in `internal/httpapi`; staging, URL fetching, SSRF/redirect validation, concurrency limiting, cleanup, and persistence semantics remain in the accepted M3 ingestion boundary;
+- malformed input, invalid filters/uploads/URLs, empty sources, source-size failures, unsafe URLs, internal failures, timeouts, and ambiguous commit outcomes have explicit API behavior; ambiguous outcomes return `ingestion_outcome_unknown` and are not retried;
+- production `cmd/api` constructs one `LocalStore`, one existing `HTTPURLFetcher`, and one `ingest.Service` using the same PostgreSQL store/pool as the rest of the API;
+- API-wide reads retain the existing 3-second request timeout while ingestion routes use their own bounded request timeout so uploads/imports are not silently capped at 3 seconds.
+
+### Production configuration
+
+`GINBAR_MEDIA_SOURCE_ROOT` is required. Startup fails if it or `DATABASE_URL` is absent, or if ingestion limits are invalid/incoherent.
+
+Defaults:
+
+- source cap: 256 MiB;
+- ingestion concurrency: 4;
+- ingestion request timeout: 2 minutes;
+- stage timeout: 90 seconds;
+- DB timeout: 5 seconds;
+- cleanup timeout: 5 seconds;
+- URL connect timeout: 5 seconds;
+- URL response-header timeout: 10 seconds;
+- URL redirects: 5.
+
+Operational overrides:
+
+- `GINBAR_MEDIA_SOURCE_MAX_BYTES`;
+- `GINBAR_INGEST_MAX_CONCURRENT`;
+- `GINBAR_INGEST_REQUEST_TIMEOUT`;
+- `GINBAR_INGEST_STAGE_TIMEOUT`;
+- `GINBAR_INGEST_DB_TIMEOUT`;
+- `GINBAR_INGEST_CLEANUP_TIMEOUT`;
+- `GINBAR_URL_CONNECT_TIMEOUT`;
+- `GINBAR_URL_RESPONSE_HEADER_TIMEOUT`;
+- `GINBAR_URL_MAX_REDIRECTS`.
+
+The URL fetch byte cap is tied to the same source-byte limit. The server write timeout is bounded above the ingestion request timeout so the transport layer does not terminate an otherwise valid long-running ingestion response.
+
+### Correctness/resource evidence
+
+Targeted HTTP/service tests cover signed-out rejection, same-origin upload and URL success, numeric-author identity, all accepted filters, invalid filters, malformed/empty/oversized uploads, missing/malformed/unsafe URLs, internal and ambiguous failures, no retry/destructive cleanup on ambiguous commit, separate ingestion request deadlines, and a 1 MiB multipart request proving the handler does not pre-buffer the full file.
+
+The PostgreSQL-backed HTTP test uses the real `LocalStore`, real session resolution, and existing PostgreSQL ingestion repository in a disposable schema. It verifies the HTTP-returned post/job IDs against authoritative rows, numeric `author_user_id`, unreleased state, exactly one `media_sources` row, exactly one initial `media_jobs` row, a real staged source file, no feed/search/profile visibility before release, and unchanged unrelated user data.
+
+Existing M3 tests for durable staging, source limits, definite-failure cleanup, ambiguous-commit retention, bounded concurrency, timeout propagation, URL validation/SSRF handling, and atomic PostgreSQL post/source/job creation remain unchanged and passed in the exact-candidate CI run.
+
+No schema or SQL implementation changed. The write path still uses the existing single `CreateIngestion` transaction and returns IDs from that statement, so there is no new hot read query, no extra reconciliation round trip, no new index, and no new `EXPLAIN (ANALYZE, BUFFERS)` requirement for this slice. No Redis, cache, frontend state, polling, or release UI was added.
+
+### Acceptance status / unresolved evidence
+
+Implementation correctness and exact-candidate CI are green. No known compiler, formatting, test, SQL, or architecture defect remains in the candidate.
+
+The slice is **not yet accepted or integrated into `v2`**. One isolated local acceptance gate is still required for live multipart HTTP behavior with real filesystem staging and disposable PostgreSQL, definite-failure source cleanup, unreleased visibility, controlled safe URL-import behavior where practical without weakening SSRF protections, and bounded-concurrency/resource observations. That gate requires explicit user authorization for its disposable PostgreSQL and isolated persistent host writes; production/shared database or media writes are prohibited.
 
 ## M5 post/comment moderation — accepted and integrated; CI runner verification blocked
 
@@ -398,4 +483,4 @@ The profile browser gate's media 404 console messages came from benchmark storag
 
 ## Single best next task
 
-Implement the first M5 imports slice by wiring the already-accepted M3 `internal/ingest` upload and URL-ingestion boundary into authenticated v2 HTTP API routes and `cmd/api` configuration. Preserve immutable numeric session identity, same-origin mutation protection, streaming/bounded source staging, URL SSRF protections, short PostgreSQL transactions, durable initial `media_jobs`, unreleased-post visibility, cancellation/deadline semantics, ambiguous-commit source retention, and bounded concurrency. Return authoritative post/job IDs, add targeted HTTP/service/PostgreSQL tests and exact-candidate CI, but do not add release UI, job/admin observability, pr0gramm bulk import, Redis, or unrelated M5 work in this slice.
+Run the isolated local acceptance gate for exact executable `999a9620f9de9c1133fa4138fa28c688f80ac64d` after explicit user authorization for disposable PostgreSQL and isolated filesystem/process writes. Validate live authenticated multipart upload, controlled safe URL import where practical without weakening SSRF protections, authoritative post/source/job state, definite-failure cleanup, unreleased feed/search/profile invisibility, and bounded concurrency/resource behavior. Do not write production/shared state and do not integrate into `v2` until this evidence is reviewed and accepted here.
