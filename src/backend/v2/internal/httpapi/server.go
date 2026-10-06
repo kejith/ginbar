@@ -14,6 +14,7 @@ import (
 	"github.com/kejith/ginbar/backend/v2/internal/comment"
 	"github.com/kejith/ginbar/backend/v2/internal/commentvote"
 	"github.com/kejith/ginbar/backend/v2/internal/feed"
+	"github.com/kejith/ginbar/backend/v2/internal/ingest"
 	"github.com/kejith/ginbar/backend/v2/internal/mediastatus"
 	"github.com/kejith/ginbar/backend/v2/internal/moderation"
 	"github.com/kejith/ginbar/backend/v2/internal/postvote"
@@ -35,33 +36,38 @@ type Store interface {
 }
 
 type Config struct {
-	RequestTimeout time.Duration
-	CookieSecure   bool
-	Auth           auth.Config
+	RequestTimeout       time.Duration
+	IngestRequestTimeout time.Duration
+	CookieSecure         bool
+	Auth                 auth.Config
+	Ingest               *ingest.Service
 }
 
 func DefaultConfig() Config {
 	return Config{
-		RequestTimeout: 3 * time.Second,
-		CookieSecure:   true,
-		Auth:           auth.DefaultConfig(),
+		RequestTimeout:       3 * time.Second,
+		IngestRequestTimeout: 2 * time.Minute,
+		CookieSecure:         true,
+		Auth:                 auth.DefaultConfig(),
 	}
 }
 
 type Server struct {
-	feed           *feed.Service
-	mediaStatus    *mediastatus.Service
-	auth           *auth.Service
-	postVote       *postvote.Service
-	comments       *comment.Service
-	commentVote    *commentvote.Service
-	tags           *tag.Service
-	profiles       *profile.Service
-	moderation     *moderation.Service
-	mux            *http.ServeMux
-	requestTimeout time.Duration
-	cookieSecure   bool
-	sessionTTL     time.Duration
+	feed                 *feed.Service
+	mediaStatus          *mediastatus.Service
+	auth                 *auth.Service
+	postVote             *postvote.Service
+	comments             *comment.Service
+	commentVote          *commentvote.Service
+	tags                 *tag.Service
+	profiles             *profile.Service
+	moderation           *moderation.Service
+	ingest               *ingest.Service
+	mux                  *http.ServeMux
+	requestTimeout       time.Duration
+	ingestRequestTimeout time.Duration
+	cookieSecure         bool
+	sessionTTL           time.Duration
 }
 
 type errorEnvelope struct {
@@ -80,6 +86,9 @@ func NewWithConfig(store Store, cfg Config) *Server {
 	if cfg.RequestTimeout <= 0 {
 		cfg.RequestTimeout = defaults.RequestTimeout
 	}
+	if cfg.IngestRequestTimeout <= 0 {
+		cfg.IngestRequestTimeout = defaults.IngestRequestTimeout
+	}
 	if cfg.Auth.PasswordParams == (auth.PasswordParams{}) {
 		cfg.Auth.PasswordParams = defaults.Auth.PasswordParams
 	}
@@ -87,19 +96,21 @@ func NewWithConfig(store Store, cfg Config) *Server {
 		cfg.Auth.SessionTTL = defaults.Auth.SessionTTL
 	}
 	s := &Server{
-		feed:           feed.New(store),
-		mediaStatus:    mediastatus.New(store),
-		auth:           auth.New(store, cfg.Auth),
-		postVote:       postvote.New(store),
-		comments:       comment.New(store),
-		commentVote:    commentvote.New(store),
-		tags:           tag.New(store),
-		profiles:       profile.New(store),
-		moderation:     moderation.New(store),
-		mux:            http.NewServeMux(),
-		requestTimeout: cfg.RequestTimeout,
-		cookieSecure:   cfg.CookieSecure,
-		sessionTTL:     cfg.Auth.SessionTTL,
+		feed:                 feed.New(store),
+		mediaStatus:          mediastatus.New(store),
+		auth:                 auth.New(store, cfg.Auth),
+		postVote:             postvote.New(store),
+		comments:             comment.New(store),
+		commentVote:          commentvote.New(store),
+		tags:                 tag.New(store),
+		profiles:             profile.New(store),
+		moderation:           moderation.New(store),
+		ingest:               cfg.Ingest,
+		mux:                  http.NewServeMux(),
+		requestTimeout:       cfg.RequestTimeout,
+		ingestRequestTimeout: cfg.IngestRequestTimeout,
+		cookieSecure:         cfg.CookieSecure,
+		sessionTTL:           cfg.Auth.SessionTTL,
 	}
 	s.mux.HandleFunc("GET /healthz", s.health)
 	s.mux.HandleFunc("GET /api/v2/feed", s.listFeed)
@@ -115,6 +126,10 @@ func NewWithConfig(store Store, cfg Config) *Server {
 	s.mux.HandleFunc("GET /api/v2/posts/{id}/tags", s.listPostTags)
 	s.mux.Handle("POST /api/v2/posts/{id}/tags", s.requireAuth(http.HandlerFunc(s.addPostTag)))
 	s.mux.Handle("DELETE /api/v2/posts/{id}/tags/{tagId}", s.requireAuth(http.HandlerFunc(s.removePostTag)))
+	if s.ingest != nil {
+		s.mux.Handle("POST /api/v2/posts/upload", s.requireAuth(http.HandlerFunc(s.createPostUpload)))
+		s.mux.Handle("POST /api/v2/posts/import-url", s.requireAuth(http.HandlerFunc(s.createPostFromURL)))
+	}
 	s.mux.HandleFunc("POST /api/v2/auth/register", s.register)
 	s.mux.HandleFunc("POST /api/v2/auth/login", s.login)
 	s.mux.HandleFunc("POST /api/v2/auth/logout", s.logout)
@@ -130,10 +145,21 @@ func newServer(store Store, requestTimeout time.Duration) *Server {
 
 func (s *Server) Handler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx, cancel := context.WithTimeout(r.Context(), s.requestTimeout)
+		timeout := s.requestTimeout
+		if s.isIngestRequest(r) {
+			timeout = s.ingestRequestTimeout
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
 		defer cancel()
 		s.mux.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func (s *Server) isIngestRequest(r *http.Request) bool {
+	if s.ingest == nil || r.Method != http.MethodPost {
+		return false
+	}
+	return r.URL.Path == "/api/v2/posts/upload" || r.URL.Path == "/api/v2/posts/import-url"
 }
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {

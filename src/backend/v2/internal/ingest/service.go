@@ -13,6 +13,7 @@ import (
 var (
 	ErrCommitOutcomeUnknown = errors.New("ingestion commit outcome unknown")
 	ErrEmptySource          = errors.New("media source is empty")
+	ErrInvalidInput         = errors.New("invalid ingestion input")
 	ErrSourceTooLarge       = errors.New("media source exceeds size limit")
 	ErrUnsafeURL            = errors.New("media source URL is not allowed")
 )
@@ -127,7 +128,7 @@ func (s *Service) CreateUpload(
 	upload Upload,
 ) (Created, error) {
 	if upload.Body == nil {
-		return Created{}, errors.New("upload body is required")
+		return Created{}, fmt.Errorf("%w: upload body is required", ErrInvalidInput)
 	}
 	if err := validateRequest(actor, filter); err != nil {
 		return Created{}, err
@@ -169,7 +170,7 @@ func (s *Service) CreateFromURL(
 		return Created{}, err
 	}
 	if len(rawURL) == 0 || len(rawURL) > maxSourceURLBytes {
-		return Created{}, fmt.Errorf("source URL length must be between 1 and %d bytes", maxSourceURLBytes)
+		return Created{}, fmt.Errorf("%w: source URL length must be between 1 and %d bytes", ErrInvalidInput, maxSourceURLBytes)
 	}
 	if s.fetcher == nil {
 		return Created{}, errors.New("URL ingestion is not configured")
@@ -262,23 +263,23 @@ func (s *Service) release() { <-s.slots }
 
 func validateRequest(actor Actor, filter model.ContentFilter) error {
 	if actor.UserID <= 0 {
-		return errors.New("authenticated actor user id is required")
+		return fmt.Errorf("%w: authenticated actor user id is required", ErrInvalidInput)
 	}
 	if !filter.Valid() {
-		return errors.New("invalid content filter")
+		return fmt.Errorf("%w: invalid content filter", ErrInvalidInput)
 	}
 	return nil
 }
 
 func validateMetadata(originalName, declaredMIME, sourceURL string) error {
 	if len(originalName) > maxOriginalNameBytes {
-		return fmt.Errorf("original name exceeds %d bytes", maxOriginalNameBytes)
+		return fmt.Errorf("%w: original name exceeds %d bytes", ErrInvalidInput, maxOriginalNameBytes)
 	}
 	if len(declaredMIME) > maxDeclaredMIMEBytes {
-		return fmt.Errorf("declared MIME type exceeds %d bytes", maxDeclaredMIMEBytes)
+		return fmt.Errorf("%w: declared MIME type exceeds %d bytes", ErrInvalidInput, maxDeclaredMIMEBytes)
 	}
 	if len(sourceURL) > maxSourceURLBytes {
-		return fmt.Errorf("source URL exceeds %d bytes", maxSourceURLBytes)
+		return fmt.Errorf("%w: source URL exceeds %d bytes", ErrInvalidInput, maxSourceURLBytes)
 	}
 	return nil
 }

@@ -1,8 +1,9 @@
 # M3 ingestion boundary
 
-This package stages upload or URL-import bytes before any media codec work exists.
-It is intentionally not wired to an HTTP posting route yet: callers must supply an
-authenticated numeric user ID, and the future auth layer owns how that ID is obtained.
+This package stages upload or URL-import bytes before media codec work. The v2 API wires
+it to authenticated posting routes while keeping HTTP parsing, session identity, and
+same-origin policy outside this package. Callers supply the authenticated numeric user
+ID; ingestion remains independent of credential type.
 
 ## Ordering and durability
 
