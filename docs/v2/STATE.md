@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-06
-Phase: **M4 connected core product complete and integrated; M5 moderation/admin/imports next**
+Phase: **M5 moderation/admin/imports in progress; first post/comment moderation slice awaiting local acceptance gate**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -22,6 +22,47 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - tag mutations: **accepted, SQL/API/browser-gated and integrated**;
   - public read-only profiles: **accepted, SQL/API/browser-gated and integrated**;
   - consolidated connected-core milestone gate: **accepted; M4 closed**.
+- M5 moderation/admin/imports: **in progress**.
+  - first post/comment moderation slice: **implemented on candidate branch; local PostgreSQL/API/real-browser acceptance gate pending**.
+
+## M5 post/comment moderation — candidate awaiting local acceptance gate
+
+Verified implementation base:
+
+`b498c67f12cadb1e227433d1e529bdc57aee99a2`
+
+Implementation branch:
+
+`astra/m5-post-comment-moderation`
+
+Exact executable candidate:
+
+`baeed61e7c3684a4b973937ee56aa47f73be93c9`
+
+Implementation boundary:
+
+- moderator/admin-only idempotent post and comment hide mutations;
+- PostgreSQL-authoritative authorization using immutable numeric `users.id`;
+- new moderation audit fields record first moderation time and moderator numeric user ID while existing `deleted_at` remains the visibility/tombstone primitive;
+- one atomic PostgreSQL mutation statement per target returns authoritative resulting state without a reconciliation read;
+- post moderation reuses existing feed/search/around/profile public visibility predicates;
+- comment moderation preserves the existing structural tombstone model so descendants remain accessible and new replies to a moderated parent are rejected;
+- selected-post frontend moderation state stays local, abortable and epoch/selection-fenced;
+- moderated retained post rows stay in board layout as disabled hidden placeholders until normal bounded window replacement removes them; board-wide/global state machinery was not added;
+- restore/unmoderate, imports/jobs/admin observability, private messages and unrelated production-hardening work remain deferred.
+
+Validation already completed:
+
+- server/PostgreSQL CI on backend candidate `ec9d6b75100c0612f424da57c492067cd4e9793c`: `v2 CI` run `37532689068`, attempt 2, job `112507601335`, **success**;
+- moderation tests cover moderator/admin authorization, ordinary-user rejection, signed-out/same-origin HTTP boundaries, missing targets, repeated/idempotent mutation, concurrent post moderation, authoritative state, immediate feed/around invisibility, structural comment tombstones and rejected replies to moderated parents;
+- committed PostgreSQL tests execute `EXPLAIN (ANALYZE, BUFFERS)` against 5,000-row disposable post/comment fixtures and require primary-key-backed target access with no large-relation sequential scan, external merge or disk spill;
+- the same server gate passed retained Go/PostgreSQL and Rust worker correctness plus tracked-checkout cleanliness;
+- frontend CI logs on exact final candidate `baeed61e7c3684a4b973937ee56aa47f73be93c9` show 37/37 Node tests, `tsc --noEmit`, Vite production build, worker-build applicability check and clean tracked checkout all passing, with `v2-ci: PASS`;
+- GitHub nevertheless records fresh run `37533816318`, job `112509565110`, as `failure` despite every named workflow step being `success` and the logs containing no application/test failure. This is treated as a CI status-reporting infrastructure blocker, not as green CI.
+
+The user explicitly authorized proceeding with the local validation handoff despite that CI status-reporting blocker, and explicitly authorized creation, mutation and deletion of an isolated disposable PostgreSQL database for this gate only.
+
+Acceptance/integration decision: **not yet accepted and not integrated**. The candidate must remain off `v2` until the returned local gate evidence is inspected and accepted here.
 
 ## M4 connected-core milestone gate — accepted; M4 complete
 
@@ -244,4 +285,4 @@ The profile browser gate's media 404 console messages came from benchmark storag
 
 ## Single best next task
 
-Begin **M5 moderation/admin/imports** from current `v2`. First inventory the already-accepted role and moderator tag-removal foundations, then define and implement the smallest coherent missing moderation slice—prefer post/comment moderation before combining it with imports/jobs/admin observability. Keep authorization PostgreSQL-authoritative on immutable numeric user IDs, make moderation/release state explicit, gate any hot SQL with real query plans, preserve board update-scope/navigation invariants, and do not pull M6 private messages or deferred production-hardening work into M5 without a concrete requirement.
+Inspect the returned local-agent evidence for exact candidate `baeed61e7c3684a4b973937ee56aa47f73be93c9`, decide acceptance of the first M5 post/comment moderation slice, and only if accepted fast-forward it into current `v2`, verify post-integration CI, and update this state before starting another M5 slice.
