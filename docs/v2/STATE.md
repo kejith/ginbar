@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-07
-Phase: **M5 moderation/admin/imports in progress; first regeneration/admin mutation accepted with exact-candidate CI green, integration pending**
+Phase: **M5 moderation/admin/imports in progress; first regeneration/admin mutation accepted, integrated, and post-integration CI green; consolidated M5 gate next**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -28,9 +28,9 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - first jobs/admin observability slice: **accepted, integrated, exact-candidate/local-gate/post-integration CI green**;
   - first role-administration slice: **accepted, integrated, exact-candidate/post-integration CI green**.
   - second role-administration/bootstrap slice: **accepted, integrated, exact-candidate/post-integration CI green**.
-  - first regeneration/admin mutation slice: **accepted with exact-candidate CI green; integration pending**.
+  - first regeneration/admin mutation slice: **accepted, integrated, exact-candidate/post-integration CI green**.
 
-## M5 regeneration/admin mutation — accepted; integration pending
+## M5 regeneration/admin mutation — accepted and integrated
 
 Verified implementation base:
 
@@ -98,9 +98,29 @@ On a meaningful fixture with approximately 5,000 role rows and 5,000 released/re
 
 Decision: **accept the first M5 regeneration/admin mutation slice**. Exact-candidate CI exercises the full PostgreSQL authorization, concurrency, fencing and HTTP behavior relevant to this backend-only slice; no browser or target-host local-agent gate is required before integration. Existing indexes are sufficient and no new index is justified.
 
-### Integration status
+### Integration and post-integration CI
 
-Candidate is accepted but not yet integrated. Immediately before the acceptance state write, live `v2` remained `ff7468bd16e754216c21bc070123bdff368e28be`; the exact executable candidate was 18 commits ahead and zero behind, with only the intended regeneration service, PostgreSQL and HTTP/test files changed.
+Immediately before integration, live `v2` was:
+
+`ff7468bd16e754216c21bc070123bdff368e28be`
+
+The accepted implementation/state branch head was 19 commits ahead and zero behind:
+
+`43b8fea82bb10202170dce20c5b396759bf7f05b`
+
+Remote `v2` was fast-forwarded non-force with expected-SHA lease from `ff7468bd16e754216c21bc070123bdff368e28be` to `43b8fea82bb10202170dce20c5b396759bf7f05b`. The only commit above exact accepted executable `640311fc216435be90588484cbbc0624a097f598` is this slice's documentation/state acceptance commit, so integrated application files are identical to the accepted candidate.
+
+Post-integration `v2 CI`:
+
+- run `37619197254`;
+- job `112784890365`;
+- `head_branch=v2`;
+- exact integrated head `43b8fea82bb10202170dce20c5b396759bf7f05b`;
+- conclusion: **success**;
+- exact checkout/SHA verification, scoped backend correctness, target-worker build applicability, and tracked-clean verification all passed;
+- `v2-ci: PASS sha=43b8fea82bb10202170dce20c5b396759bf7f05b scope=backend`.
+
+Integration decision: **the first M5 regeneration/admin mutation slice is closed**. Exact executable application state is `640311fc216435be90588484cbbc0624a097f598`; state/documentation commits above it do not change application files.
 
 ## M5 role administration — first-admin bootstrap and admin-role mutation accepted and integrated
 
@@ -867,6 +887,8 @@ The profile browser gate's media 404 console messages came from benchmark storag
 
 No unresolved correctness or SQL-plan blocker remains from the accepted second role-administration slice. The bootstrap-only role existence probe scans an empty fresh-install `user_roles` relation by design; current evidence does not justify a role-leading index.
 
+No unresolved correctness, authorization, concurrency, lease-fencing or SQL-plan blocker remains from the accepted regeneration/admin mutation slice. The authorized mutation is bounded by existing indexes and requires no new index or cache.
+
 ## Single best next task
 
-Integrate the accepted first M5 regeneration/admin mutation candidate `640311fc216435be90588484cbbc0624a097f598` into the verified current `v2` by non-force fast-forward with an expected-SHA lease, then require exact-head post-integration `v2 CI` green before closing the slice. Do not broaden the integration into additional implementation work.
+Run the **consolidated M5 moderation/admin/imports milestone acceptance gate** against exact executable application state `640311fc216435be90588484cbbc0624a097f598`. Verify the already-integrated M5 surfaces coherently through real PostgreSQL/API/worker execution: post/comment moderation, upload and URL ingestion, jobs/admin observability, moderator/admin role administration including bootstrap policy, and admin regeneration including coalescing/supersession/generation fencing. Preserve existing M4 connected-core behavior, retain raw correctness/state/SQL-plan evidence and cleanup proof, and do not modify source or broaden functionality. Use the local execution agent for this execution-only gate because it requires real PostgreSQL/API/worker processes beyond this session's execution environment.
