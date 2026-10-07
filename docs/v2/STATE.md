@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-07
-Phase: **M5 moderation/admin/imports in progress; first regeneration/admin mutation accepted, integrated, and post-integration CI green; consolidated M5 gate next**
+Phase: **M5 moderation/admin/imports complete; consolidated M5 milestone gate accepted; M6 private messages next**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -29,6 +29,63 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - first role-administration slice: **accepted, integrated, exact-candidate/post-integration CI green**.
   - second role-administration/bootstrap slice: **accepted, integrated, exact-candidate/post-integration CI green**.
   - first regeneration/admin mutation slice: **accepted, integrated, exact-candidate/post-integration CI green**.
+  - consolidated M5 moderation/admin/imports milestone gate: **accepted; M5 closed**.
+
+## M5 consolidated moderation/admin/imports milestone gate — accepted; M5 complete
+
+Exact executable tested:
+
+`640311fc216435be90588484cbbc0624a097f598`
+
+Gate-time live `origin/v2`:
+
+`9b4a71feb034b9655b41de4689c0af97d75a491c`
+
+The live integration branch differed from the executable only by the two accepted regeneration state/documentation commits; no application drift was present.
+
+Applicable CI verified in the retained evidence:
+
+- exact-candidate `v2 CI` run `37618638054`, job `112783313294`, exact SHA `640311fc216435be90588484cbbc0624a097f598`: **success**;
+- post-integration `v2 CI` run `37619197254`, job `112784890365`, exact integrated head `43b8fea82bb10202170dce20c5b396759bf7f05b`: **success**.
+
+Accepted evidence package:
+
+`m5gate-m5-20261007T122538Z.zip`
+
+Independently verified uploaded-file SHA-256:
+
+`d30b55b5312f391d8faf2f643163e25e981a7452cf71cfd8bbd4ee358c59dcb1`
+
+ZIP integrity passed with 12 retained files. Raw HTTP/PostgreSQL state, worker output, SQL plans, CI metadata, full backend test output, driver source and cleanup findings were inspected. The retained gate recorded **116/116 live checks passed** with zero failures. The full backend log contains **291 test/subtest RUN entries and zero FAIL markers**.
+
+### Consolidated gate facts
+
+- Exact detached worktree HEAD matched `640311fc216435be90588484cbbc0624a097f598` and tracked status was clean.
+- Representative M4 connected-core behavior remained coherent: invitation registration, login/session continuity/logout, signed-out auth boundary, descending cursor feed, search validation, around-post reconstruction, post voting, nested comment create/read/vote, tag mutation and media-status reads all passed.
+- Post/comment moderation preserved PostgreSQL-authoritative moderator/admin authorization, same-origin enforcement, idempotence, moderation attribution/tombstoning and immediate feed exclusion.
+- Multipart ingestion returned authoritative post/job identity, created the expected unreleased post/source/pending-job state, and the real Rust worker consumed that durable job at explicit concurrency 1. The worker completed successfully in about **376.5 ms**, published a real 285-byte AVIF under the disposable media root, moved the job to succeeded with one attempt and published the media row.
+- URL-ingestion rejection behavior remained correct: loopback was rejected as `unsafe_url` with no durable row; malformed/missing URLs returned the accepted errors. The consolidated environment had no usable global-unicast HTTP source, so it could not re-exercise a positive live URL fetch. This is not an acceptance blocker because the dedicated accepted M5 imports gate already exercised `https://example.com/` through the live success path with HTTP 201 while preserving the SSRF boundary.
+- Jobs observability retained signed-out/member rejection, moderator access, bounded cursor paging, 100-row limit clamping, 2048-character diagnostic truncation and read-only durable state.
+- Moderator/admin role administration retained signed-out/member/moderator rejection, numeric-ID role reads/grants/revokes, immediate authority gain/loss, idempotent revoke, missing-target behavior, self-admin-revoke rejection, other-admin revoke and first-admin bootstrap one-shot/provenance semantics.
+- Regeneration retained signed-out/member/moderator/cross-origin rejection with no mutation, stable non-regenerable behavior, succeeded/failed requeue, pending coalescing with retry/availability/error/generation state preserved, running supersession with generation increment and ownership clearing, unchanged published media, and stale-worker fencing: the old ownership token's completion attempt affected **0 rows**.
+- Twelve concurrent regeneration requests returned twelve HTTP 202 responses with one immutable job ID, exactly **1 queued + 11 coalesced** outcomes and exactly one active durable job.
+- Long-lived worker `run`-mode lease renewal was not re-exercised in this consolidated environment. This is not an M5 blocker: the gate exercised a real worker ownership/publication path and directly proved the regeneration interaction relevant to M5 by stale-generation fencing. No change to worker renewal semantics was introduced by M5.
+- The full backend suite passed at the exact executable with no failures, preserving the broader authorization, ingestion, worker/media-job, role, moderation, tag and regeneration contracts.
+
+### Consolidated SQL/performance evidence
+
+On the retained meaningful fixture of roughly 6,000 role rows and 5,000 posts/sources/media/jobs:
+
+- authorized regeneration used `user_roles_pkey`, `media_jobs_post_kind_id_idx`, `posts_feed_released_idx`, `media_sources_pkey`, `media_pkey` and `media_jobs_pkey`; the only target-preference sort was an in-memory 25 kB quicksort; planning was **0.628 ms**, execution **0.319 ms**;
+- jobs observability used `user_roles_pkey` plus backward `media_jobs_pkey` scan with the bounded page probe and a 30 kB in-memory quicksort; planning was **0.324 ms**, execution **0.119 ms**;
+- role grant used `user_roles_pkey` and `users_pkey`; planning was **0.328 ms**, execution **0.269 ms**;
+- no large-relation sequential scan, external merge, temp spill, OFFSET, application-side reconciliation or newly exposed N+1 pattern was found.
+
+### Cleanup and decision
+
+The gate dropped and verified absence of disposable PostgreSQL databases, removed temporary media roots/binaries/processes and the detached worktree, pruned the worktree, left the pre-existing PostgreSQL cluster running, and reported the canonical tracked checkout clean. No tracked source, SQL, docs, config, commit, branch, deployment or shared persistent-state write was made by the execution agent.
+
+Decision: **accept the consolidated M5 moderation/admin/imports milestone gate and close M5**. The integrated M5 surfaces work coherently with the retained M4 connected core, PostgreSQL remains authoritative across authorization and durable jobs, regeneration preserves lease-generation fencing and published-media semantics, hot SQL remains bounded/index-backed, and the two environment limits above do not expose a candidate defect or missing M5 acceptance requirement. No new cache, Redis dependency, schema/index change, frontend administration layer or worker-concurrency change is justified by this gate.
 
 ## M5 regeneration/admin mutation — accepted and integrated
 
@@ -889,6 +946,8 @@ No unresolved correctness or SQL-plan blocker remains from the accepted second r
 
 No unresolved correctness, authorization, concurrency, lease-fencing or SQL-plan blocker remains from the accepted regeneration/admin mutation slice. The authorized mutation is bounded by existing indexes and requires no new index or cache.
 
+No unresolved M5 milestone blocker remains after the accepted consolidated gate. The gate environment could not provide a global-unicast source for a second live positive URL-import run and did not repeat long-lived worker run-mode renewal; both are explicitly covered by previously accepted dedicated behavior or unchanged worker semantics and do not justify reopening M5.
+
 ## Single best next task
 
-Run the **consolidated M5 moderation/admin/imports milestone acceptance gate** against exact executable application state `640311fc216435be90588484cbbc0624a097f598`. Verify the already-integrated M5 surfaces coherently through real PostgreSQL/API/worker execution: post/comment moderation, upload and URL ingestion, jobs/admin observability, moderator/admin role administration including bootstrap policy, and admin regeneration including coalescing/supersession/generation fencing. Preserve existing M4 connected-core behavior, retain raw correctness/state/SQL-plan evidence and cleanup proof, and do not modify source or broaden functionality. Use the local execution agent for this execution-only gate because it requires real PostgreSQL/API/worker processes beyond this session's execution environment.
+Implement the **first M6 private-messages backend foundation** from the verified current `v2`: introduce fresh PostgreSQL persistence using immutable numeric user IDs and expose the smallest authenticated one-to-one messaging API that supports sending a bounded text message to an existing user and reading a bounded message-ID cursor page for that two-user thread. Keep send as a same-origin mutation, authorize thread access strictly from the authenticated numeric user, use parameterized bounded/index-backed SQL with no OFFSET or username foreign keys, and return authoritative message identity directly from the mutation without a reconciliation read. Add focused schema/service/HTTP/PostgreSQL tests for authorization, invalid/missing recipients, ordering/cursor boundaries, concurrency, body limits and SQL plans. Do not add frontend messaging UI, inbox/unread counters, notifications, attachments, group conversations, polling/event streams, Redis/cache state, moderation tooling or legacy-schema compatibility in this first slice.
