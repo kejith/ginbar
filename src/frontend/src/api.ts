@@ -36,6 +36,41 @@ export interface CurrentUser {
   username: string;
 }
 
+export interface PrivateMessage {
+  id: number;
+  senderId: number;
+  recipientId: number;
+  body: string;
+  createdAt: string;
+}
+
+export interface PrivateMessagePage {
+  messages: PrivateMessage[];
+  nextBefore?: number;
+}
+
+export interface MessageInboxPeer {
+  id: number;
+  username?: string;
+  available: boolean;
+}
+
+export interface LatestPrivateMessageSummary {
+  id: number;
+  senderId: number;
+  createdAt: string;
+}
+
+export interface MessageConversationSummary {
+  peer: MessageInboxPeer;
+  latestMessage: LatestPrivateMessageSummary;
+}
+
+export interface MessageInboxPage {
+  conversations: MessageConversationSummary[];
+  nextBefore?: number;
+}
+
 export interface PostVoteResult {
   postId: number;
   score: number;
@@ -124,6 +159,61 @@ export async function fetchCurrentUser(signal?: AbortSignal): Promise<CurrentUse
   if (response.status === 401) return null;
   const body = await parseJSON<AuthResponse>(response, "current user");
   return body.user;
+}
+
+export async function fetchMessageInbox(
+  before = 0,
+  limit = 50,
+  signal?: AbortSignal,
+): Promise<MessageInboxPage> {
+  const query = new URLSearchParams({ limit: String(limit) });
+  if (before > 0) query.set("before", String(before));
+  return parseJSON<MessageInboxPage>(
+    await fetch(`/api/v2/messages?${query}`, {
+      signal,
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    }),
+    "message inbox",
+  );
+}
+
+export async function fetchPrivateMessages(
+  peerId: number,
+  before = 0,
+  limit = 50,
+  signal?: AbortSignal,
+): Promise<PrivateMessagePage> {
+  const query = new URLSearchParams({ limit: String(limit) });
+  if (before > 0) query.set("before", String(before));
+  return parseJSON<PrivateMessagePage>(
+    await fetch(`/api/v2/messages/${peerId}?${query}`, {
+      signal,
+      credentials: "same-origin",
+      headers: { Accept: "application/json" },
+    }),
+    "private messages",
+  );
+}
+
+export async function sendPrivateMessage(
+  peerId: number,
+  body: string,
+  signal?: AbortSignal,
+): Promise<PrivateMessage> {
+  return parseJSON<PrivateMessage>(
+    await fetch(`/api/v2/messages/${peerId}`, {
+      method: "POST",
+      signal,
+      credentials: "same-origin",
+      headers: {
+        Accept: "application/json",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ body }),
+    }),
+    "send message",
+  );
 }
 
 export async function fetchFeed(
