@@ -380,7 +380,8 @@ func explainRoleAdminPlan(t *testing.T, store *Store, name, query string, args .
 	}
 	plan := collectPlan(t, rows)
 	t.Logf("role admin %s plan:\n%s", name, plan)
-	assertPlanContains(t, plan, "users_pkey", "user_roles_pkey")
+	assertPlanContains(t, plan, "users_pkey")
+	assertPlanContains(t, plan, "user_roles_pkey")
 	assertPlanExcludes(
 		t,
 		plan,
