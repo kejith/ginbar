@@ -26,6 +26,7 @@ import {
   MAX_RETAINED_MESSAGES,
   MAX_RETAINED_THREADS,
   THREAD_PAGE_SIZE,
+  boundedCursor,
   clampMessageBody,
   mergeInboxConversations,
   mergeThreadMessages,
@@ -34,6 +35,7 @@ import {
   messagesForDisplay,
   pathForMessagePeer,
   requestStillCurrent,
+  shouldRestoreFailedDraft,
   touchThreadOrder,
 } from "./messages-state.js";
 import "./messages.css";
@@ -199,10 +201,14 @@ const Messages: Component = () => {
         false,
         MAX_RETAINED_CONVERSATIONS,
       );
-      const capped = merged.length >= MAX_RETAINED_CONVERSATIONS && Boolean(page.nextBefore);
+      const cursor = boundedCursor(
+        page.nextBefore,
+        merged.length,
+        MAX_RETAINED_CONVERSATIONS,
+      );
       setInbox(merged);
-      setInboxNextBefore(capped ? 0 : (page.nextBefore ?? 0));
-      setInboxCapped(capped);
+      setInboxNextBefore(cursor.nextBefore);
+      setInboxCapped(cursor.capped);
     } catch (error) {
       if (
         controller.signal.aborted
@@ -258,16 +264,20 @@ const Messages: Component = () => {
           false,
           MAX_RETAINED_MESSAGES,
         );
-        const capped = merged.length >= MAX_RETAINED_MESSAGES && Boolean(page.nextBefore);
+        const cursor = boundedCursor(
+          page.nextBefore,
+          merged.length,
+          MAX_RETAINED_MESSAGES,
+        );
         return {
           ...current,
           messages: merged,
-          nextBefore: capped ? 0 : (page.nextBefore ?? 0),
+          nextBefore: cursor.nextBefore,
           loading: false,
           loadingOlder: false,
           error: null,
           unavailable: false,
-          capped,
+          capped: cursor.capped,
         };
       });
     } catch (error) {
@@ -434,8 +444,11 @@ const Messages: Component = () => {
       }
       updateExistingInboxAfterSend(peerID, created);
     } catch (error) {
-      const newerPending = pendingSends().some(
-        (item) => item.peerId === peerID && item.sequence > sequence,
+      const restoreDraft = shouldRestoreFailedDraft(
+        pendingSends(),
+        sequence,
+        peerID,
+        draft(),
       );
       setPendingSends((current) => current.filter((item) => item.sequence !== sequence));
 
@@ -450,7 +463,7 @@ const Messages: Component = () => {
       }
 
       if (currentPeerID() === peerID) {
-        if (!newerPending && draft() === "") setDraft(body);
+        if (restoreDraft) setDraft(body);
         const message = error instanceof APIError && error.code === "recipient_unavailable"
           ? "This user is no longer available."
           : error instanceof APIError && error.status === 401
