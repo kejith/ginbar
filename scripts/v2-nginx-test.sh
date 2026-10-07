@@ -9,7 +9,7 @@ fail() {
   exit 1
 }
 
-for command in docker curl openssl awk grep cmp mkfifo; do
+for command in docker curl openssl awk grep cmp; do
   command -v "$command" >/dev/null 2>&1 || fail "$command is required"
 done
 
@@ -79,11 +79,17 @@ function reply(req, res, bytes) {
   }));
 }
 
+let streamProbeSeen = false;
+
 const server = http.createServer((req, res) => {
-  if (req.headers["x-fixture-respond-early"] === "1") {
-    reply(req, res, null);
-    req.resume();
+  if (req.url === "/stream-probe") {
+    res.statusCode = 200;
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ seen: streamProbeSeen }));
     return;
+  }
+  if (req.headers["x-fixture-stream-probe"] === "1") {
+    streamProbeSeen = true;
   }
 
   let bytes = 0;
@@ -227,26 +233,26 @@ oversize_url_status="$("${CURL_HTTPS[@]}" \
   "$HTTPS_URL/api/v2/posts/import-url" || true)"
 [[ "$oversize_url_status" == "413" ]] || fail "URL-ingestion body above 16 KiB was not rejected at nginx"
 
-STREAM_FIFO="$TMP_ROOT/stream.fifo"
-mkfifo "$STREAM_FIFO"
-(
-  printf 'first-chunk'
-  sleep 4
-  printf 'second-chunk'
-) >"$STREAM_FIFO" 2>/dev/null &
-STREAM_WRITER_PID=$!
-
-stream_time="$("${CURL_HTTPS[@]}" \
-  --max-time 8 \
+stream_log="$TMP_ROOT/stream-upload.log"
+"${CURL_HTTPS[@]}" \
+  --limit-rate 256k \
   -H 'Expect:' \
-  -H 'X-Fixture-Respond-Early: 1' \
-  --upload-file "$STREAM_FIFO" \
-  --request POST \
-  -o /dev/null -w '%{time_starttransfer}' \
-  "$HTTPS_URL/api/v2/posts/upload?filter=sfw" || true)"
-kill "$STREAM_WRITER_PID" >/dev/null 2>&1 || true
-wait "$STREAM_WRITER_PID" 2>/dev/null || true
-awk -v seconds="$stream_time" 'BEGIN { exit !(seconds > 0 && seconds < 2.5) }' \
-  || fail "upload request was buffered before proxying (time_starttransfer=$stream_time s)"
+  -H 'X-Fixture-Stream-Probe: 1' \
+  --data-binary "@$small_upload" \
+  -o /dev/null \
+  "$HTTPS_URL/api/v2/posts/upload?filter=sfw" >"$stream_log" 2>&1 &
+STREAM_CURL_PID=$!
 
-printf 'v2-nginx-test: PASS https_port=%s asset=%s stream_ttfb=%ss\n' "$HTTPS_PORT" "$ASSET_PATH" "$stream_time"
+sleep 1
+stream_probe="$(docker exec "$API_CONTAINER" node -e 'fetch("http://127.0.0.1:8080/stream-probe").then(r => r.text()).then(t => process.stdout.write(t)).catch(() => process.exit(1))')"
+if ! grep -Fq '"seen":true' <<<"$stream_probe"; then
+  kill "$STREAM_CURL_PID" >/dev/null 2>&1 || true
+  wait "$STREAM_CURL_PID" 2>/dev/null || true
+  fail "upload request was not delivered upstream while its slow body was still in progress"
+fi
+if ! wait "$STREAM_CURL_PID"; then
+  cat "$stream_log" >&2
+  fail "slow streaming upload did not complete"
+fi
+
+printf 'v2-nginx-test: PASS https_port=%s asset=%s streaming_upstream_seen=true\n' "$HTTPS_PORT" "$ASSET_PATH"
