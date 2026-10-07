@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
-Last updated: 2026-10-07
-Phase: **M7 production hardening in progress; bounded password-KDF admission accepted and integrated**
+Last updated: 2026-10-08
+Phase: **M7 production hardening in progress; bounded password-KDF admission and first v2 production nginx serving boundary accepted and integrated**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -37,6 +37,7 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - consolidated M6 private-messages milestone gate: **accepted; M6 closed**.
 - M7 production hardening: **in progress**.
   - bounded password-KDF admission control: **accepted, target-host profiled and integrated; exact-candidate/post-integration CI green**.
+  - first v2 production nginx serving boundary: **accepted and integrated; exact-candidate/post-integration CI green; live target-host nginx unchanged**.
 
 ## M7 production hardening — bounded password-KDF admission accepted and integrated
 
@@ -146,6 +147,89 @@ Post-integration `v2 CI`:
 - exact checkout, scoped backend correctness, target-worker release-build applicability and tracked-clean verification all passed.
 
 The implementation-branch documentation commit was not integrated. The executable state above is authoritative for this slice.
+
+## M7 production hardening — first v2 production nginx serving boundary accepted and integrated
+
+Verified integration base:
+
+`f5dcbd51db764b9ec73617a61051252ae6fb1c84`
+
+This base was documentation/state-only. The accepted executable application state beneath it before the nginx slice was:
+
+`90dc49e2bfae09f9b2a578162473a03818014717`
+
+Implementation branch:
+
+`astra/m7-nginx-boundary`
+
+Exact accepted executable/configuration candidate and integrated executable:
+
+`20be4765e935e715f2cd8862da0a6382e1322281`
+
+The implementation branch has one documentation/state-only commit above the accepted candidate:
+
+`d5b4dd36f256d1f40d6d6d653d825ad1576d7664`
+
+That documentation-only tip was **not** integrated.
+
+Exact-candidate `v2 CI`:
+
+- run `37689584750`;
+- job `113026029629`;
+- exact `head_sha=20be4765e935e715f2cd8862da0a6382e1322281`;
+- conclusion: **success**;
+- full `scope=all` correctness passed: Rust worker formatting/check/tests/clippy, PostgreSQL-backed Go formatting/vet/tests, frontend 48/48 tests + typecheck + Vite build, target-worker release-build applicability, exact checkout, tracked-clean verification and the real-nginx fixture;
+- real-nginx gate reported `v2-nginx-test: PASS https_port=32771 asset=/assets/index-CMeOteM1.js streaming_upstream_seen=true`.
+
+Independent review evidence was supplied as `nginx-boundary-review-20261007T221447Z.zip`. The independently computed uploaded ZIP SHA-256 is:
+
+`05984f225eb3818e96c569dec65a321873d69edd4be6ac8623462bf2d6772da6`
+
+The archive was ZIP-clean and the review returned **ACCEPT** with no correctness, security-boundary, architecture, validation or scope blocker. Acceptance also independently reverified the candidate was exactly six commits ahead of the live integration base and zero behind, changing only `.github/workflows/v2-ci.yml`, `nginx/v2/nginx.conf`, `scripts/v2-ci.sh` and `scripts/v2-nginx-test.sh`.
+
+### Accepted serving boundary
+
+- v2 has a dedicated production nginx configuration; legacy Wallium/Fiber/Redis and legacy `/images`/`/videos` assumptions were not reused;
+- nginx terminates TLS and redirects port 80 to HTTPS;
+- the Vite application is served directly, content-hashed `/assets/` entries receive one-year immutable caching, and the SPA shell is explicitly `no-store`;
+- canonical frontend routes fall back to `index.html`, preserving direct `/post/:id` and other client routes;
+- only processed media under `/media/` is exposed from the media tree; ingestion `/sources/` is not aliased and is explicitly 404, with traversal behavior covered by the fixture;
+- static processed media preserves normal nginx byte-range behavior; the fixture verifies 206 and exact `Content-Range`;
+- `/api/` proxies to the Go v2 API without legacy services;
+- the proxy preserves the original `Host` verbatim with `$http_host`, including an explicit non-default port, and sets `X-Forwarded-Proto $scheme`, matching the accepted same-origin mutation/auth contract;
+- multipart upload is bounded at nginx to 257 MiB including framing headroom over the backend 256 MiB source cap, uses `proxy_request_buffering off`, and has bounded client/proxy timeouts;
+- URL-import request bodies are bounded to 16 KiB and use the longer bounded ingestion timeout;
+- other API request bodies are bounded to 1 MiB with shorter bounded proxy timeouts;
+- the real-nginx container fixture builds the actual Vite frontend, loads the tracked nginx config with `nginx -T`, exercises TLS redirect/static/SPА/media/range/source-isolation/API-header/body-limit contracts, and proves a deliberately slow upload reaches the upstream before the request body finishes;
+- CI path coverage now includes the v2 nginx config and nginx fixture, and nginx changes resolve to the full `scope=all` gate.
+
+No per-IP rate limit, trusted-proxy/client-IP policy, WAF, system/process limit, PostgreSQL tuning, backup/recovery automation, deployment automation or broader observability was added in this slice. The live target-host nginx configuration was not modified or reloaded.
+
+### Integration verification
+
+Immediately before integration, live `v2` was:
+
+`f5dcbd51db764b9ec73617a61051252ae6fb1c84`
+
+The accepted candidate was exactly six commits ahead with zero commits behind. Remote `v2` was non-force fast-forwarded with an expected-SHA lease to:
+
+`20be4765e935e715f2cd8862da0a6382e1322281`
+
+Post-integration `v2 CI`:
+
+- run `37698793880`;
+- job `113056970226`;
+- branch `v2`;
+- exact `head_sha=20be4765e935e715f2cd8862da0a6382e1322281`;
+- conclusion: **success**;
+- exact checkout/SHA verification passed;
+- the full `scope=all` correctness gate passed;
+- post-integration real-nginx gate reported `v2-nginx-test: PASS https_port=32773 asset=/assets/index-CMeOteM1.js streaming_upstream_seen=true`;
+- `v2-ci: PASS sha=20be4765e935e715f2cd8862da0a6382e1322281 scope=all`;
+- target-worker release-build applicability passed;
+- tracked checkout remained unchanged and all workflow steps completed successfully.
+
+Decision: **accept and close the first v2 production nginx serving-boundary slice**. There is no known correctness, security-boundary, range, caching, upload-streaming, same-origin proxy or CI blocker from this slice. M7 production hardening remains in progress.
 
 ## M6 private messages — first backend foundation accepted and integrated
 
@@ -1437,7 +1521,7 @@ Exact executable `e1c5d1f65e72a81615164bc6445bcdc2d8218381`; exact-candidate CI 
 - stable row identity, viewport-anchor correction and targeted retained-post mutation remain required;
 - selected-post media-status polling remains bounded and abortable;
 - nginx exposes processed media only, not ingestion sources;
-- the isolated non-default-port nginx auth caveat remains: `$host` omits an explicit non-default port, while production default-port HTTPS is unaffected.
+- the accepted v2 production nginx proxy uses `$http_host` rather than `$host`, preserving an explicit non-default port for the backend same-origin check, and sets `X-Forwarded-Proto $scheme` at the TLS boundary.
 
 ## Retained architecture / invariants
 
@@ -1492,6 +1576,8 @@ No unresolved correctness, navigation, stale-response, retained-state or browser
 
 No unresolved correctness, admission-capacity, cancellation, HTTP-semantics, allocation or target-resource blocker remains from the accepted M7 password-KDF admission slice. The production-class target supports the conservative 1-running/4-queued default; measured 2-way/4-way KDF concurrency increased RSS and memory-bandwidth contention enough that no higher default is justified. The target lacked a C compiler for `-race`; this remains an evidence-environment limitation, not an application blocker. The uploaded evidence ZIP hash differs from the local-agent-reported retained hash even though its raw contents are internally consistent and ZIP-clean; future evidence packaging should return the checksum of the exact transferred archive without post-hash repacking.
 
+No unresolved correctness, security-boundary, cache-policy, range, source-exposure, proxy-header, upload-streaming or CI blocker remains from the accepted first v2 production nginx serving boundary. Live deployment is intentionally unchanged; certificate provisioning, host-specific deployment/update mechanics, process/file limits, trusted-proxy/client-IP policy, abuse/rate limiting, PostgreSQL tuning, backups/recovery and broader production observability remain separate M7 work.
+
 ## Single best next task
 
-Implement the **first v2 production nginx serving boundary**. Add a v2-specific production configuration for TLS/static frontend, immutable hashed frontend assets, processed media, SPA fallback and reverse proxying to the Go v2 API; preserve the accepted same-origin/Host/X-Forwarded-Proto behavior and upload streaming requirements, and add reproducible nginx syntax/HTTP cache-header/proxy contract validation. Do not reuse the legacy wallium/Fiber/Redis production assumptions, do not add per-IP rate limits in this slice, and do not modify a live host deployment before the candidate configuration is reviewed and gated.
+Implement the **first v2 production process/file resource-limits boundary** for the Go API and Rust media worker. Start from the accepted nginx-integrated executable `20be4765e935e715f2cd8862da0a6382e1322281`; inspect the actual deployment/runtime model before choosing the mechanism, then add the smallest explicit limits needed for file descriptors, process/task growth and service memory/restart containment with reproducible isolated validation. Do not modify a live host, do not tune PostgreSQL, and do not add trusted-proxy/client-IP policy, abuse/rate limits, WAF rules, backups or broader observability in this slice.
