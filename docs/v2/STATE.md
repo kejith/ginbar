@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-07
-Phase: **M5 moderation/admin/imports in progress; first imports HTTP/config slice implemented with exact-SHA CI green; local acceptance gate next**
+Phase: **M5 moderation/admin/imports in progress; moderation and first imports HTTP/config slice accepted/integrated; jobs/admin observability next**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -24,9 +24,9 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - consolidated connected-core milestone gate: **accepted; M4 closed**.
 - M5 moderation/admin/imports: **in progress**.
   - first post/comment moderation slice: **accepted, integrated, and post-integration CI verified green after runner remediation**;
-  - first imports HTTP/config slice: **implemented on `astra/m5-ingest-http`, exact-candidate CI green, local acceptance gate pending**.
+  - first imports HTTP/config slice: **accepted, integrated, exact-candidate CI green, and live local acceptance gate passed**.
 
-## M5 imports — first HTTP/config slice implemented; acceptance gate pending
+## M5 imports — first HTTP/config slice accepted and integrated
 
 Verified implementation base:
 
@@ -104,11 +104,61 @@ Existing M3 tests for durable staging, source limits, definite-failure cleanup, 
 
 No schema or SQL implementation changed. The write path still uses the existing single `CreateIngestion` transaction and returns IDs from that statement, so there is no new hot read query, no extra reconciliation round trip, no new index, and no new `EXPLAIN (ANALYZE, BUFFERS)` requirement for this slice. No Redis, cache, frontend state, polling, or release UI was added.
 
-### Acceptance status / unresolved evidence
+### Explicit acceptance pass criteria
 
-Implementation correctness and exact-candidate CI are green. No known compiler, formatting, test, SQL, or architecture defect remains in the candidate.
+This slice is accepted only if all of the following pass on the exact executable candidate:
 
-The slice is **not yet accepted or integrated into `v2`**. One isolated local acceptance gate is still required for live multipart HTTP behavior with real filesystem staging and disposable PostgreSQL, definite-failure source cleanup, unreleased visibility, controlled safe URL-import behavior where practical without weakening SSRF protections, and bounded-concurrency/resource observations. That gate requires explicit user authorization for its disposable PostgreSQL and isolated persistent host writes; production/shared database or media writes are prohibited.
+1. exact detached checkout matches `064a277ad17a85dc41bafe78bd28e7c7fb027e57`, tracked files are clean, and exact-candidate CI is green;
+2. authenticated same-origin multipart upload returns authoritative post/job IDs and creates one unreleased post owned by the numeric session user, exactly one source row, exactly one initial durable media job, byte-identical staged source data, and no leftover staging file;
+3. unreleased ingestion posts remain absent from public feed, search, profile, media-status, and around-post surfaces while unrelated released fixture state remains unchanged;
+4. controlled safe URL import succeeds without weakening SSRF protections, while loopback/private/link-local/localhost and unsupported schemes remain rejected;
+5. a definite PostgreSQL persistence failure after staging removes the staged object, creates no durable post/source/job rows, and normal ingestion succeeds again after disposable fault instrumentation is removed;
+6. slow and stalled request bodies are bounded by configured transport/request deadlines and leave no orphan rows or source files;
+7. concurrent ingestion never exceeds configured ingestion concurrency, all admitted requests complete correctly, staging drains to empty, and process memory returns approximately to idle baseline;
+8. all disposable database, filesystem, process, and test instrumentation writes are removed, with no production/shared state or tracked repository mutation by the gate;
+9. no unresolved correctness, resource-bounding, authorization, SSRF, visibility, or architecture blocker remains.
+
+### Accepted local gate
+
+Accepted evidence package:
+
+`m5-first-imports-20261007T085653Z.zip`
+
+Independently verified SHA-256:
+
+`59e0f4a694d074b7f6c53c981aaa45057d1fc3a2ef7010d4182ca801254be451`
+
+Archive integrity passed with 98 retained entries. Raw HTTP responses, PostgreSQL state, filesystem trees, timeout/concurrency observations, CI metadata and cleanup findings were inspected.
+
+The exact executable `064a277ad17a85dc41bafe78bd28e7c7fb027e57` passed every criterion above:
+
+- real authenticated multipart upload returned HTTP 201 with `postId=2` / `jobId=1`; authoritative PostgreSQL state recorded numeric `author_user_id=2`, `release_state=0`, one source and one initial job; the published 16 KiB object matched the uploaded SHA-256 and `.staging` was empty;
+- the processing post was absent from feed, controlled search, author profile, media-status and around-post reconstruction, while the unrelated released fixture remained unchanged;
+- `https://example.com/` exercised the live URL-import success path with HTTP 201 and an unreleased URL source; loopback, RFC1918, link-local, localhost and unsupported schemes remained rejected by the candidate's SSRF policy;
+- a disposable trigger-induced `media_sources` persistence failure returned HTTP 500, left post/source/job counts unchanged and left the filesystem tree byte-for-byte equivalent before/after; recovery succeeded after the trigger/function were removed;
+- a trickled multipart request was cut at about 6.6 seconds under a 6-second request timeout and a fully stalled body returned bounded HTTP 504, with no row/file orphans;
+- four concurrent uploads with `GINBAR_INGEST_MAX_CONCURRENT=2` produced 250 staging samples with an observed maximum of exactly two active staging files; all four returned HTTP 201, staging drained to empty, and idle RSS after the run (~13,088 kB) was approximately the pre-load baseline (~13,660 kB);
+- cleanup removed all isolated API processes, disposable PostgreSQL state, media roots and temporary fault instrumentation; no prohibited production/shared write was reported.
+
+One retained exploratory query in `12-db-after-upload.txt` referenced a nonexistent `media_sources.id` column and errored; the immediately retained corrected query in `13-media-sources.txt` established the intended source-row assertions. This is an evidence-harness query typo, not an application defect.
+
+Decision: **accept the first M5 imports HTTP/config slice**. The existing ingestion architecture, PostgreSQL transaction shape, SSRF boundary, bounded concurrency and transport deadlines are sufficient for this slice; no new schema/index, Redis dependency, cache, frontend store, or reconciliation read is justified.
+
+### Integration
+
+Before integration, live `v2` was:
+
+`e9ffcf336271b66893e47f9cb21037692f4c1959`
+
+The implementation branch was five commits ahead and zero behind. Its documentation/state-only head was:
+
+`268d0e2d7c0dd597ec1a7d43cf98e0ec3d8e116a`
+
+The exact accepted executable remains:
+
+`064a277ad17a85dc41bafe78bd28e7c7fb027e57`
+
+GitHub compare confirms the branch head differs from that executable only by `docs/v2/STATE.md`. Remote `v2` was moved non-force with an expected-SHA lease from `e9ffcf3…` to `268d0e2…`; therefore the integrated executable files are identical to the exact accepted candidate.
 
 ## M5 post/comment moderation — accepted and integrated; exact-SHA CI green
 
@@ -483,4 +533,4 @@ The profile browser gate's media 404 console messages came from benchmark storag
 
 ## Single best next task
 
-Run the isolated local acceptance gate for exact executable `064a277ad17a85dc41bafe78bd28e7c7fb027e57` after explicit user authorization for disposable PostgreSQL and isolated filesystem/process writes. Validate live authenticated multipart upload, controlled safe URL import where practical without weakening SSRF protections, authoritative post/source/job state, definite-failure cleanup, unreleased feed/search/profile invisibility, stalled/slow-body boundedness, and bounded concurrency/resource behavior. Do not write production/shared state and do not integrate into `v2` until this evidence is reviewed and accepted here.
+Implement the first M5 jobs/admin observability slice from the current live `v2`: add a minimal moderator/admin-only read API for durable media-job inspection that exposes bounded, cursor-paginated operational state needed to diagnose queued/running/retry/failed work without adding job mutation/retry controls yet. Keep PostgreSQL authoritative, use immutable numeric authorization identity, avoid OFFSET/N+1/reconciliation reads, make the query shape bounded/index-backed and verify it with `EXPLAIN (ANALYZE, BUFFERS)`, add targeted API/PostgreSQL authorization and pagination tests, require exact-candidate CI green, and do not add Redis, polling infrastructure, dashboards, bulk import, job cancellation/retry mutation, or unrelated M5 work.
