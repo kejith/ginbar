@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-07
-Phase: **M5 moderation/admin/imports in progress; first role-administration slice accepted on exact candidate, integration pending**
+Phase: **M5 moderation/admin/imports in progress; first role-administration slice accepted, integrated, and post-integration CI green**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -26,9 +26,9 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - first post/comment moderation slice: **accepted, integrated, and post-integration CI verified green after runner remediation**;
   - first imports HTTP/config slice: **accepted, integrated, exact-candidate CI green, and live local acceptance gate passed**;
   - first jobs/admin observability slice: **accepted, integrated, exact-candidate/local-gate/post-integration CI green**;
-  - first role-administration slice: **accepted on exact executable candidate; integration pending**.
+  - first role-administration slice: **accepted, integrated, exact-candidate/post-integration CI green**.
 
-## M5 role administration — exact candidate accepted; integration pending
+## M5 role administration — accepted and integrated
 
 Verified implementation base:
 
@@ -87,7 +87,30 @@ On a 5,000-user/role fixture with `ANALYZE users, user_roles`, retained `EXPLAIN
 - moderator revoke: primary-key actor/target/delete/admin-state access, execution 0.278 ms;
 - no sequential scan on `users` or `user_roles`, external merge, temp spill, OFFSET, or speculative index requirement.
 
-Decision: **accept the first M5 role-administration slice**. Exact-candidate CI exercises the complete server/PostgreSQL behavior relevant to this backend-only slice, so no browser or target-host local-agent gate is required before integration.
+Decision: **accept the first M5 role-administration slice**. Exact-candidate CI exercises the complete server/PostgreSQL behavior relevant to this backend-only slice, so no browser or target-host local-agent gate was required before integration.
+
+### Integration and post-integration CI
+
+Immediately before integration, live `v2` was:
+
+`9d562f46153510d39ff21e7bef25908ef69ebe22`
+
+The implementation/state branch head was nine commits ahead and zero behind:
+
+`2dc3fd68d8db1271c732dcf047b1dc97ea87adc2`
+
+Remote `v2` was fast-forwarded non-force with expected-SHA lease from `9d562f46153510d39ff21e7bef25908ef69ebe22` to `2dc3fd68d8db1271c732dcf047b1dc97ea87adc2`. The only commit above exact accepted executable `2aaf24301a1d0129e7827e1069550e9da722f0ba` is this slice's documentation/state acceptance commit, so integrated application files are identical to the accepted candidate.
+
+Post-integration `v2 CI`:
+
+- run `37611691335`;
+- job `112760180964`;
+- `head_branch=v2`;
+- exact integrated head `2dc3fd68d8db1271c732dcf047b1dc97ea87adc2`;
+- conclusion: **success**;
+- exact checkout/SHA verification, scoped correctness, target-worker build applicability, and tracked-clean verification all passed.
+
+Integration decision: **the first M5 role-administration slice is closed**.
 
 ## M5 jobs/admin observability — accepted and integrated
 
@@ -684,4 +707,4 @@ The profile browser gate's media 404 console messages came from benchmark storag
 
 ## Single best next task
 
-Fast-forward the accepted first M5 role-administration slice to current live `v2` without force, using an expected-SHA lease, then require post-integration `v2 CI` green on the exact integrated head before closing the slice and choosing the next M5 implementation task.
+Implement the **second M5 role-administration slice**: establish an explicit first-admin bootstrap path and safe admin-role grant/revoke semantics using immutable numeric user IDs and PostgreSQL-authoritative state. Keep the HTTP mutation admin-only after bootstrap; define and enforce concurrent last-admin protection and self-revocation policy transactionally; make grant/revoke idempotent and return authoritative final role state without reconciliation reads; preserve the accepted moderator-role API and existing moderation/tag authorization semantics; add targeted HTTP/PostgreSQL/concurrency tests and actual SQL plans before adding any index. Do not add a frontend admin dashboard, bulk user listing, username-based authorization identity, invitation administration, account disable/delete, Redis/cache/event streams, or unrelated M5 work.
