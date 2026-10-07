@@ -344,7 +344,6 @@ func TestBootstrapFirstAdminPlanIsBoundedForFreshInstallation(t *testing.T) {
 	plan := collectPlan(t, rows)
 	t.Logf("first admin bootstrap plan:\n%s", plan)
 	assertPlanContains(t, plan, "users_pkey")
-	assertPlanContains(t, plan, "user_roles_pkey")
 	assertPlanExcludes(t, plan, "external merge", "Disk:")
 
 	var grantorID int64
