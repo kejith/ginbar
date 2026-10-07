@@ -125,7 +125,6 @@ func TestServiceKDFAdmissionReleasesAfterCredentialError(t *testing.T) {
 	}
 }
 
-
 type cancelingLookupStore struct {
 	*serviceStore
 	cancel context.CancelFunc
