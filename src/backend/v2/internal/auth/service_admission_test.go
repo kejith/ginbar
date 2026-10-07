@@ -124,3 +124,80 @@ func TestServiceKDFAdmissionReleasesAfterCredentialError(t *testing.T) {
 		t.Fatalf("login after error: %v", err)
 	}
 }
+
+
+type cancelingLookupStore struct {
+	*serviceStore
+	cancel context.CancelFunc
+}
+
+func (s *cancelingLookupStore) LookupPasswordCredential(ctx context.Context, username string) (PasswordCredential, error) {
+	s.cancel()
+	return s.serviceStore.LookupPasswordCredential(ctx, username)
+}
+
+type cancelingInvitationStore struct {
+	*serviceStore
+	cancel context.CancelFunc
+}
+
+func (s *cancelingInvitationStore) CheckInvitation(_ context.Context, tokenHash [32]byte, _ time.Time) error {
+	s.cancel()
+	if tokenHash != s.invitationHash {
+		return ErrInvalidInvitation
+	}
+	return nil
+}
+
+func TestServiceKDFAdmissionStopsBeforeKDFWhenContextCancelsAfterLookup(t *testing.T) {
+	password := "correct horse battery staple"
+	ctx, cancel := context.WithCancel(context.Background())
+	store := &cancelingLookupStore{
+		serviceStore: &serviceStore{credential: PasswordCredential{
+			UserID:   42,
+			Username: "Alice",
+			Status:   UserStatusActive,
+			Verifier: "malformed",
+		}},
+		cancel: cancel,
+	}
+	service := New(store, Config{
+		PasswordParams: testPasswordParams(),
+		SessionTTL:     time.Hour,
+		KDFAdmission:   KDFAdmissionConfig{MaxConcurrent: 1, MaxQueued: 0},
+	})
+
+	if _, err := service.Login(ctx, "Alice", password); !errors.Is(err, context.Canceled) {
+		t.Fatalf("login error = %v", err)
+	}
+	if len(service.kdfAdmission.running) != 0 {
+		t.Fatalf("running capacity retained after cancellation: %d", len(service.kdfAdmission.running))
+	}
+}
+
+func TestServiceKDFAdmissionStopsBeforeHashWhenContextCancelsAfterInvitationCheck(t *testing.T) {
+	password := "correct horse battery staple"
+	invitation := "0123456789abcdef0123456789abcdef"
+	ctx, cancel := context.WithCancel(context.Background())
+	base := &serviceStore{invitationHash: sha256.Sum256([]byte(invitation))}
+	store := &cancelingInvitationStore{serviceStore: base, cancel: cancel}
+	service := New(store, Config{
+		PasswordParams: testPasswordParams(),
+		SessionTTL:     time.Hour,
+		KDFAdmission:   KDFAdmissionConfig{MaxConcurrent: 1, MaxQueued: 0},
+	})
+
+	if _, err := service.Register(ctx, RegistrationRequest{
+		InvitationToken: invitation,
+		Username:        "Alice",
+		Password:        password,
+	}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("registration error = %v", err)
+	}
+	if base.registerCalls != 0 {
+		t.Fatalf("registration reached persistence after cancellation: calls=%d", base.registerCalls)
+	}
+	if len(service.kdfAdmission.running) != 0 {
+		t.Fatalf("running capacity retained after cancellation: %d", len(service.kdfAdmission.running))
+	}
+}

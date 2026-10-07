@@ -147,6 +147,9 @@ func (s *Service) Register(ctx context.Context, request RegistrationRequest) (Pr
 			}
 			return "", err
 		}
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		verifier, err := HashPassword(request.Password, s.passwordParams)
 		if err != nil {
 			if errors.Is(err, ErrInvalidPassword) {
@@ -183,6 +186,9 @@ func (s *Service) Login(ctx context.Context, username, password string) (LoginRe
 			if errors.Is(err, ErrInvalidCredentials) {
 				return PasswordCredential{}, ErrInvalidCredentials
 			}
+			return PasswordCredential{}, err
+		}
+		if err := ctx.Err(); err != nil {
 			return PasswordCredential{}, err
 		}
 		if credential.Status != UserStatusActive {
