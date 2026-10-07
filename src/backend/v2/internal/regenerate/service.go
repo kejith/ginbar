@@ -3,16 +3,20 @@ package regenerate
 import (
 	"context"
 	"errors"
+	"fmt"
 )
 
-var ErrNotRegenerable = errors.New("post has no released ready media to regenerate")
+var (
+	ErrForbidden      = errors.New("media regeneration forbidden")
+	ErrNotRegenerable = errors.New("post has no released ready media to regenerate")
+)
 
-type Outcome uint8
+type Outcome string
 
 const (
-	OutcomeQueued Outcome = iota
-	OutcomeCoalesced
-	OutcomeSuperseded
+	OutcomeQueued      Outcome = "queued"
+	OutcomeCoalesced   Outcome = "coalesced"
+	OutcomeSuperseded  Outcome = "superseded"
 )
 
 type Requested struct {
@@ -21,23 +25,23 @@ type Requested struct {
 }
 
 type Repository interface {
-	RequestRegeneration(context.Context, int64) (Requested, error)
+	RequestRegeneration(context.Context, int64, int64) (Requested, error)
 }
 
 type Service struct {
 	repo Repository
 }
 
-func New(repo Repository) (*Service, error) {
-	if repo == nil {
-		return nil, errors.New("regeneration repository is required")
-	}
-	return &Service{repo: repo}, nil
+func New(repo Repository) *Service {
+	return &Service{repo: repo}
 }
 
-func (s *Service) Request(ctx context.Context, postID int64) (Requested, error) {
-	if postID <= 0 {
-		return Requested{}, errors.New("post id must be positive")
+func (s *Service) Request(ctx context.Context, actorUserID, postID int64) (Requested, error) {
+	if actorUserID <= 0 {
+		return Requested{}, fmt.Errorf("actor user id must be positive")
 	}
-	return s.repo.RequestRegeneration(ctx, postID)
+	if postID <= 0 {
+		return Requested{}, fmt.Errorf("post id must be positive")
+	}
+	return s.repo.RequestRegeneration(ctx, actorUserID, postID)
 }
