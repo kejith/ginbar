@@ -22,7 +22,7 @@ release_host_gate() {
 
 resolve_auto_scope() {
   local base="$1"
-  local worker=0 backend=0 frontend=0 shared=0 path
+  local worker=0 backend=0 frontend=0 nginx=0 shared=0 path
 
   if [[ -z "$base" || "$base" =~ ^0+$ ]] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
     printf 'all\n'
@@ -44,6 +44,9 @@ resolve_auto_scope() {
       src/frontend/*)
         frontend=1
         ;;
+      nginx/v2/*|scripts/v2-nginx-test.sh)
+        nginx=1
+        ;;
       go.work|scripts/v2-ci.sh|.github/workflows/v2-ci.yml|.gitignore)
         shared=1
         ;;
@@ -64,6 +67,8 @@ resolve_auto_scope() {
     printf 'backend\n'
   elif ((frontend)); then
     printf 'frontend\n'
+  elif ((nginx)); then
+    printf 'all\n'
   else
     printf 'all\n'
   fi
@@ -76,11 +81,13 @@ fi
 run_worker=0
 run_backend=0
 run_frontend=0
+run_nginx=0
 case "$requested_scope" in
   all)
     run_worker=1
     run_backend=1
     run_frontend=1
+    run_nginx=1
     ;;
   server)
     run_worker=1
@@ -323,6 +330,10 @@ if ((run_backend)); then
 fi
 if ((run_frontend)); then
   run_frontend_gate
+fi
+if ((run_nginx)); then
+  printf '\n== nginx: v2 production serving boundary ==\n'
+  bash scripts/v2-nginx-test.sh
 fi
 
 printf '\nv2-ci: PASS sha=%s scope=%s\n' "$(git rev-parse HEAD)" "$requested_scope"
