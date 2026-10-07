@@ -20,6 +20,7 @@ import (
 	"github.com/kejith/ginbar/backend/v2/internal/moderation"
 	"github.com/kejith/ginbar/backend/v2/internal/postvote"
 	"github.com/kejith/ginbar/backend/v2/internal/profile"
+	"github.com/kejith/ginbar/backend/v2/internal/roleadmin"
 	"github.com/kejith/ginbar/backend/v2/internal/search"
 	"github.com/kejith/ginbar/backend/v2/internal/tag"
 )
@@ -35,6 +36,7 @@ type Store interface {
 	profile.Store
 	moderation.Store
 	mediajobadmin.Store
+	roleadmin.Store
 }
 
 type Config struct {
@@ -65,6 +67,7 @@ type Server struct {
 	profiles             *profile.Service
 	moderation           *moderation.Service
 	mediaJobs            *mediajobadmin.Service
+	roleAdmin            *roleadmin.Service
 	ingest               *ingest.Service
 	mux                  *http.ServeMux
 	requestTimeout       time.Duration
@@ -109,6 +112,7 @@ func NewWithConfig(store Store, cfg Config) *Server {
 		profiles:             profile.New(store),
 		moderation:           moderation.New(store),
 		mediaJobs:            mediajobadmin.New(store),
+		roleAdmin:            roleadmin.New(store),
 		ingest:               cfg.Ingest,
 		mux:                  http.NewServeMux(),
 		requestTimeout:       cfg.RequestTimeout,
@@ -128,6 +132,9 @@ func NewWithConfig(store Store, cfg Config) *Server {
 	s.mux.Handle("PUT /api/v2/posts/{id}/vote", s.requireAuth(http.HandlerFunc(s.setPostVote)))
 	s.mux.Handle("PUT /api/v2/posts/{id}/moderation", s.requireAuth(http.HandlerFunc(s.moderatePost)))
 	s.mux.Handle("GET /api/v2/admin/media-jobs", s.requireAuth(http.HandlerFunc(s.listMediaJobs)))
+	s.mux.Handle("GET /api/v2/admin/users/{id}/roles", s.requireAuth(http.HandlerFunc(s.getUserRoles)))
+	s.mux.Handle("PUT /api/v2/admin/users/{id}/roles/moderator", s.requireAuth(http.HandlerFunc(s.grantModerator)))
+	s.mux.Handle("DELETE /api/v2/admin/users/{id}/roles/moderator", s.requireAuth(http.HandlerFunc(s.revokeModerator)))
 	s.mux.HandleFunc("GET /api/v2/posts/{id}/tags", s.listPostTags)
 	s.mux.Handle("POST /api/v2/posts/{id}/tags", s.requireAuth(http.HandlerFunc(s.addPostTag)))
 	s.mux.Handle("DELETE /api/v2/posts/{id}/tags/{tagId}", s.requireAuth(http.HandlerFunc(s.removePostTag)))
