@@ -41,10 +41,10 @@ func TestHTTPRegenerationUsesAuthoritativeAdminMutationPath(t *testing.T) {
 			fixture := readyRegenerationFixture(
 				t,
 				store,
-				"http-regen-target-"+tc.name,
+				"http-regen-target-" + tc.name,
 				tc.initial,
 			)
-			adminID := regenerationActor(t, store, "http-regen-admin-"+tc.name, role.Admin)
+			adminID := regenerationActor(t, store, "http-regen-admin-" + tc.name, role.Admin)
 
 			var pendingAvailableAt time.Time
 			switch tc.initial {
@@ -81,10 +81,10 @@ func TestHTTPRegenerationUsesAuthoritativeAdminMutationPath(t *testing.T) {
 				}
 			}
 
-			server, cookie := regenerationAuthenticatedServer(t, store, adminID, byte(0x30+tc.initial))
+			server, cookie := regenerationAuthenticatedServer(t, store, adminID, byte(0x30 + tc.initial))
 			req := httptest.NewRequest(
 				http.MethodPost,
-				"http://ginbar.test/api/v2/admin/posts/"+strconv.FormatInt(fixture.postID, 10)+"/regeneration",
+				"http://ginbar.test/api/v2/admin/posts/" + strconv.FormatInt(fixture.postID, 10) + "/regeneration",
 				nil,
 			)
 			req.Header.Set("Origin", "http://ginbar.test")
@@ -224,15 +224,15 @@ func TestHTTPRegenerationRejectsNonAdminAndCrossOriginWithoutDurableChange(t *te
 			fixture := readyRegenerationFixture(
 				t,
 				store,
-				"http-regen-reject-target-"+tc.name,
+				"http-regen-reject-target-" + tc.name,
 				mediaJobStateSucceeded,
 			)
-			actorID := regenerationActor(t, store, "http-regen-reject-actor-"+tc.name, tc.actorRole)
-			server, cookie := regenerationAuthenticatedServer(t, store, actorID, byte(0x50+tc.actorRole))
+			actorID := regenerationActor(t, store, "http-regen-reject-actor-" + tc.name, tc.actorRole)
+			server, cookie := regenerationAuthenticatedServer(t, store, actorID, byte(0x50 + tc.actorRole))
 
 			req := httptest.NewRequest(
 				http.MethodPost,
-				"http://ginbar.test/api/v2/admin/posts/"+strconv.FormatInt(fixture.postID, 10)+"/regeneration",
+				"http://ginbar.test/api/v2/admin/posts/" + strconv.FormatInt(fixture.postID, 10) + "/regeneration",
 				nil,
 			)
 			if tc.crossOrigin {
@@ -286,4 +286,3 @@ func regenerationAuthenticatedServer(
 	cfg.CookieSecure = false
 	return httpapi.NewWithConfig(store, cfg), base64.RawURLEncoding.EncodeToString(rawToken)
 }
-
