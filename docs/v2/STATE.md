@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-07
-Phase: **M6 private messages in progress; direct-thread foundation and bounded inbox summaries accepted and integrated**
+Phase: **M6 private messages in progress; backend foundation, bounded inbox summaries, and first messaging frontend accepted and integrated; consolidated M6 gate next**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -33,6 +33,8 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
 - M6 private messages: **in progress**.
   - first one-to-one private-messages backend foundation: **accepted and integrated; exact-candidate/post-integration CI green**.
   - second bounded conversation/inbox summaries backend slice: **accepted and integrated; exact-candidate/post-integration CI green**.
+  - first authenticated inbox/direct-thread frontend slice: **accepted, browser-gated and integrated; exact-candidate/post-integration CI green**.
+  - consolidated M6 private-messages milestone gate: **next**.
 
 ## M6 private messages — first backend foundation accepted and integrated
 
@@ -254,6 +256,134 @@ Remote `v2` was fast-forwarded non-force with an expected-SHA lease to exact exe
 Post-integration CI is green as recorded above.
 
 M6 remains **in progress**. The direct-thread backend foundation and bounded inbox-summary backend are closed; frontend messaging UX and later explicitly justified messaging features remain.
+
+
+## M6 private messages — first frontend slice accepted and integrated
+
+Verified implementation base:
+
+`206bdb24ba483adbab26c121647d90158b1f9609`
+
+That base was documentation/state-only; its accepted executable parent was:
+
+`f6b918654b04f867070338dee2390908db9bf8dd`
+
+Implementation branch:
+
+`astra/m6-messaging-frontend`
+
+Exact accepted executable candidate and integrated executable:
+
+`310a6f046d2ad0f74d5855d829d7d1d2948a9486`
+
+Exact-candidate `v2 CI`:
+
+- run `37669465599`;
+- job `112957170929`;
+- exact `head_sha=310a6f046d2ad0f74d5855d829d7d1d2948a9486`;
+- conclusion: **success**;
+- frontend correctness gate passed **48/48 tests**, `tsc --noEmit`, production Vite build, target-worker release-build applicability, exact checkout and tracked-clean verification;
+- `v2-ci: PASS sha=310a6f046d2ad0f74d5855d829d7d1d2948a9486 scope=frontend`.
+
+Accepted browser/DevTools evidence:
+
+`m6msg-20261007T185051Z.zip`
+
+Independently verified SHA-256:
+
+`2a6c7e4aa3abb700e87f456467e5e27583c93037035d6ecbb17d912a54c7b730`
+
+Archive integrity passed. Raw scenario JSON, request logs, screenshots, Playwright traces, failure classification and cleanup evidence were inspected. The five browser scenarios contained **47 checks with zero failures**. The only transport failures were one intentional stale-read `ERR_ABORTED` and two deliberately forced send failures; there were zero page errors.
+
+Post-integration `v2 CI`:
+
+- run `37673153104`;
+- job `112969758771`;
+- exact integrated executable `310a6f046d2ad0f74d5855d829d7d1d2948a9486`;
+- conclusion: **success**;
+- exact checkout, scoped frontend correctness, target-worker release-build applicability and tracked-clean verification all passed.
+
+### Accepted frontend boundary and routing
+
+- canonical inbox route is `/messages`; canonical direct-thread route is `/messages/:peerId`;
+- route, request and retained-thread identity use immutable numeric peer IDs only; usernames remain current presentation metadata;
+- direct numeric thread navigation works without requiring an inbox fetch; when no current username metadata is loaded, the deterministic heading fallback is `User #<id>`;
+- signed-out messaging routes use the established `/api/v2/auth/me` session boundary and expose no message data;
+- the signed-in board exposes a Messages entry while existing board and profile document routing remains separate;
+- invalid nonnumeric message routes render an explicit invalid-route state rather than being interpreted as username identity;
+- no router framework, giant application store, service worker, client database or second auth model was introduced.
+
+### Accepted retained state, pagination and stale-response behavior
+
+- inbox pages use only the accepted `before=<latest-message-id>` cursor and preserve authoritative latest-message-ID descending order;
+- retained inbox summaries are capped at **200**; reaching the cap removes older loading and shows an explicit retention note;
+- direct threads use only `nextBefore` for older pages; retained messages are kept in immutable message-ID descending server order and derived ascending for display;
+- each retained thread is capped at **300 messages** and the messaging surface retains at most **4 thread states**;
+- no OFFSET pagination or snapshot machinery is present;
+- inbox append deduplicates by numeric peer ID, and fresh first-page refresh allows a newly updated conversation to move to its new authoritative position;
+- thread/inbox reads use AbortController plus route epochs; a delayed peer-A response released after switching to peer B cannot mutate B;
+- Back/Forward and rapid peer switching keep URL, heading and rendered message set coherent;
+- the retained-state bounds were intentionally chosen before virtualization; current evidence does not justify virtualization.
+
+### Accepted send behavior
+
+- composer bodies remain bounded to the backend's **10,000 Unicode-code-point** limit;
+- at most **8 local pending sends** are retained;
+- submitting shows immediate local pending state but does not grant durable client authority;
+- each successful POST response is merged exactly once by authoritative immutable message ID without refetching the whole thread;
+- out-of-order rapid send responses settle into deterministic authoritative message-ID order without duplicates;
+- failed sends preserve confirmed retained thread state;
+- an eligible failed body may restore into an empty draft, but cannot overwrite a newer user draft;
+- recipient-unavailable send failure switches the peer to an unavailable presentation state and disables the composer;
+- no polling, SSE/WebSocket path, unread/read receipts, notifications, attachments, reactions, editing/deletion, groups or messaging moderation/admin controls were added.
+
+### Browser fixture and measured behavior
+
+The isolated real-browser gate used PostgreSQL 16.15 with migrations 001–009, real API registration/login/send paths, nginx/static frontend serving and Chromium. The fixture contained 211 actor conversations and 778 seeded messages before gate-time bump sends, including bidirectional traffic, an inactive-peer tombstone, an empty-inbox actor, a 310-message thread, 75- and 60-message threads, and enough additional peers to force multiple inbox pages.
+
+Accepted checks established:
+
+- inbox pages were latest-message-ID descending and cursor chained with no OFFSET; 200 summaries were retained at the explicit cap;
+- unavailable peer `#63` rendered as a non-clickable tombstone without fabricated username;
+- fresh refresh after a send moved the conversation to authoritative rank 1;
+- username rename affected only presentation while numeric route/API identity stayed stable;
+- a 310-message thread retained exactly 300 unique messages and stopped at the client cap with the retention note;
+- signed-out inbox/direct-thread routes made zero message-API requests;
+- stale peer response isolation, rapid route switches and Back/Forward all passed;
+- successful pending-to-authoritative reconciliation inserted one DOM message node and did not refetch the thread;
+- three rapid sends released in reverse response order reconciled to unique authoritative IDs;
+- forced send failure, newer-draft preservation and recipient-unavailable behavior all passed;
+- existing board route, missing-post route and public profile route remained coherent in the exercised fixture.
+
+Browser-machine measurements:
+
+- warmed inbox interaction: **36 ms**;
+- warmed populated-thread switch: **16 ms**;
+- older thread append: **13 ms**;
+- older inbox append: **14 ms**;
+- un-delayed send reconciliation: **287 ms**, with pre-existing message DOM nodes retained;
+- Back/Forward measurements were approximately **722/714 ms**, explicitly sleep-dominated upper bounds rather than interaction latency claims;
+- JS heap grew from about **11.5 MB to 15.9 MB** across eight thread visits, about **+4.4 MB**, without a single-visit spike;
+- zero browser page errors were recorded.
+
+`PerformanceObserver(type=longtask)` was unsupported in this headless Chromium, so no Long-Task count is claimed. Playwright traces were retained instead. The browser fixture intentionally had zero board posts, so thumbnail churn was not directly observable in this dedicated gate; messaging node stability and request isolation were proven, but the consolidated M6 gate should use a populated board/media fixture when practical.
+
+Decision: **accept the first M6 authenticated inbox/direct-thread frontend slice**. Numeric identity, bounded retained state, cursor paging, stale-response isolation, immediate/authoritative send reconciliation and measured browser behavior satisfy the slice. Current evidence does not justify a frontend state framework, virtualization, polling/event streaming, Redis/cache synchronization, unread/read state or additional messaging abstractions.
+
+### Integration status
+
+Immediately before integration, live remote `v2` was the verified documentation/state-only base:
+
+`206bdb24ba483adbab26c121647d90158b1f9609`
+
+The candidate was exactly 10 commits ahead and zero behind. Remote `v2` was fast-forwarded non-force with expected-SHA lease to:
+
+`310a6f046d2ad0f74d5855d829d7d1d2948a9486`
+
+Post-integration CI is green as recorded above.
+
+M6 remains **in progress** pending one consolidated milestone gate across the accepted backend/inbox/frontend messaging slices.
+
 
 ## M5 consolidated moderation/admin/imports milestone gate — accepted; M5 complete
 
@@ -1176,6 +1306,8 @@ No unresolved correctness, authorization, concurrency, schema or SQL-plan blocke
 
 No unresolved correctness, authorization, concurrency, schema or SQL-plan blocker remains from the accepted second M6 inbox slice. The first inbox candidate's peer-metadata sequential scan was rejected and replaced by bounded primary-key lookups before acceptance. The accepted cursor plan uses the canonical conversation indexes and bounded top-N heapsorts with no spill; no additional inbox index, cache, event stream, unread state or aggregation machinery is justified by current evidence.
 
+No unresolved correctness, navigation, stale-response, retained-state or browser-performance blocker remains from the accepted first M6 frontend slice. The dedicated messaging browser fixture had no board posts, so whole-board thumbnail churn was not directly exercised there, and headless Chromium did not expose the Long Tasks observer. These are validation limitations rather than observed defects; use a populated board/media fixture and retained traces in the consolidated M6 gate before closing the milestone.
+
 ## Single best next task
 
-Implement the **first M6 private-messages frontend slice: authenticated inbox and direct-thread messaging UI** from the verified current `v2`. Connect the accepted `GET /api/v2/messages`, `GET /api/v2/messages/{peerId}`, and `POST /api/v2/messages/{peerId}` contracts into the smallest coherent SolidJS UI: bounded incremental inbox/thread loading, current peer availability presentation, immediate/stable local send state with authoritative server reconciliation, and coherent route/history behavior using numeric peer identity. Preserve existing board/profile behavior and separate route, ephemeral UI and server state. Measure browser rendering/navigation on a meaningful many-conversation/many-message fixture before considering virtualization. Do not add unread/read receipts, notifications, attachments, group/system messages, polling/SSE/WebSockets, Redis/cache state, or messaging moderation/admin controls in this slice.
+Run the **consolidated M6 private-messages milestone gate** on exact executable `310a6f046d2ad0f74d5855d829d7d1d2948a9486`. Validate the accepted direct-thread backend, canonical inbox summaries and authenticated messaging frontend together against real PostgreSQL/API/nginx/Chromium with a meaningful many-user/many-conversation/many-message fixture plus populated board/profile/media state. Recheck authentication/authorization, numeric identity, concurrent sends and authoritative latest-message updates, inbox/thread cursor semantics, unavailable peers, stale-response isolation, bounded frontend retention, send failure/reconciliation, Back/Forward/direct navigation, and preservation of board/profile behavior. Retain representative PostgreSQL plans for the actual hot messaging read/send shapes and browser traces/performance evidence; close M6 only if no concrete missing private-message requirement or regression is found. Do not add unread/read receipts, notifications, attachments, groups, polling/SSE/WebSockets, Redis/cache state, moderation controls, new indexes or virtualization without evidence from this gate.
