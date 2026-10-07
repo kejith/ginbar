@@ -227,8 +227,8 @@ func TestPrivateMessageSQLPlansAreBoundedAndIndexBacked(t *testing.T) {
 	if _, err := store.pool.Exec(ctx, `
 		INSERT INTO private_messages (sender_user_id, recipient_user_id, body)
 		SELECT
-			CASE WHEN g % 2 = 0 THEN $1 ELSE $2 END,
-			CASE WHEN g % 2 = 0 THEN $2 ELSE $1 END,
+			CASE WHEN g % 2 = 0 THEN $1::bigint ELSE $2::bigint END,
+			CASE WHEN g % 2 = 0 THEN $2::bigint ELSE $1::bigint END,
 			'target-' || g::text
 		FROM generate_series(1, 5000) AS g
 	`, actorID, peerID); err != nil {
@@ -237,8 +237,8 @@ func TestPrivateMessageSQLPlansAreBoundedAndIndexBacked(t *testing.T) {
 	if _, err := store.pool.Exec(ctx, `
 		INSERT INTO private_messages (sender_user_id, recipient_user_id, body)
 		SELECT
-			CASE WHEN g % 2 = 0 THEN $1 ELSE $2 END,
-			CASE WHEN g % 2 = 0 THEN $2 ELSE $1 END,
+			CASE WHEN g % 2 = 0 THEN $1::bigint ELSE $2::bigint END,
+			CASE WHEN g % 2 = 0 THEN $2::bigint ELSE $1::bigint END,
 			'noise-' || g::text
 		FROM generate_series(1, 20000) AS g
 	`, noiseA, noiseB); err != nil {
