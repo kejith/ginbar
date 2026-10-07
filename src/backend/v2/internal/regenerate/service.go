@@ -15,7 +15,7 @@ type Outcome string
 
 const (
 	OutcomeQueued     Outcome = "queued"
-	OutcomeCoalesced   Outcome = "coalesced"
+	OutcomeCoalesced  Outcome = "coalesced"
 	OutcomeSuperseded Outcome = "superseded"
 )
 
