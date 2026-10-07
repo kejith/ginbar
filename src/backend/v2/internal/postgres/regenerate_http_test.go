@@ -38,11 +38,15 @@ func TestHTTPRegenerationUsesAuthoritativeAdminMutationPath(t *testing.T) {
 			store, cleanup := testIngestionStore(t)
 			defer cleanup()
 			ctx := context.Background()
+			fixtureState := tc.initial
+			if fixtureState == mediaJobStateRunning {
+				fixtureState = mediaJobStateSucceeded
+			}
 			fixture := readyRegenerationFixture(
 				t,
 				store,
 				"http-regen-target-"+tc.name,
-				tc.initial,
+				fixtureState,
 			)
 			adminID := regenerationActor(t, store, "http-regen-admin-"+tc.name, role.Admin)
 
@@ -69,7 +73,8 @@ func TestHTTPRegenerationUsesAuthoritativeAdminMutationPath(t *testing.T) {
 			case mediaJobStateRunning:
 				if _, err := store.pool.Exec(ctx, `
 					UPDATE media_jobs
-					SET attempts = 3,
+					SET state = 1,
+					    attempts = 3,
 					    claimed_at = clock_timestamp(),
 					    claimed_by = 'http-old-worker',
 					    lease_expires_at = clock_timestamp() + interval '1 minute',
@@ -224,10 +229,10 @@ func TestHTTPRegenerationRejectsNonAdminAndCrossOriginWithoutDurableChange(t *te
 			fixture := readyRegenerationFixture(
 				t,
 				store,
-				"http-regen-reject-target-"+tc.name,
+				"hr-target-"+tc.name,
 				mediaJobStateSucceeded,
 			)
-			actorID := regenerationActor(t, store, "http-regen-reject-actor-"+tc.name, tc.actorRole)
+			actorID := regenerationActor(t, store, "hr-actor-"+tc.name, tc.actorRole)
 			server, cookie := regenerationAuthenticatedServer(t, store, actorID, byte(0x50+tc.actorRole))
 
 			req := httptest.NewRequest(
