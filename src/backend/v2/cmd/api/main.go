@@ -91,6 +91,8 @@ func run() error {
 			"addr", cfg.listenAddr,
 			"dbMaxConns", cfg.dbMaxConns,
 			"ingestMaxConcurrent", cfg.ingest.MaxConcurrent,
+			"authKDFMaxConcurrent", cfg.api.Auth.KDFAdmission.MaxConcurrent,
+			"authKDFMaxQueued", cfg.api.Auth.KDFAdmission.MaxQueued,
 			"mediaSourceMaxBytes", cfg.mediaSourceMax,
 		)
 		errCh <- server.ListenAndServe()
@@ -141,6 +143,12 @@ func loadRuntimeConfig(getenv func(string) string) (runtimeConfig, error) {
 	}
 	cfg.urlFetcher.MaxBytes = cfg.mediaSourceMax
 	if cfg.ingest.MaxConcurrent, err = envPositiveInt(getenv, "GINBAR_INGEST_MAX_CONCURRENT", cfg.ingest.MaxConcurrent); err != nil {
+		return runtimeConfig{}, err
+	}
+	if cfg.api.Auth.KDFAdmission.MaxConcurrent, err = envPositiveInt(getenv, "GINBAR_AUTH_KDF_MAX_CONCURRENT", cfg.api.Auth.KDFAdmission.MaxConcurrent); err != nil {
+		return runtimeConfig{}, err
+	}
+	if cfg.api.Auth.KDFAdmission.MaxQueued, err = envNonNegativeInt(getenv, "GINBAR_AUTH_KDF_MAX_QUEUED", cfg.api.Auth.KDFAdmission.MaxQueued); err != nil {
 		return runtimeConfig{}, err
 	}
 	if cfg.api.IngestRequestTimeout, err = envPositiveDuration(getenv, "GINBAR_INGEST_REQUEST_TIMEOUT", cfg.api.IngestRequestTimeout); err != nil {

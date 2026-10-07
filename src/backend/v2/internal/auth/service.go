@@ -26,6 +26,7 @@ var (
 	ErrInvalidInvitation    = errors.New("invalid invitation")
 	ErrUsernameUnavailable  = errors.New("username unavailable")
 	ErrInvalidCredentials   = errors.New("invalid credentials")
+	ErrKDFSaturated         = errors.New("password KDF admission saturated")
 	ErrUnauthenticated      = errors.New("unauthenticated")
 	ErrCommitOutcomeUnknown = errors.New("transaction commit outcome unknown")
 )
@@ -51,15 +52,25 @@ type Store interface {
 	RevokeSession(ctx context.Context, tokenHash [32]byte, now time.Time) error
 }
 
+type KDFAdmissionConfig struct {
+	MaxConcurrent int
+	MaxQueued     int
+}
+
 type Config struct {
 	PasswordParams PasswordParams
 	SessionTTL     time.Duration
+	KDFAdmission   KDFAdmissionConfig
 }
 
 func DefaultConfig() Config {
 	return Config{
 		PasswordParams: DefaultPasswordParams(),
 		SessionTTL:     30 * 24 * time.Hour,
+		KDFAdmission: KDFAdmissionConfig{
+			MaxConcurrent: 1,
+			MaxQueued:     4,
+		},
 	}
 }
 
@@ -67,6 +78,7 @@ type Service struct {
 	store          Store
 	passwordParams PasswordParams
 	sessionTTL     time.Duration
+	kdfAdmission   *kdfAdmission
 	now            func() time.Time
 	random         io.Reader
 }
@@ -87,13 +99,25 @@ func New(store Store, cfg Config) *Service {
 	if cfg.PasswordParams == (PasswordParams{}) {
 		cfg.PasswordParams = DefaultPasswordParams()
 	}
+	defaults := DefaultConfig()
 	if cfg.SessionTTL <= 0 {
-		cfg.SessionTTL = DefaultConfig().SessionTTL
+		cfg.SessionTTL = defaults.SessionTTL
+	}
+	if cfg.KDFAdmission == (KDFAdmissionConfig{}) {
+		cfg.KDFAdmission = defaults.KDFAdmission
+	} else {
+		if cfg.KDFAdmission.MaxConcurrent <= 0 {
+			cfg.KDFAdmission.MaxConcurrent = defaults.KDFAdmission.MaxConcurrent
+		}
+		if cfg.KDFAdmission.MaxQueued < 0 {
+			cfg.KDFAdmission.MaxQueued = defaults.KDFAdmission.MaxQueued
+		}
 	}
 	return &Service{
 		store:          store,
 		passwordParams: cfg.PasswordParams,
 		sessionTTL:     cfg.SessionTTL,
+		kdfAdmission:   newKDFAdmission(cfg.KDFAdmission.MaxConcurrent, cfg.KDFAdmission.MaxQueued),
 		now:            time.Now,
 		random:         rand.Reader,
 	}
@@ -111,20 +135,32 @@ func (s *Service) Register(ctx context.Context, request RegistrationRequest) (Pr
 	}
 
 	tokenHash := sha256.Sum256([]byte(request.InvitationToken))
-	if err := s.store.CheckInvitation(ctx, tokenHash, s.now()); err != nil {
-		if errors.Is(err, ErrInvalidInvitation) {
-			return Principal{}, ErrInvalidInvitation
+	verifier, err := func() (string, error) {
+		release, err := s.kdfAdmission.acquire(ctx)
+		if err != nil {
+			return "", err
 		}
+		defer release()
+
+		if err := s.store.CheckInvitation(ctx, tokenHash, s.now()); err != nil {
+			if errors.Is(err, ErrInvalidInvitation) {
+				return "", ErrInvalidInvitation
+			}
+			return "", err
+		}
+		verifier, err := HashPassword(request.Password, s.passwordParams)
+		if err != nil {
+			if errors.Is(err, ErrInvalidPassword) {
+				return "", ErrInvalidRegistration
+			}
+			return "", err
+		}
+		return verifier, nil
+	}()
+	if err != nil {
 		return Principal{}, err
 	}
 
-	verifier, err := HashPassword(request.Password, s.passwordParams)
-	if err != nil {
-		if errors.Is(err, ErrInvalidPassword) {
-			return Principal{}, ErrInvalidRegistration
-		}
-		return Principal{}, err
-	}
 	principal, err := s.store.RegisterUser(ctx, tokenHash, request.Username, verifier, s.now())
 	if err != nil {
 		return Principal{}, err
@@ -136,19 +172,32 @@ func (s *Service) Login(ctx context.Context, username, password string) (LoginRe
 	if !validUsername(username) || validatePassword(password) != nil {
 		return LoginResult{}, ErrInvalidCredentials
 	}
-	credential, err := s.store.LookupPasswordCredential(ctx, username)
-	if err != nil {
-		if errors.Is(err, ErrInvalidCredentials) {
-			return LoginResult{}, ErrInvalidCredentials
+
+	credential, err := func() (PasswordCredential, error) {
+		release, err := s.kdfAdmission.acquire(ctx)
+		if err != nil {
+			return PasswordCredential{}, err
 		}
+		defer release()
+
+		credential, err := s.store.LookupPasswordCredential(ctx, username)
+		if err != nil {
+			if errors.Is(err, ErrInvalidCredentials) {
+				return PasswordCredential{}, ErrInvalidCredentials
+			}
+			return PasswordCredential{}, err
+		}
+		if credential.Status != UserStatusActive {
+			return PasswordCredential{}, ErrInvalidCredentials
+		}
+		ok, err := VerifyPassword(password, credential.Verifier)
+		if err != nil || !ok {
+			return PasswordCredential{}, ErrInvalidCredentials
+		}
+		return credential, nil
+	}()
+	if err != nil {
 		return LoginResult{}, err
-	}
-	if credential.Status != UserStatusActive {
-		return LoginResult{}, ErrInvalidCredentials
-	}
-	ok, err := VerifyPassword(password, credential.Verifier)
-	if err != nil || !ok {
-		return LoginResult{}, ErrInvalidCredentials
 	}
 
 	tokenBytes := make([]byte, SessionTokenBytes)

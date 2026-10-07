@@ -63,6 +63,8 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_invitation", "invitation is invalid or unavailable")
 	case errors.Is(err, auth.ErrUsernameUnavailable):
 		writeError(w, http.StatusConflict, "username_unavailable", "username is unavailable")
+	case errors.Is(err, auth.ErrKDFSaturated):
+		writeError(w, http.StatusServiceUnavailable, "authentication_unavailable", "authentication capacity is temporarily unavailable")
 	default:
 		writeServiceError(w, r, err)
 	}
@@ -80,6 +82,10 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	result, err := s.auth.Login(r.Context(), request.Username, request.Password)
 	if errors.Is(err, auth.ErrInvalidCredentials) {
 		writeError(w, http.StatusUnauthorized, "invalid_credentials", "username or credential is invalid")
+		return
+	}
+	if errors.Is(err, auth.ErrKDFSaturated) {
+		writeError(w, http.StatusServiceUnavailable, "authentication_unavailable", "authentication capacity is temporarily unavailable")
 		return
 	}
 	if err != nil {
