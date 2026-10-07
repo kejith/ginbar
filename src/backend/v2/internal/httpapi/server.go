@@ -69,7 +69,7 @@ type Server struct {
 	commentVote          *commentvote.Service
 	tags                 *tag.Service
 	profiles             *profile.Service
-	privateMessages	*privatemessage.Service
+	privateMessages      *privatemessage.Service
 	moderation           *moderation.Service
 	mediaJobs            *mediajobadmin.Service
 	regeneration         *regenerate.Service
@@ -116,7 +116,7 @@ func NewWithConfig(store Store, cfg Config) *Server {
 		commentVote:          commentvote.New(store),
 		tags:                 tag.New(store),
 		profiles:             profile.New(store),
-		privateMessages:	privatemessage.New(store),
+		privateMessages:      privatemessage.New(store),
 		moderation:           moderation.New(store),
 		mediaJobs:            mediajobadmin.New(store),
 		regeneration:         regenerate.New(store),
