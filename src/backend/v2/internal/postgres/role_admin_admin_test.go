@@ -327,6 +327,13 @@ func TestBootstrapFirstAdminPlanIsBoundedForFreshInstallation(t *testing.T) {
 	ctx := context.Background()
 
 	userID := createRoleAdminUser(t, store, "bootstrap-plan-admin")
+	if _, err := store.pool.Exec(ctx, `
+		INSERT INTO users (username)
+		SELECT 'bootstrap-plan-user-' || g::text
+		FROM generate_series(1, 5000) AS g
+	`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.pool.Exec(ctx, "ANALYZE users, user_roles"); err != nil {
 		t.Fatal(err)
 	}
