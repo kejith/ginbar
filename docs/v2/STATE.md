@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-07
-Phase: **M6 private messages complete; consolidated M6 gate accepted; M7 production hardening next**
+Phase: **M7 production hardening in progress; bounded password-KDF admission candidate CI-green; target-host validation next**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -35,6 +35,78 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - second bounded conversation/inbox summaries backend slice: **accepted and integrated; exact-candidate/post-integration CI green**.
   - first authenticated inbox/direct-thread frontend slice: **accepted, browser-gated and integrated; exact-candidate/post-integration CI green**.
   - consolidated M6 private-messages milestone gate: **accepted; M6 closed**.
+- M7 production hardening: **in progress**.
+  - bounded password-KDF admission control: **implementation candidate CI-green; target-host resource/latency validation pending; not accepted or integrated**.
+
+## M7 production hardening — bounded password-KDF admission candidate
+
+Verified live `v2` implementation base before branching:
+
+`a5906f294929356445123543a435262faf4a9b00`
+
+This base is documentation/state-only; the previously accepted executable application state beneath the M6 state commits is:
+
+`310a6f046d2ad0f74d5855d829d7d1d2948a9486`
+
+Implementation branch:
+
+`astra/m7-kdf-admission`
+
+Exact executable candidate:
+
+`90dc49e2bfae09f9b2a578162473a03818014717`
+
+The candidate is four commits ahead of the verified live `v2` base with zero commits behind. It changes only the backend auth/runtime-config slice and associated tests; `v2` has not been modified.
+
+Exact-candidate `v2 CI`:
+
+- run `37682501802`;
+- job `113001863060`;
+- exact `head_sha=90dc49e2bfae09f9b2a578162473a03818014717`;
+- conclusion: **success**;
+- exact checkout/verification, backend Go formatting, `go vet ./...`, PostgreSQL-backed `go test -v -count=1 ./...`, target-worker release-build applicability, and tracked-clean verification all passed;
+- backend log contained **335 test/subtest RUN entries and zero failure markers**;
+- all ten new KDF-admission/config/service/HTTP tests were present and passed;
+- `v2-ci: PASS sha=90dc49e2bfae09f9b2a578162473a03818014717 scope=backend`.
+
+An immediately preceding candidate added the post-lookup cancellation fence but failed CI before compilation only because one new test file was not gofmt-clean. The final candidate changes that file only for formatting and is the first accepted-for-validation exact SHA after the cancellation fence.
+
+### Candidate admission boundary
+
+- Argon2id parameters are unchanged: the accepted default remains **64 MiB memory, one iteration, parallelism one**; this slice does not reduce KDF cost to absorb load.
+- One auth-service-local admission gate is shared by registration hashing and login verification.
+- The gate uses only two bounded buffered channels: one bounds running KDF work and one bounds queued/waiting requests. It creates no worker pool, scheduler, background goroutine, durable state or Redis dependency.
+- Conservative defaults are **1 concurrent KDF** and **4 queued requests**. They are deliberately not production-throughput claims; any increase for the production target requires target-host evidence.
+- Runtime overrides are `GINBAR_AUTH_KDF_MAX_CONCURRENT` (positive integer) and `GINBAR_AUTH_KDF_MAX_QUEUED` (non-negative integer, so zero queueing is valid).
+- Admission is acquired before invitation lookup or password-credential lookup. When running plus queued capacity is full, both valid-shaped registration and login requests fail before credential/invitation existence is inspected.
+- Admission saturation has its own internal `ErrKDFSaturated` result and maps for both endpoints to HTTP **503** with stable code `authentication_unavailable`; existing malformed-input and invalid-credential semantics remain unchanged.
+- Waiting acquisition selects directly on the request context. Cancellation removes the waiting token synchronously, so abandoned waiters do not retain queue capacity.
+- After invitation/credential lookup and before Argon2 starts, the service rechecks `ctx.Err()`; cancellation during the lookup therefore cannot begin fresh KDF work.
+- The synchronous `x/crypto/argon2` call itself is not context-interruptible. Once Argon2 has started, that one admitted operation runs to completion and releases its running token immediately afterward.
+- The running token is released before durable registration persistence or session creation, so non-KDF database work does not consume scarce KDF capacity.
+
+### Candidate correctness and resource evidence
+
+Deterministic exact-candidate coverage passed for:
+
+- maximum running KDF admission and exactly bounded waiter capacity;
+- immediate saturation once running plus queued capacity is full;
+- cancellation while waiting and queue-capacity reuse afterward;
+- running-capacity release and repeated reuse;
+- one shared boundary across registration and login;
+- saturation before missing-user credential lookup, avoiding username-validity disclosure through the overload path;
+- capacity release after malformed-verifier/error paths followed by successful reuse;
+- cancellation after credential lookup but before verification;
+- cancellation after invitation check but before hashing, with no registration persistence;
+- stable HTTP 503 `authentication_unavailable` behavior for both saturated login and registration;
+- runtime default/override parsing, including zero queued capacity and rejection of invalid limits;
+- preservation of the full PostgreSQL-backed backend suite and existing registration/login/session behavior.
+
+The existing password benchmarks in `internal/auth/password_test.go` remain unchanged and applicable: default hash, verify, parallel verify and parameter candidates. Target-host password benchmarks were not available from this execution environment and therefore are **not** treated as acceptance evidence yet.
+
+A standalone stdlib-only run of the exact admission primitive exercised its deterministic tests for 20 repetitions and measured the uncontended limiter path over five `BenchmarkKDFAdmission` runs at **28.38–30.20 ns/op, 0 B/op, 0 allocs/op** on the available container host. An earlier release-function form allocated once per acquire and was replaced before the final candidate. These numbers establish only that the limiter itself does not introduce per-admission allocation/retention; they are not production KDF throughput measurements.
+
+Decision: **implementation is complete and exact-candidate CI is green, but the slice is not yet accepted or integrated**. The remaining acceptance evidence is a controlled target-host KDF/admission resource-and-latency gate on this exact executable SHA. The conservative 1-running/4-queued default remains unchanged until that evidence is reviewed.
 
 ## M6 private messages — first backend foundation accepted and integrated
 
@@ -1379,6 +1451,8 @@ No unresolved correctness, authorization, concurrency, schema or SQL-plan blocke
 
 No unresolved correctness, navigation, stale-response, retained-state or browser-performance blocker remains from M6. The consolidated gate exercised populated board/profile/media state, verified zero messaging-induced board row/thumbnail churn, retained browser traces, revalidated the API/SQL contracts and found no concrete missing M6 capability. The dedicated frontend gate limitations are therefore closed as milestone blockers.
 
+No code, formatting, compiler, lint, PostgreSQL-test or CI blocker remains on the M7 password-KDF admission candidate `90dc49e2bfae09f9b2a578162473a03818014717`. Target-host resource/latency evidence remains required before accepting this slice or raising its conservative concurrency default: measure the existing password hash/verify/parallel-verify benchmarks plus controlled admission/resource behavior on the production-class target without production data or overlapping workload. The final candidate intentionally makes no target-specific throughput claim.
+
 ## Single best next task
 
-Implement the **first M7 production-hardening slice: bounded password-KDF admission control**. Registration and login currently perform Argon2id work with default 64 MiB memory cost per operation and no concurrency admission boundary, so a request flood can multiply memory/CPU work before broader rate-limiting policy exists. Add the smallest cancellation-aware, configurable concurrency gate around password hashing/verification, preserve existing authentication and error semantics, bound queued/in-flight work, and add deterministic service/HTTP concurrency tests plus an applicable resource/latency benchmark. Do not add Redis, distributed limiting, trusted-proxy/client-IP parsing or broad nginx rate-limit policy in this slice; choose any production concurrency default from measured target-host evidence rather than guesswork.
+Run the **target-host password-KDF admission validation/profiling gate** for exact executable candidate `90dc49e2bfae09f9b2a578162473a03818014717`: execute the existing password hash/verify/parallel-verify benchmarks and the admission benchmark/tests under controlled production-class host conditions, retain CPU/RSS/concurrency evidence, and determine whether the conservative 1-running/4-queued default is acceptable. Do not modify defaults, source, deployment configuration, production data or shared persistent state during this gate; return the retained evidence for acceptance review before any integration.
