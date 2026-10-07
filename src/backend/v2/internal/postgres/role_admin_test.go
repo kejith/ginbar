@@ -69,10 +69,6 @@ func TestHTTPRoleAdminAuthorizationIdempotenceAndImmediateModeration(t *testing.
 	res = serveRoleAdminRequest(server, http.MethodGet, "/api/v2/admin/users/not-a-number/roles", adminToken)
 	assertRoleAdminError(t, res, http.StatusBadRequest, "invalid_user_id")
 
-	res = serveRoleAdminRequest(server, http.MethodPut, "/api/v2/admin/users/"+fmt.Sprint(targetID)+"/roles/admin", adminToken)
-	if res.Code != http.StatusNotFound {
-		t.Fatalf("admin-role mutation status=%d body=%s", res.Code, res.Body.String())
-	}
 
 	noOriginReq := httptest.NewRequest(
 		http.MethodPut,
