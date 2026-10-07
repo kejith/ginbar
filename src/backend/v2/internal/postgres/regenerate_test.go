@@ -571,7 +571,7 @@ func TestRequestRegenerationPlanIsBoundedAndIndexBacked(t *testing.T) {
 	for _, indexName := range []string{
 		"user_roles_pkey",
 		"media_jobs_post_kind_id_idx",
-		"posts_pkey",
+		"posts_feed_released_idx",
 		"media_sources_pkey",
 		"media_pkey",
 	} {
