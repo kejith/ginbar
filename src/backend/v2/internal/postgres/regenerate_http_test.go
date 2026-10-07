@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -83,7 +84,7 @@ func TestHTTPRegenerationUsesAuthoritativeAdminMutationPath(t *testing.T) {
 			server, cookie := regenerationAuthenticatedServer(t, store, adminID, byte(0x30+tc.initial))
 			req := httptest.NewRequest(
 				http.MethodPost,
-				"http://ginbar.test/api/v2/admin/posts/"+int64String(fixture.postID)+"/regeneration",
+				"http://ginbar.test/api/v2/admin/posts/"+strconv.FormatInt(fixture.postID, 10)+"/regeneration",
 				nil,
 			)
 			req.Header.Set("Origin", "http://ginbar.test")
@@ -231,7 +232,7 @@ func TestHTTPRegenerationRejectsNonAdminAndCrossOriginWithoutDurableChange(t *te
 
 			req := httptest.NewRequest(
 				http.MethodPost,
-				"http://ginbar.test/api/v2/admin/posts/"+int64String(fixture.postID)+"/regeneration",
+				"http://ginbar.test/api/v2/admin/posts/"+strconv.FormatInt(fixture.postID, 10)+"/regeneration",
 				nil,
 			)
 			if tc.crossOrigin {
@@ -278,7 +279,7 @@ func regenerationAuthenticatedServer(
 	rawToken := bytes.Repeat([]byte{fill}, 32)
 	tokenHash := sha256.Sum256(rawToken)
 	now := time.Now().UTC()
-	if err := store.CreateSession(ctxOrBackground(), userID, tokenHash, now, now.Add(time.Hour)); err != nil {
+	if err := store.CreateSession(context.Background(), userID, tokenHash, now, now.Add(time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	cfg := httpapi.DefaultConfig()
@@ -286,21 +287,3 @@ func regenerationAuthenticatedServer(
 	return httpapi.NewWithConfig(store, cfg), base64.RawURLEncoding.EncodeToString(rawToken)
 }
 
-func ctxOrBackground() context.Context {
-	return context.Background()
-}
-
-func int64String(value int64) string {
-	const digits = "0123456789"
-	if value == 0 {
-		return "0"
-	}
-	var buf [20]byte
-	i := len(buf)
-	for value > 0 {
-		i--
-		buf[i] = digits[value%10]
-		value /= 10
-	}
-	return string(buf[i:])
-}
