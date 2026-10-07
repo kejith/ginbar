@@ -65,10 +65,10 @@ resolve_auto_scope() {
     printf 'worker\n'
   elif ((backend)); then
     printf 'backend\n'
-  elif ((frontend)); then
-    printf 'frontend\n'
   elif ((nginx)); then
     printf 'all\n'
+  elif ((frontend)); then
+    printf 'frontend\n'
   else
     printf 'all\n'
   fi
