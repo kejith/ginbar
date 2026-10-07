@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-07
-Phase: **M6 private messages complete; consolidated M6 gate accepted; M7 production hardening next**
+Phase: **M7 production hardening in progress; bounded password-KDF admission accepted and integrated**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -35,6 +35,117 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - second bounded conversation/inbox summaries backend slice: **accepted and integrated; exact-candidate/post-integration CI green**.
   - first authenticated inbox/direct-thread frontend slice: **accepted, browser-gated and integrated; exact-candidate/post-integration CI green**.
   - consolidated M6 private-messages milestone gate: **accepted; M6 closed**.
+- M7 production hardening: **in progress**.
+  - bounded password-KDF admission control: **accepted, target-host profiled and integrated; exact-candidate/post-integration CI green**.
+
+## M7 production hardening — bounded password-KDF admission accepted and integrated
+
+Verified implementation base:
+
+`a5906f294929356445123543a435262faf4a9b00`
+
+This base was documentation/state-only. The accepted M6 executable beneath it was:
+
+`310a6f046d2ad0f74d5855d829d7d1d2948a9486`
+
+Implementation branch:
+
+`astra/m7-kdf-admission`
+
+Exact accepted executable candidate and integrated executable:
+
+`90dc49e2bfae09f9b2a578162473a03818014717`
+
+Exact-candidate `v2 CI`:
+
+- run `37682501802`;
+- job `113001863060`;
+- exact `head_sha=90dc49e2bfae09f9b2a578162473a03818014717`;
+- conclusion: **success**;
+- Go formatting, `go vet ./...`, PostgreSQL-backed `go test -v -count=1 ./...`, target-worker release-build applicability, exact checkout and tracked-clean verification all passed;
+- backend log contained **335 test/subtest RUN entries and zero failure markers**;
+- all new KDF admission/config/service/HTTP tests passed;
+- `v2-ci: PASS sha=90dc49e2bfae09f9b2a578162473a03818014717 scope=backend`.
+
+Target-host validation evidence supplied for the exact candidate was independently inspected from the uploaded archive `kdf-admission-20261007T204010Z.zip`. The uploaded bytes have SHA-256:
+
+`8ec2755f23aad3b894113331f6c4183cb7f3481910c60b5bb7f307bcf7c6cc44`
+
+The archive passed ZIP integrity checks. Its raw logs independently prove the exact SHA, green exact-candidate CI, tracked-clean detached target checkout, commands, benchmark output, focused tests, host/runtime metadata, RSS measurements, concurrency measurements and cleanup. The local agent's archived findings named a different retained-ZIP SHA (`5dbbcd40c18f105bd8b75de9d6278a631ed01ce4713721a99bee335e1a207f83`); therefore acceptance relies on the independently inspected uploaded archive contents and GitHub evidence, not on that claimed archive checksum. This is an evidence-packaging provenance discrepancy, not an application defect.
+
+### Accepted admission boundary
+
+- Argon2id defaults remain unchanged at **64 MiB memory, one iteration, parallelism one**.
+- Registration hashing and login verification share one auth-service-local admission boundary.
+- Two bounded buffered channels use standard synchronization only: one bounds running KDF operations and one bounds queued/waiting requests.
+- Accepted conservative default: **1 running KDF + 4 queued requests**.
+- Runtime configuration is `GINBAR_AUTH_KDF_MAX_CONCURRENT` (positive integer) and `GINBAR_AUTH_KDF_MAX_QUEUED` (non-negative integer, including zero queue).
+- Saturation happens before invitation or password-credential lookup for valid-shaped requests, so overload does not disclose credential/invitation validity.
+- Saturation maps uniformly to HTTP **503** code `authentication_unavailable` for registration and login, distinct from invalid credentials without leaking credential validity.
+- Waiting acquisition is context-aware; canceled waiters release queue capacity synchronously.
+- Context is rechecked after credential/invitation lookup and immediately before Argon2 starts, preventing newly canceled requests from beginning KDF work.
+- Once `x/crypto/argon2` starts it is synchronous/non-interruptible; the admitted operation completes and releases its running token afterward.
+- KDF capacity is released before durable registration persistence or session creation.
+- No worker pool, background goroutine, Redis state, distributed limiting, client-IP policy, lockout, CAPTCHA or general abuse framework was added.
+
+### Accepted target-host measurements
+
+Production-class target evidence used an Intel Core i7-7700, 8 hardware threads, Go 1.25.0, approximately 62 GiB RAM / 46 GiB available, with low pre-gate host load and no material overlapping workload.
+
+Measured default 64 MiB / t=1 / p=1 behavior:
+
+- warmed `BenchmarkPasswordHash`: **43.7 ms/op**;
+- warmed `BenchmarkPasswordVerify`: **44.0 ms/op**;
+- cold first hash/verify in the disposable probe: approximately **88–95 ms**;
+- `BenchmarkPasswordVerifyParallel` at GOMAXPROCS=8: **11.25 ms/op** aggregate benchmark figure;
+- limiter-only `BenchmarkKDFAdmission`: **44.97 ns/op, 0 B/op, 0 allocs/op**.
+
+Measured memory/concurrency behavior:
+
+- fresh process after one hash: approximately **68 MiB peak RSS**;
+- after a subsequent verify before prior memory is reclaimed: approximately **134 MiB peak RSS**;
+- serial reuse remained flat rather than accumulating;
+- two concurrent KDFs peaked around **265–290 MiB**;
+- four concurrent KDFs peaked around **320–326 MiB**;
+- four serial verifies took approximately **209–233 ms** total;
+- two-way concurrency took approximately **188–212 ms**, only about 1.1× wall-clock improvement while increasing per-request contention and RSS;
+- four-way concurrency took approximately **119–141 ms**, improving throughput but materially increasing memory-bandwidth contention and per-request resource cost;
+- probe goroutine count was **1 at baseline and 1 at completion** in both runs;
+- no swap or major page faults occurred in the probe runs.
+
+Correctness/resource validation passed:
+
+- all 15 focused auth tests;
+- stable HTTP 503 saturation behavior for login and registration;
+- KDF runtime config default/override/invalid-value tests;
+- the seven admission/service-admission tests repeated three times: **21/21 pass**;
+- bounded running/queue capacity, cancellation release, capacity reuse and shared registration/login admission;
+- no capacity leak, waiter growth, goroutine growth or cancellation defect observed.
+
+The target host could not run `go test -race` because no C compiler was installed. The first attempt had CGO disabled and the explicit CGO retry failed with `gcc` absent. This is an environmental evidence limitation rather than a candidate defect; exact-candidate CI, deterministic channel-state assertions, repeated concurrency tests, zero-allocation limiter benchmarking and flat goroutine evidence are sufficient for this slice.
+
+Decision: **accept the bounded password-KDF admission slice with the 1-running/4-queued default unchanged**. The target measurements do not justify increasing concurrency. Any future increase requires production-load burst/p99 latency and co-located RSS evidence.
+
+### Integration verification
+
+Immediately before integration, live `v2` was:
+
+`a5906f294929356445123543a435262faf4a9b00`
+
+The candidate was exactly four commits ahead with zero commits behind. Remote `v2` was non-force fast-forwarded with an expected-SHA lease to:
+
+`90dc49e2bfae09f9b2a578162473a03818014717`
+
+Post-integration `v2 CI`:
+
+- run `37687463996`;
+- job `113018860739`;
+- branch `v2`;
+- exact `head_sha=90dc49e2bfae09f9b2a578162473a03818014717`;
+- conclusion: **success**;
+- exact checkout, scoped backend correctness, target-worker release-build applicability and tracked-clean verification all passed.
+
+The implementation-branch documentation commit was not integrated. The executable state above is authoritative for this slice.
 
 ## M6 private messages — first backend foundation accepted and integrated
 
@@ -1379,6 +1490,8 @@ No unresolved correctness, authorization, concurrency, schema or SQL-plan blocke
 
 No unresolved correctness, navigation, stale-response, retained-state or browser-performance blocker remains from M6. The consolidated gate exercised populated board/profile/media state, verified zero messaging-induced board row/thumbnail churn, retained browser traces, revalidated the API/SQL contracts and found no concrete missing M6 capability. The dedicated frontend gate limitations are therefore closed as milestone blockers.
 
+No unresolved correctness, admission-capacity, cancellation, HTTP-semantics, allocation or target-resource blocker remains from the accepted M7 password-KDF admission slice. The production-class target supports the conservative 1-running/4-queued default; measured 2-way/4-way KDF concurrency increased RSS and memory-bandwidth contention enough that no higher default is justified. The target lacked a C compiler for `-race`; this remains an evidence-environment limitation, not an application blocker. The uploaded evidence ZIP hash differs from the local-agent-reported retained hash even though its raw contents are internally consistent and ZIP-clean; future evidence packaging should return the checksum of the exact transferred archive without post-hash repacking.
+
 ## Single best next task
 
-Implement the **first M7 production-hardening slice: bounded password-KDF admission control**. Registration and login currently perform Argon2id work with default 64 MiB memory cost per operation and no concurrency admission boundary, so a request flood can multiply memory/CPU work before broader rate-limiting policy exists. Add the smallest cancellation-aware, configurable concurrency gate around password hashing/verification, preserve existing authentication and error semantics, bound queued/in-flight work, and add deterministic service/HTTP concurrency tests plus an applicable resource/latency benchmark. Do not add Redis, distributed limiting, trusted-proxy/client-IP parsing or broad nginx rate-limit policy in this slice; choose any production concurrency default from measured target-host evidence rather than guesswork.
+Implement the **first v2 production nginx serving boundary**. Add a v2-specific production configuration for TLS/static frontend, immutable hashed frontend assets, processed media, SPA fallback and reverse proxying to the Go v2 API; preserve the accepted same-origin/Host/X-Forwarded-Proto behavior and upload streaming requirements, and add reproducible nginx syntax/HTTP cache-header/proxy contract validation. Do not reuse the legacy wallium/Fiber/Redis production assumptions, do not add per-IP rate limits in this slice, and do not modify a live host deployment before the candidate configuration is reviewed and gated.
