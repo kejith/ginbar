@@ -131,6 +131,7 @@ func NewWithConfig(store Store, cfg Config) *Server {
 	s.mux.HandleFunc("GET /healthz", s.health)
 	s.mux.HandleFunc("GET /api/v2/feed", s.listFeed)
 	s.mux.HandleFunc("GET /api/v2/users/{id}", s.getProfile)
+	s.mux.Handle("GET /api/v2/messages", s.requireAuth(http.HandlerFunc(s.listPrivateMessageInbox)))
 	s.mux.Handle("GET /api/v2/messages/{id}", s.requireAuth(http.HandlerFunc(s.listPrivateMessages)))
 	s.mux.Handle("POST /api/v2/messages/{id}", s.requireAuth(http.HandlerFunc(s.sendPrivateMessage)))
 	s.mux.HandleFunc("GET /api/v2/posts/{id}/around", s.aroundPost)

@@ -16,6 +16,35 @@ type sendPrivateMessageRequest struct {
 	Body *string `json:"body"`
 }
 
+func (s *Server) listPrivateMessageInbox(w http.ResponseWriter, r *http.Request) {
+	before, err := optionalPositiveInt64(r.URL.Query().Get("before"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_cursor", err.Error())
+		return
+	}
+	limit, err := optionalPositiveInt(r.URL.Query().Get("limit"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid_limit", err.Error())
+		return
+	}
+	principal, ok := PrincipalFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthenticated", "authentication required")
+		return
+	}
+
+	page, err := s.privateMessages.Inbox(r.Context(), privatemessage.InboxQuery{
+		ActorUserID: principal.UserID,
+		Before:      before,
+		Limit:       limit,
+	})
+	if err != nil {
+		writeServiceError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, page)
+}
+
 func (s *Server) listPrivateMessages(w http.ResponseWriter, r *http.Request) {
 	peerUserID, ok := parseMessagePeerID(w, r)
 	if !ok {

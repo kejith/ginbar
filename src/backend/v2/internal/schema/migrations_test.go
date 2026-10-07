@@ -20,6 +20,7 @@ func TestMigrationSet(t *testing.T) {
 		"006_auth_sessions.sql",
 		"007_moderation_audit.sql",
 		"008_private_messages.sql",
+		"009_private_message_inbox.sql",
 	}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("got %#v want %#v", names, want)
@@ -142,4 +143,26 @@ func TestMigrationSet(t *testing.T) {
 			t.Fatalf("private messages migration missing %q", required)
 		}
 	}
+
+	inbox, err := Migration(names[8])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range [][]byte{
+		[]byte("CREATE TABLE private_message_conversations"),
+		[]byte("user_low_id bigint NOT NULL REFERENCES users(id)"),
+		[]byte("user_high_id bigint NOT NULL REFERENCES users(id)"),
+		[]byte("latest_message_id bigint NOT NULL REFERENCES private_messages(id)"),
+		[]byte("private_message_conversations_distinct_ordered_users"),
+		[]byte("private_message_conversations_low_latest_idx"),
+		[]byte("(user_low_id, latest_message_id DESC, user_high_id)"),
+		[]byte("private_message_conversations_high_latest_idx"),
+		[]byte("(user_high_id, latest_message_id DESC, user_low_id)"),
+		[]byte("max(id)"),
+	} {
+		if !bytes.Contains(inbox, required) {
+			t.Fatalf("private message inbox migration missing %q", required)
+		}
+	}
+
 }
