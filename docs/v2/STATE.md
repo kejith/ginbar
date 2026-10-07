@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-07
-Phase: **M7 production hardening in progress; bounded password-KDF admission accepted and integrated**
+Phase: **M7 production hardening in progress; first v2 production nginx serving-boundary candidate CI-green and awaiting review/acceptance**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -37,6 +37,78 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - consolidated M6 private-messages milestone gate: **accepted; M6 closed**.
 - M7 production hardening: **in progress**.
   - bounded password-KDF admission control: **accepted, target-host profiled and integrated; exact-candidate/post-integration CI green**.
+  - first v2 production nginx serving boundary: **implemented on an exact CI-green candidate; awaiting review/acceptance; not integrated and live target nginx untouched**.
+
+## M7 production hardening — first v2 production nginx serving boundary candidate ready for review
+
+Verified implementation base:
+
+`f5dcbd51db764b9ec73617a61051252ae6fb1c84`
+
+This base is documentation/state-only. The accepted executable application state beneath it remains:
+
+`90dc49e2bfae09f9b2a578162473a03818014717`
+
+Implementation branch:
+
+`astra/m7-nginx-boundary`
+
+Exact executable/configuration candidate:
+
+`20be4765e935e715f2cd8862da0a6382e1322281`
+
+The candidate is six commits ahead of the verified base and zero behind. The functional diff is limited to `nginx/v2/nginx.conf`, `scripts/v2-nginx-test.sh`, `scripts/v2-ci.sh`, and `.github/workflows/v2-ci.yml`.
+
+Exact-candidate `v2 CI`:
+
+- run `37689584750`;
+- job `113026029629`;
+- exact `head_sha=20be4765e935e715f2cd8862da0a6382e1322281`;
+- conclusion: **success**;
+- the change resolved to `scope=all`, so Rust formatting/check/tests/clippy, PostgreSQL-backed Go formatting/vet/tests, frontend tests/typecheck/Vite build, the nginx serving-boundary fixture, target-worker release-build applicability, exact checkout, and tracked-clean verification all passed;
+- frontend validation reported **48/48 tests passed** before typecheck/build;
+- `v2-nginx-test: PASS https_port=32771 asset=/assets/index-CMeOteM1.js streaming_upstream_seen=true`;
+- `v2-ci: PASS sha=20be4765e935e715f2cd8862da0a6382e1322281 scope=all`.
+
+An earlier exact candidate `7612b87243661bc149b0a639c282d72740ad5077` failed only the first streaming-test measurement: a FIFO/curl time-to-first-byte probe observed about four seconds even though `nginx -T` loaded `proxy_request_buffering off`. The fixture was corrected to observe upstream request arrival directly while a known-length upload remains deliberately rate-limited. No nginx configuration change was required for that correction. The corrected exact candidate above is green.
+
+### Implemented serving boundary
+
+- a v2-only nginx configuration terminates TLS on 443 and redirects port 80 to HTTPS;
+- the SolidJS/Vite production tree is served from `/srv/ginbar/frontend`;
+- Vite `/assets/` responses are file-only and receive one-year `public, immutable` caching, while `index.html` and SPA fallback responses receive `Cache-Control: no-store`;
+- only processed media below `/srv/ginbar/media/media/` is exposed at `/media/`; the sibling ingestion-source tree is never aliased and `/sources/` is explicitly rejected;
+- processed media is served by nginx with byte-range support; the fixture verifies a real `206` response and exact `Content-Range` behavior;
+- `/api/` proxies to the current v2 Go API boundary at `127.0.0.1:8080` using HTTP/1.1 keepalive;
+- the proxy sets `Host $http_host`, preserving an explicit non-default port when one exists, and overwrites `X-Forwarded-Proto` with nginx's `$scheme`; this satisfies the existing same-origin comparison of `Origin` against request scheme plus `r.Host`;
+- upload proxying is unbuffered and bounded: `/api/v2/posts/upload` permits at most 257 MiB at nginx (one MiB of multipart framing headroom above the backend's 256 MiB source cap), uses a 30-second client-body inactivity timeout, and gives the existing two-minute ingestion boundary 135-second upstream send/read timeouts;
+- URL ingestion is bounded separately at 16 KiB ahead of the backend's 8 KiB JSON decoder cap and uses the same 135-second upstream timeouts;
+- general API bodies are capped at 1 MiB with 15-second upstream send/read inactivity timeouts;
+- no Redis, Fiber, legacy `/images`/`/videos` layout, client-IP policy, rate limit, WAF, systemd/process tuning, DB tuning, backup policy, deployment automation, or broader observability was introduced.
+
+### Reproducible nginx validation
+
+`scripts/v2-nginx-test.sh` uses isolated containers and the real tracked nginx configuration. It builds the actual Vite frontend, creates disposable TLS/media/source fixtures, runs `nginx -T`, starts nginx without touching the live target host, and verifies:
+
+- TLS listener plus HTTP-to-HTTPS redirect;
+- canonical `/post/:id` SPA fallback returns the exact built application shell;
+- application shell `no-store` behavior and immutable cache headers on a real content-hashed Vite asset;
+- processed-media availability plus a byte-range `206` request;
+- direct ingestion-source and normalized traversal attempts do not expose source files;
+- API path preservation and upstream receipt of `Host` including the fixture's explicit port plus `X-Forwarded-Proto=https`;
+- a normal 1 MiB upload passes, a declared body above 257 MiB is rejected with 413, and a URL-ingestion body above 16 KiB is rejected with 413;
+- while a one MiB upload is rate-limited to remain in progress, the upstream independently confirms it has already received the request, proving runtime unbuffered upload proxying rather than relying only on configuration text;
+- loaded upload size, request-buffering, and ingestion timeout directives are also confirmed from the real `nginx -T` output.
+
+CI now treats `nginx/v2/**` and `scripts/v2-nginx-test.sh` as workflow inputs. Any nginx-boundary change resolves to the full `all` correctness scope so it cannot bypass server/frontend regression gates or target-worker applicability.
+
+### Status and unresolved issues
+
+Decision: **implementation complete and exact-candidate CI green; review/acceptance is still required before integration**.
+
+No correctness blocker is known for the implemented serving boundary. The live target-host nginx was not modified or reloaded. Certificate provisioning, host-specific deployment/update mechanics, trusted-proxy/client-IP policy, rate limiting, process/system limits, backups, DB tuning, and broader production observability remain intentionally outside this slice rather than unresolved defects.
+
+M7 remains **in progress**.
 
 ## M7 production hardening — bounded password-KDF admission accepted and integrated
 
@@ -1494,4 +1566,4 @@ No unresolved correctness, admission-capacity, cancellation, HTTP-semantics, all
 
 ## Single best next task
 
-Implement the **first v2 production nginx serving boundary**. Add a v2-specific production configuration for TLS/static frontend, immutable hashed frontend assets, processed media, SPA fallback and reverse proxying to the Go v2 API; preserve the accepted same-origin/Host/X-Forwarded-Proto behavior and upload streaming requirements, and add reproducible nginx syntax/HTTP cache-header/proxy contract validation. Do not reuse the legacy wallium/Fiber/Redis production assumptions, do not add per-IP rate limits in this slice, and do not modify a live host deployment before the candidate configuration is reviewed and gated.
+Review the exact first-v2-production-nginx candidate `20be4765e935e715f2cd8862da0a6382e1322281` on `astra/m7-nginx-boundary` against this serving-boundary scope and exact-candidate CI run `37689584750` / job `113026029629`. Return an explicit accept/reject decision with concrete blockers if any; do not integrate into `v2` and do not modify or reload the live target-host nginx during this review.
