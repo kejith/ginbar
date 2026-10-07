@@ -20,6 +20,7 @@ import (
 	"github.com/kejith/ginbar/backend/v2/internal/moderation"
 	"github.com/kejith/ginbar/backend/v2/internal/postvote"
 	"github.com/kejith/ginbar/backend/v2/internal/profile"
+	"github.com/kejith/ginbar/backend/v2/internal/regenerate"
 	"github.com/kejith/ginbar/backend/v2/internal/roleadmin"
 	"github.com/kejith/ginbar/backend/v2/internal/search"
 	"github.com/kejith/ginbar/backend/v2/internal/tag"
@@ -36,6 +37,7 @@ type Store interface {
 	profile.Store
 	moderation.Store
 	mediajobadmin.Store
+	regenerate.Repository
 	roleadmin.Store
 }
 
@@ -67,6 +69,7 @@ type Server struct {
 	profiles             *profile.Service
 	moderation           *moderation.Service
 	mediaJobs            *mediajobadmin.Service
+	regeneration         *regenerate.Service
 	roleAdmin            *roleadmin.Service
 	ingest               *ingest.Service
 	mux                  *http.ServeMux
@@ -112,6 +115,7 @@ func NewWithConfig(store Store, cfg Config) *Server {
 		profiles:             profile.New(store),
 		moderation:           moderation.New(store),
 		mediaJobs:            mediajobadmin.New(store),
+		regeneration:         regenerate.New(store),
 		roleAdmin:            roleadmin.New(store),
 		ingest:               cfg.Ingest,
 		mux:                  http.NewServeMux(),
@@ -132,6 +136,7 @@ func NewWithConfig(store Store, cfg Config) *Server {
 	s.mux.Handle("PUT /api/v2/posts/{id}/vote", s.requireAuth(http.HandlerFunc(s.setPostVote)))
 	s.mux.Handle("PUT /api/v2/posts/{id}/moderation", s.requireAuth(http.HandlerFunc(s.moderatePost)))
 	s.mux.Handle("GET /api/v2/admin/media-jobs", s.requireAuth(http.HandlerFunc(s.listMediaJobs)))
+	s.mux.Handle("POST /api/v2/admin/posts/{id}/regeneration", s.requireAuth(http.HandlerFunc(s.requestRegeneration)))
 	s.mux.Handle("GET /api/v2/admin/users/{id}/roles", s.requireAuth(http.HandlerFunc(s.getUserRoles)))
 	s.mux.Handle("PUT /api/v2/admin/users/{id}/roles/moderator", s.requireAuth(http.HandlerFunc(s.grantModerator)))
 	s.mux.Handle("DELETE /api/v2/admin/users/{id}/roles/moderator", s.requireAuth(http.HandlerFunc(s.revokeModerator)))
