@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-07
-Phase: **M5 moderation/admin/imports in progress; second role-administration slice accepted with exact-candidate CI green; integration pending**
+Phase: **M5 moderation/admin/imports in progress; second role-administration slice accepted, integrated, and post-integration CI green**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -27,9 +27,9 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - first imports HTTP/config slice: **accepted, integrated, exact-candidate CI green, and live local acceptance gate passed**;
   - first jobs/admin observability slice: **accepted, integrated, exact-candidate/local-gate/post-integration CI green**;
   - first role-administration slice: **accepted, integrated, exact-candidate/post-integration CI green**.
-  - second role-administration/bootstrap slice: **accepted with exact-candidate CI green; integration pending**.
+  - second role-administration/bootstrap slice: **accepted, integrated, exact-candidate/post-integration CI green**.
 
-## M5 role administration — first-admin bootstrap and admin-role mutation accepted; integration pending
+## M5 role administration — first-admin bootstrap and admin-role mutation accepted and integrated
 
 Verified implementation base:
 
@@ -92,9 +92,28 @@ Retained `EXPLAIN (ANALYZE, BUFFERS)` evidence showed:
 
 Decision: **accept the second M5 role-administration slice**. The exact-candidate CI exercises the real PostgreSQL concurrency and SQL-plan boundary for this backend-only slice; no browser or target-host local-agent gate is required before integration. No new role index is justified by the retained plans.
 
-### Integration status
+### Integration and post-integration CI
 
-Pending. Immediately before this state update, live `v2` remained `5e2f108fe43fc473349b52337e513c1a816cf52b`; implementation branch executable head `641d2985eefec3325455d9759937a8f85e3df89f` was ahead with zero divergence. Integrate only by a non-force expected-SHA fast-forward after re-verifying the live ref, then require post-integration `v2 CI` green before closing the slice.
+Immediately before integration, live `v2` was:
+
+`5e2f108fe43fc473349b52337e513c1a816cf52b`
+
+The implementation/state branch head was 18 commits ahead and zero behind:
+
+`ff634aeb29328d30693a2c03559c3d74dd535fe5`
+
+Remote `v2` was fast-forwarded non-force with expected-SHA lease from `5e2f108fe43fc473349b52337e513c1a816cf52b` to `ff634aeb29328d30693a2c03559c3d74dd535fe5`. The only commit above exact accepted executable `641d2985eefec3325455d9759937a8f85e3df89f` is this slice's documentation/state acceptance commit, so integrated application files are identical to the accepted candidate.
+
+Post-integration `v2 CI`:
+
+- run `37615393543`;
+- job `112772383796`;
+- `head_branch=v2`;
+- exact integrated head `ff634aeb29328d30693a2c03559c3d74dd535fe5`;
+- conclusion: **success**;
+- exact checkout/SHA verification, scoped correctness, target-worker build applicability, and tracked-clean verification all passed.
+
+Integration decision: **the second M5 role-administration slice is closed**. Exact executable application state is `641d2985eefec3325455d9759937a8f85e3df89f`; this final state update is documentation-only.
 
 ## M5 role administration — accepted and integrated
 
