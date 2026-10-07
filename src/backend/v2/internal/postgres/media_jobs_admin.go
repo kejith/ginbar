@@ -29,10 +29,11 @@ WITH actor AS MATERIALIZED (
 		max_attempts,
 		available_at,
 		claimed_at,
-		claimed_by,
+		left(claimed_by, 256) AS claimed_by,
 		lease_expires_at,
 		lease_generation,
-		last_error,
+		left(last_error, 2048) AS last_error,
+		last_error IS NOT NULL AND char_length(last_error) > 2048 AS last_error_truncated,
 		created_at,
 		updated_at
 	FROM media_jobs
@@ -56,6 +57,7 @@ SELECT
 	jobs.lease_expires_at,
 	jobs.lease_generation,
 	jobs.last_error,
+	jobs.last_error_truncated,
 	jobs.created_at,
 	jobs.updated_at
 FROM actor
@@ -87,21 +89,22 @@ func (s *Store) ListMediaJobs(
 	for rows.Next() {
 		var allowed bool
 		var (
-			id              pgtype.Int8
-			postID          pgtype.Int8
-			kind            pgtype.Int2
-			state           pgtype.Int2
-			priority        pgtype.Int2
-			attempts        pgtype.Int4
-			maxAttempts     pgtype.Int4
-			availableAt     pgtype.Timestamptz
-			claimedAt       pgtype.Timestamptz
-			claimedBy       pgtype.Text
-			leaseExpiresAt  pgtype.Timestamptz
-			leaseGeneration pgtype.Int8
-			lastError       pgtype.Text
-			createdAt       pgtype.Timestamptz
-			updatedAt       pgtype.Timestamptz
+			id                 pgtype.Int8
+			postID             pgtype.Int8
+			kind               pgtype.Int2
+			state              pgtype.Int2
+			priority           pgtype.Int2
+			attempts           pgtype.Int4
+			maxAttempts        pgtype.Int4
+			availableAt        pgtype.Timestamptz
+			claimedAt          pgtype.Timestamptz
+			claimedBy          pgtype.Text
+			leaseExpiresAt     pgtype.Timestamptz
+			leaseGeneration    pgtype.Int8
+			lastError          pgtype.Text
+			lastErrorTruncated pgtype.Bool
+			createdAt          pgtype.Timestamptz
+			updatedAt          pgtype.Timestamptz
 		)
 		if err := rows.Scan(
 			&allowed,
@@ -118,6 +121,7 @@ func (s *Store) ListMediaJobs(
 			&leaseExpiresAt,
 			&leaseGeneration,
 			&lastError,
+			&lastErrorTruncated,
 			&createdAt,
 			&updatedAt,
 		); err != nil {
@@ -132,26 +136,27 @@ func (s *Store) ListMediaJobs(
 		}
 		if !postID.Valid || !kind.Valid || !state.Valid || !priority.Valid || !attempts.Valid ||
 			!maxAttempts.Valid || !availableAt.Valid || !leaseGeneration.Valid ||
-			!createdAt.Valid || !updatedAt.Valid {
+			!lastErrorTruncated.Valid || !createdAt.Valid || !updatedAt.Valid {
 			return nil, fmt.Errorf("scan media job: incomplete authoritative state")
 		}
 
 		records = append(records, mediajobadmin.Record{
-			ID:              id.Int64,
-			PostID:          postID.Int64,
-			Kind:            kind.Int16,
-			State:           state.Int16,
-			Priority:        priority.Int16,
-			Attempts:        attempts.Int32,
-			MaxAttempts:     maxAttempts.Int32,
-			AvailableAt:     availableAt.Time,
-			ClaimedAt:       optionalTime(claimedAt),
-			ClaimedBy:       optionalText(claimedBy),
-			LeaseExpiresAt:  optionalTime(leaseExpiresAt),
-			LeaseGeneration: leaseGeneration.Int64,
-			LastError:       optionalText(lastError),
-			CreatedAt:       createdAt.Time,
-			UpdatedAt:       updatedAt.Time,
+			ID:                 id.Int64,
+			PostID:             postID.Int64,
+			Kind:               kind.Int16,
+			State:              state.Int16,
+			Priority:           priority.Int16,
+			Attempts:           attempts.Int32,
+			MaxAttempts:        maxAttempts.Int32,
+			AvailableAt:        availableAt.Time,
+			ClaimedAt:          mediaJobOptionalTime(claimedAt),
+			ClaimedBy:          mediaJobOptionalText(claimedBy),
+			LeaseExpiresAt:     mediaJobOptionalTime(leaseExpiresAt),
+			LeaseGeneration:    leaseGeneration.Int64,
+			LastError:          mediaJobOptionalText(lastError),
+			LastErrorTruncated: lastErrorTruncated.Bool,
+			CreatedAt:          createdAt.Time,
+			UpdatedAt:          updatedAt.Time,
 		})
 	}
 	if err := rows.Err(); err != nil {
@@ -163,7 +168,7 @@ func (s *Store) ListMediaJobs(
 	return records, nil
 }
 
-func optionalTime(value pgtype.Timestamptz) *time.Time {
+func mediaJobOptionalTime(value pgtype.Timestamptz) *time.Time {
 	if !value.Valid {
 		return nil
 	}
@@ -171,7 +176,7 @@ func optionalTime(value pgtype.Timestamptz) *time.Time {
 	return &result
 }
 
-func optionalText(value pgtype.Text) *string {
+func mediaJobOptionalText(value pgtype.Text) *string {
 	if !value.Valid {
 		return nil
 	}
