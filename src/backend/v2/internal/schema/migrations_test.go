@@ -19,6 +19,7 @@ func TestMigrationSet(t *testing.T) {
 		"005_media_job_regeneration_lookup.sql",
 		"006_auth_sessions.sql",
 		"007_moderation_audit.sql",
+		"008_private_messages.sql",
 	}
 	if !reflect.DeepEqual(names, want) {
 		t.Fatalf("got %#v want %#v", names, want)
@@ -121,6 +122,26 @@ func TestMigrationSet(t *testing.T) {
 	} {
 		if !bytes.Contains(moderationAudit, required) {
 			t.Fatalf("moderation audit migration missing %q", required)
+		}
+	}
+
+	privateMessages, err := Migration(names[7])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, required := range [][]byte{
+		[]byte("CREATE TABLE private_messages"),
+		[]byte("sender_user_id bigint NOT NULL REFERENCES users(id)"),
+		[]byte("recipient_user_id bigint NOT NULL REFERENCES users(id)"),
+		[]byte("private_messages_distinct_users"),
+		[]byte("private_messages_body_length"),
+		[]byte("private_messages_thread_idx"),
+		[]byte("LEAST(sender_user_id, recipient_user_id)"),
+		[]byte("GREATEST(sender_user_id, recipient_user_id)"),
+		[]byte("id DESC"),
+	} {
+		if !bytes.Contains(privateMessages, required) {
+			t.Fatalf("private messages migration missing %q", required)
 		}
 	}
 }

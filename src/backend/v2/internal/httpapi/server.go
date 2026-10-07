@@ -20,6 +20,7 @@ import (
 	"github.com/kejith/ginbar/backend/v2/internal/moderation"
 	"github.com/kejith/ginbar/backend/v2/internal/postvote"
 	"github.com/kejith/ginbar/backend/v2/internal/profile"
+	"github.com/kejith/ginbar/backend/v2/internal/privatemessage"
 	"github.com/kejith/ginbar/backend/v2/internal/regenerate"
 	"github.com/kejith/ginbar/backend/v2/internal/roleadmin"
 	"github.com/kejith/ginbar/backend/v2/internal/search"
@@ -35,6 +36,7 @@ type Store interface {
 	commentvote.Store
 	tag.Store
 	profile.Store
+	privatemessage.Store
 	moderation.Store
 	mediajobadmin.Store
 	regenerate.Repository
@@ -67,6 +69,7 @@ type Server struct {
 	commentVote          *commentvote.Service
 	tags                 *tag.Service
 	profiles             *profile.Service
+	privateMessages       *privatemessage.Service
 	moderation           *moderation.Service
 	mediaJobs            *mediajobadmin.Service
 	regeneration         *regenerate.Service
@@ -113,6 +116,7 @@ func NewWithConfig(store Store, cfg Config) *Server {
 		commentVote:          commentvote.New(store),
 		tags:                 tag.New(store),
 		profiles:             profile.New(store),
+		privateMessages:       privatemessage.New(store),
 		moderation:           moderation.New(store),
 		mediaJobs:            mediajobadmin.New(store),
 		regeneration:         regenerate.New(store),
@@ -127,6 +131,8 @@ func NewWithConfig(store Store, cfg Config) *Server {
 	s.mux.HandleFunc("GET /healthz", s.health)
 	s.mux.HandleFunc("GET /api/v2/feed", s.listFeed)
 	s.mux.HandleFunc("GET /api/v2/users/{id}", s.getProfile)
+	s.mux.Handle("GET /api/v2/messages/{id}", s.requireAuth(http.HandlerFunc(s.listPrivateMessages)))
+	s.mux.Handle("POST /api/v2/messages/{id}", s.requireAuth(http.HandlerFunc(s.sendPrivateMessage)))
 	s.mux.HandleFunc("GET /api/v2/posts/{id}/around", s.aroundPost)
 	s.mux.HandleFunc("GET /api/v2/posts/{id}/media-status", s.postMediaStatus)
 	s.mux.HandleFunc("GET /api/v2/posts/{id}/comments", s.listComments)
