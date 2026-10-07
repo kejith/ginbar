@@ -24,11 +24,13 @@ func TestListMediaJobsRequiresModeratorOrAdminAndPagesByJobID(t *testing.T) {
 	grantRole(t, store, adminID, role.Admin)
 
 	now := time.Now().UTC().Truncate(time.Microsecond)
+	longWorkerID := strings.Repeat("w", 300)
+	longFailure := strings.Repeat("e", 2100)
 	queuedID := insertMediaJobsAdminJob(t, store, authorID, mediajobadmin.StatePending, 0, now, "", "")
 	retryID := insertMediaJobsAdminJob(t, store, authorID, mediajobadmin.StatePending, 2, now.Add(time.Minute), "", "temporary failure")
-	runningID := insertMediaJobsAdminJob(t, store, authorID, mediajobadmin.StateRunning, 1, now, "worker-a", "previous transient")
+	runningID := insertMediaJobsAdminJob(t, store, authorID, mediajobadmin.StateRunning, 1, now, longWorkerID, "previous transient")
 	succeededID := insertMediaJobsAdminJob(t, store, authorID, mediajobadmin.StateSucceeded, 1, now, "", "")
-	failedID := insertMediaJobsAdminJob(t, store, authorID, mediajobadmin.StateFailed, 5, now, "", "terminal failure")
+	failedID := insertMediaJobsAdminJob(t, store, authorID, mediajobadmin.StateFailed, 5, now, "", longFailure)
 
 	if _, err := store.ListMediaJobs(ctx, memberID, 0, 2); !errors.Is(err, mediajobadmin.ErrForbidden) {
 		t.Fatalf("member error=%v", err)
@@ -43,8 +45,9 @@ func TestListMediaJobsRequiresModeratorOrAdminAndPagesByJobID(t *testing.T) {
 		first.NextBefore != succeededID || first.Jobs[0].State != "failed" {
 		t.Fatalf("first page=%#v", first)
 	}
-	if first.Jobs[0].LastError == nil || *first.Jobs[0].LastError != "terminal failure" {
-		t.Fatalf("failed job metadata=%#v", first.Jobs[0])
+	if first.Jobs[0].LastError == nil || len(*first.Jobs[0].LastError) != 2048 ||
+		!first.Jobs[0].LastErrorTruncated {
+		t.Fatalf("failed job bounded metadata=%#v", first.Jobs[0])
 	}
 
 	second, err := service.List(ctx, mediajobadmin.Query{ActorUserID: moderatorID, Before: first.NextBefore, Limit: 2})
@@ -56,12 +59,12 @@ func TestListMediaJobsRequiresModeratorOrAdminAndPagesByJobID(t *testing.T) {
 		t.Fatalf("second page=%#v", second)
 	}
 	if second.Jobs[0].State != "running" || second.Jobs[0].ClaimedBy == nil ||
-		*second.Jobs[0].ClaimedBy != "worker-a" || second.Jobs[0].LeaseExpiresAt == nil {
+		len(*second.Jobs[0].ClaimedBy) != 256 || second.Jobs[0].LeaseExpiresAt == nil {
 		t.Fatalf("running metadata=%#v", second.Jobs[0])
 	}
 	if second.Jobs[1].State != "pending" || second.Jobs[1].Attempts != 2 ||
 		second.Jobs[1].LastError == nil || *second.Jobs[1].LastError != "temporary failure" ||
-		!second.Jobs[1].AvailableAt.After(now) {
+		second.Jobs[1].LastErrorTruncated || !second.Jobs[1].AvailableAt.After(now) {
 		t.Fatalf("retry metadata=%#v", second.Jobs[1])
 	}
 	for _, job := range second.Jobs {
