@@ -172,11 +172,11 @@ func (s *Store) RevokeModerator(
 
 func (s *Store) scanUserRoleState(row rowScanner, operation string) (roleadmin.State, error) {
 	var (
-		allowed                    bool
-		found                      bool
-		state                      roleadmin.State
-		moderatorGrantedByUserID   pgtype.Int8
-		adminGrantedByUserID       pgtype.Int8
+		allowed                  bool
+		found                    bool
+		state                    roleadmin.State
+		moderatorGrantedByUserID pgtype.Int8
+		adminGrantedByUserID     pgtype.Int8
 	)
 	if err := row.Scan(
 		&allowed,
