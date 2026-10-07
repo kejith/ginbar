@@ -321,6 +321,46 @@ func TestConcurrentAdminGrantsStayUniqueAndPreserveOneGrantor(t *testing.T) {
 	}
 }
 
+func TestBootstrapFirstAdminPlanIsBoundedForFreshInstallation(t *testing.T) {
+	store, cleanup := testAuthStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	userID := createRoleAdminUser(t, store, "bootstrap-plan-admin")
+	if _, err := store.pool.Exec(ctx, "ANALYZE users, user_roles"); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, err := store.pool.Query(
+		ctx,
+		"EXPLAIN (ANALYZE, BUFFERS) "+bootstrapFirstAdminSQL,
+		userID,
+		role.Admin,
+		role.Moderator,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := collectPlan(t, rows)
+	t.Logf("first admin bootstrap plan:\n%s", plan)
+	assertPlanContains(t, plan, "users_pkey")
+	assertPlanContains(t, plan, "user_roles_pkey")
+	assertPlanExcludes(t, plan, "external merge", "Disk:")
+
+	var grantorID int64
+	if err := store.pool.QueryRow(ctx, `
+		SELECT granted_by_user_id
+		FROM user_roles
+		WHERE user_id = $1
+		  AND role = $2
+	`, userID, role.Admin).Scan(&grantorID); err != nil {
+		t.Fatal(err)
+	}
+	if grantorID != userID {
+		t.Fatalf("bootstrap plan provenance=%d want=%d", grantorID, userID)
+	}
+}
+
 func TestAdminRoleMutationPlansUsePrimaryKeysWithoutLargeSequentialScans(t *testing.T) {
 	store, cleanup := testAuthStore(t)
 	defer cleanup()
