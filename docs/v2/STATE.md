@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-07
-Phase: **M5 moderation/admin/imports in progress; second role-administration slice accepted, integrated, and post-integration CI green**
+Phase: **M5 moderation/admin/imports in progress; first regeneration/admin mutation accepted with exact-candidate CI green, integration pending**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -28,6 +28,79 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - first jobs/admin observability slice: **accepted, integrated, exact-candidate/local-gate/post-integration CI green**;
   - first role-administration slice: **accepted, integrated, exact-candidate/post-integration CI green**.
   - second role-administration/bootstrap slice: **accepted, integrated, exact-candidate/post-integration CI green**.
+  - first regeneration/admin mutation slice: **accepted with exact-candidate CI green; integration pending**.
+
+## M5 regeneration/admin mutation — accepted; integration pending
+
+Verified implementation base:
+
+`ff7468bd16e754216c21bc070123bdff368e28be`
+
+Implementation branch:
+
+`astra/m5-regeneration-admin`
+
+Exact accepted executable candidate:
+
+`640311fc216435be90588484cbbc0624a097f598`
+
+Exact-candidate `v2 CI`:
+
+- run `37618638054`, attempt 1;
+- job `112783313294`;
+- `head_sha=640311fc216435be90588484cbbc0624a097f598`;
+- workflow/job conclusion: **success**;
+- exact checkout/SHA verification, Go formatting, `go vet ./...`, PostgreSQL-backed `go test -v -count=1 ./...`, target-worker build applicability, and tracked-clean verification all passed;
+- `v2-ci: PASS sha=640311fc216435be90588484cbbc0624a097f598 scope=backend`.
+
+Earlier branch heads were not accepted. `bd112810358d2ff47f41005007ee1ef96b135b07` and `b5133f991d68cf221a16c4fc332ea2dff7c2e1ff` exposed gofmt-only defects. `392c95cc7dcdce6d8ef5f30e961841d3ca2137db` reached the PostgreSQL suite and exposed only test-fixture/plan-assertion defects: an invalid synthetic running-job fixture, overlong fixture usernames, and an assertion expecting `posts_pkey` where PostgreSQL correctly selected the released-post partial index. All were corrected before the accepted candidate.
+
+### Accepted boundary and HTTP contract
+
+- narrow mutation: `POST /api/v2/admin/posts/{id}/regeneration`, where `{id}` is immutable numeric post identity;
+- the existing authenticated-session boundary still provides signed-out 401 `unauthenticated`, and the existing same-origin mutation policy rejects cross-origin requests before durable work;
+- actor authorization uses immutable numeric `users.id` and the authoritative PostgreSQL `user_roles` row for `role.Admin`; ordinary members and moderators receive 403 `forbidden`;
+- admin authorization and regeneration selection/mutation occur in the same bounded PostgreSQL statement, avoiding a race-prone preflight role read and avoiding an application-side reconciliation query;
+- the HTTP/service layer delegates state transitions to the existing regeneration workflow instead of duplicating media-job state logic;
+- success returns HTTP 202 with authoritative `postId`, immutable `jobId`, and string outcome `queued`, `coalesced`, or `superseded` directly from the mutation;
+- invalid numeric identity retains 400 `invalid_post_id`; missing or otherwise non-regenerable released/ready targets return stable 409 `post_not_regenerable`; internal failures retain the existing 500 `internal` contract;
+- pending work coalesces without changing attempts, availability, last error, or lease generation;
+- running work is superseded to pending, claim/lease state is cleared, retry state resets, and lease generation increments so the old worker can no longer complete with its stale ownership token;
+- succeeded and failed work requeue with the existing reset semantics;
+- released ready media rows and their storage identity remain unchanged while regeneration is merely pending/running;
+- repeated/concurrent requests serialize on the selected durable job and produce one queued result followed by coalesced results without duplicate active work;
+- no bulk regeneration, generic retry/cancel control, polling/event stream, frontend admin dashboard, Redis/cache state, schema migration, or speculative index was added.
+
+### Correctness and SQL-plan evidence
+
+Exact-candidate PostgreSQL/HTTP tests passed for:
+
+- signed-out, member, moderator and cross-origin rejection, including no durable mutation for rejected authenticated requests;
+- real authenticated admin HTTP success for succeeded, failed, pending and running durable-job states;
+- invalid post identity, missing/non-regenerable target and stable HTTP/error mapping;
+- pending coalescing with attempts, availability, last error and generation preserved;
+- running supersession with generation increment and explicit proof that the old worker's prior `claimed_by`/generation lease token can no longer complete the job;
+- succeeded/failed reset/requeue semantics;
+- preservation of currently published ready media;
+- 12 concurrent admin regeneration requests yielding exactly one queued outcome, 11 coalesced outcomes, one immutable job ID and one active durable job;
+- existing regeneration, worker/media-job, ingestion, moderation, role-administration, tag and jobs-observability behavior through the full backend suite.
+
+On a meaningful fixture with approximately 5,000 role rows and 5,000 released/ready post-source-media-job rows, retained `EXPLAIN (ANALYZE, BUFFERS)` evidence for the exact authorized mutation showed:
+
+- admin authorization through `user_roles_pkey`;
+- post/kind job lookup through `media_jobs_post_kind_id_idx`;
+- released/nondeleted post lookup through `posts_feed_released_idx`;
+- source and current-media lookups through `media_sources_pkey` and `media_pkey`;
+- the requeue update targets the immutable job through `media_jobs_pkey`;
+- the bounded target preference sort was an in-memory quicksort using 25 kB;
+- planning time was **2.435 ms** and execution time **0.569 ms** with shared-buffer hits only;
+- no large-relation sequential scan, external merge, temp spill, OFFSET, application-side filtering, N+1 pattern, preflight authorization read, or post-mutation reconciliation read was introduced.
+
+Decision: **accept the first M5 regeneration/admin mutation slice**. Exact-candidate CI exercises the full PostgreSQL authorization, concurrency, fencing and HTTP behavior relevant to this backend-only slice; no browser or target-host local-agent gate is required before integration. Existing indexes are sufficient and no new index is justified.
+
+### Integration status
+
+Candidate is accepted but not yet integrated. Immediately before the acceptance state write, live `v2` remained `ff7468bd16e754216c21bc070123bdff368e28be`; the exact executable candidate was 18 commits ahead and zero behind, with only the intended regeneration service, PostgreSQL and HTTP/test files changed.
 
 ## M5 role administration — first-admin bootstrap and admin-role mutation accepted and integrated
 
@@ -796,4 +869,4 @@ No unresolved correctness or SQL-plan blocker remains from the accepted second r
 
 ## Single best next task
 
-Expose the existing v2 media-regeneration workflow as the **first M5 regeneration/admin mutation slice**: add one narrow authenticated admin-only same-origin HTTP mutation for a numeric post ID that delegates to the existing PostgreSQL `RequestRegeneration` workflow, returns stable queued/coalesced/superseded outcomes, preserves currently published media while regeneration is pending/running, and preserves lease-generation fencing and retry ownership semantics. Add focused HTTP/PostgreSQL authorization, idempotence/concurrency/error-contract tests and retain actual SQL-plan evidence for any changed hot query. Do not add bulk regeneration, generic job retry/cancel controls, polling/event streams, frontend dashboards, new indexes without bad-plan evidence, Redis/cache state, or unrelated M5 administration.
+Integrate the accepted first M5 regeneration/admin mutation candidate `640311fc216435be90588484cbbc0624a097f598` into the verified current `v2` by non-force fast-forward with an expected-SHA lease, then require exact-head post-integration `v2 CI` green before closing the slice. Do not broaden the integration into additional implementation work.
