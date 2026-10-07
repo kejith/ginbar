@@ -835,6 +835,9 @@ const App: Component = () => {
           <span>{posts().length.toLocaleString()} retained</span>
         </div>
         <div class="topbar-meta">
+          <Show when={authState().status === "signed-in"}>
+            <a href="/messages">Messages</a>
+          </Show>
           <span>{authLabel()}</span>
           <span>{columns()} cols</span>
         </div>
