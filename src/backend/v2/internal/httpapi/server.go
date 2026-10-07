@@ -16,6 +16,7 @@ import (
 	"github.com/kejith/ginbar/backend/v2/internal/feed"
 	"github.com/kejith/ginbar/backend/v2/internal/ingest"
 	"github.com/kejith/ginbar/backend/v2/internal/mediastatus"
+	"github.com/kejith/ginbar/backend/v2/internal/mediajobadmin"
 	"github.com/kejith/ginbar/backend/v2/internal/moderation"
 	"github.com/kejith/ginbar/backend/v2/internal/postvote"
 	"github.com/kejith/ginbar/backend/v2/internal/profile"
@@ -33,6 +34,7 @@ type Store interface {
 	tag.Store
 	profile.Store
 	moderation.Store
+	mediajobadmin.Store
 }
 
 type Config struct {
@@ -62,6 +64,7 @@ type Server struct {
 	tags                 *tag.Service
 	profiles             *profile.Service
 	moderation           *moderation.Service
+	mediaJobs            *mediajobadmin.Service
 	ingest               *ingest.Service
 	mux                  *http.ServeMux
 	requestTimeout       time.Duration
@@ -105,6 +108,7 @@ func NewWithConfig(store Store, cfg Config) *Server {
 		tags:                 tag.New(store),
 		profiles:             profile.New(store),
 		moderation:           moderation.New(store),
+		mediaJobs:            mediajobadmin.New(store),
 		ingest:               cfg.Ingest,
 		mux:                  http.NewServeMux(),
 		requestTimeout:       cfg.RequestTimeout,
@@ -123,6 +127,7 @@ func NewWithConfig(store Store, cfg Config) *Server {
 	s.mux.Handle("PUT /api/v2/posts/{id}/comments/{commentId}/moderation", s.requireAuth(http.HandlerFunc(s.moderateComment)))
 	s.mux.Handle("PUT /api/v2/posts/{id}/vote", s.requireAuth(http.HandlerFunc(s.setPostVote)))
 	s.mux.Handle("PUT /api/v2/posts/{id}/moderation", s.requireAuth(http.HandlerFunc(s.moderatePost)))
+	s.mux.Handle("GET /api/v2/admin/media-jobs", s.requireAuth(http.HandlerFunc(s.listMediaJobs)))
 	s.mux.HandleFunc("GET /api/v2/posts/{id}/tags", s.listPostTags)
 	s.mux.Handle("POST /api/v2/posts/{id}/tags", s.requireAuth(http.HandlerFunc(s.addPostTag)))
 	s.mux.Handle("DELETE /api/v2/posts/{id}/tags/{tagId}", s.requireAuth(http.HandlerFunc(s.removePostTag)))
