@@ -26,7 +26,10 @@ func TestListBoundsPageAndMapsAuthoritativeState(t *testing.T) {
 	now := time.Unix(100, 0).UTC()
 	lastError := "temporary failure"
 	store := &testStore{records: []Record{
-		{ID: 30, PostID: 3, State: StateFailed, Attempts: 5, MaxAttempts: 5, AvailableAt: now, LastError: &lastError},
+		{
+			ID: 30, PostID: 3, State: StateFailed, Attempts: 5, MaxAttempts: 5,
+			AvailableAt: now, LastError: &lastError, LastErrorTruncated: true,
+		},
 		{ID: 29, PostID: 2, State: StateRunning, Attempts: 1, MaxAttempts: 5, AvailableAt: now},
 		{ID: 28, PostID: 1, State: StatePending, Attempts: 2, MaxAttempts: 5, AvailableAt: now},
 	}}
@@ -40,8 +43,8 @@ func TestListBoundsPageAndMapsAuthoritativeState(t *testing.T) {
 	if len(page.Jobs) != 2 || page.Jobs[0].ID != 30 || page.Jobs[0].State != "failed" || page.Jobs[1].State != "running" || page.NextBefore != 29 {
 		t.Fatalf("page=%#v", page)
 	}
-	if page.Jobs[0].LastError == nil || *page.Jobs[0].LastError != lastError {
-		t.Fatalf("last error=%#v", page.Jobs[0].LastError)
+	if page.Jobs[0].LastError == nil || *page.Jobs[0].LastError != lastError || !page.Jobs[0].LastErrorTruncated {
+		t.Fatalf("last error metadata=%#v", page.Jobs[0])
 	}
 }
 
