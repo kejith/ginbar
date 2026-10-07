@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-07
-Phase: **M5 moderation/admin/imports in progress; first role-administration slice accepted, integrated, and post-integration CI green**
+Phase: **M5 moderation/admin/imports in progress; second role-administration slice accepted with exact-candidate CI green; integration pending**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -27,6 +27,74 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - first imports HTTP/config slice: **accepted, integrated, exact-candidate CI green, and live local acceptance gate passed**;
   - first jobs/admin observability slice: **accepted, integrated, exact-candidate/local-gate/post-integration CI green**;
   - first role-administration slice: **accepted, integrated, exact-candidate/post-integration CI green**.
+  - second role-administration/bootstrap slice: **accepted with exact-candidate CI green; integration pending**.
+
+## M5 role administration — first-admin bootstrap and admin-role mutation accepted; integration pending
+
+Verified implementation base:
+
+`5e2f108fe43fc473349b52337e513c1a816cf52b`
+
+Implementation branch:
+
+`astra/m5-admin-bootstrap`
+
+Exact accepted executable candidate:
+
+`641d2985eefec3325455d9759937a8f85e3df89f`
+
+Exact-candidate `v2 CI`:
+
+- run `37614891041`, attempt 1;
+- job `112770739288`;
+- `head_sha=641d2985eefec3325455d9759937a8f85e3df89f`;
+- workflow/job conclusion: **success**;
+- exact checkout/SHA verification, Go formatting, `go vet ./...`, PostgreSQL-backed `go test -v -count=1 ./...`, target-worker build applicability, and tracked-clean verification all passed;
+- `v2-ci: PASS sha=641d2985eefec3325455d9759937a8f85e3df89f scope=backend`.
+
+Earlier branch heads were not accepted: `4aa22fc4edd908fba71cbe59ab5ba37849d5577d` exposed an obsolete first-slice route-absence assertion plus an over-constrained tiny-fixture plan assertion, and `96e1b6ab239b8c9fdf82a3262bf0430303869230` exposed one gofmt issue. Both were corrected before the accepted exact candidate.
+
+### Accepted boundary and policy
+
+- first-admin bootstrap is an explicit local operational command, `go run ./cmd/bootstrap-admin --user-id <numeric-user-id>`, using `DATABASE_URL` directly; no unauthenticated HTTP bootstrap endpoint exists;
+- bootstrap accepts only an existing immutable numeric `users.id`, is one-shot once any admin exists, and records the bootstrapped numeric user as `granted_by_user_id` bootstrap provenance;
+- after bootstrap, admin inspection remains `GET /api/v2/admin/users/{id}/roles`, while admin grant/revoke is exposed only to an authenticated existing admin through same-origin `PUT` / `DELETE /api/v2/admin/users/{id}/roles/admin`;
+- signed-out HTTP access retains 401 `unauthenticated`; ordinary members and moderators retain 403 `forbidden`; missing targets retain stable 404 `user_not_found`;
+- admin grant is idempotent on the existing `(user_id, role)` primary key and preserves the original numeric grantor on repeated/concurrent grants;
+- admin revoke is idempotent for an absent target role;
+- explicit self-revocation policy is **forbidden for all admins**, returning 409 `self_admin_revoke_forbidden`; this is the smallest policy that guarantees a successful revoke leaves the acting admin in place;
+- admin revocation acquires a transaction-scoped PostgreSQL advisory lock in a separate statement and then revalidates actor admin authority in the mutation statement under a fresh READ COMMITTED snapshot; concurrent cross-revocations therefore cannot remove the final admin;
+- bootstrap uses the same advisory-lock domain so concurrent first-admin attempts create exactly one initial admin;
+- grant/revoke/bootstrap return authoritative resulting role state from their bounded PostgreSQL operation without an application-side reconciliation read;
+- existing moderator-role administration SQL/routes remain unchanged; existing moderation, tag-removal, ingestion, media-job observability and worker authorization/state semantics remain PostgreSQL-authoritative and unchanged;
+- no schema migration, role index, Redis/cache/event stream, frontend admin dashboard, bulk user listing, invitation administration, account disable/delete, or username-based authorization identity was added.
+
+### Correctness and SQL-plan evidence
+
+Exact-candidate PostgreSQL/HTTP tests passed for:
+
+- first-admin bootstrap, missing-target rejection, one-shot behavior, numeric bootstrap provenance and concurrent bootstrap attempts;
+- admin role read/grant/repeated grant/revoke/repeated revoke;
+- signed-out/member/moderator rejection, same-origin mutation behavior, stable HTTP/error contracts and invalid numeric identity;
+- explicit self-revocation rejection and single-admin lockout protection;
+- concurrent cross-admin revocation, where exactly one revoke succeeds and the other loses admin authority before acting, leaving exactly one admin;
+- 12 concurrent admin grants, yielding one role row with one preserved original grantor;
+- immediate authorization propagation: a newly granted admin immediately passes the existing media-job administration PostgreSQL check and immediately loses that authority after revoke;
+- preservation of the accepted moderator-role administration tests and the broader backend suite.
+
+Retained `EXPLAIN (ANALYZE, BUFFERS)` evidence showed:
+
+- fresh-install bootstrap with 5,001 users used `users_pkey` for the target and `user_roles_pkey` for conflict arbitration; execution was **0.864 ms** including FK triggers;
+- bootstrap's role-only existence/moderator probes sequentially scanned the intentionally empty fresh-install `user_roles` relation, taking about **0.002 ms**; this one-shot empty-relation shape does not justify a speculative role index;
+- admin grant on a 5,000-role fixture used `user_roles_pkey` for actor/role access, `users_pkey` for the target and `user_roles_pkey` as the conflict arbiter; execution was **1.501 ms** including FK triggers;
+- admin revoke on the same meaningful fixture used `user_roles_pkey` for actor, target-role delete and moderator-state access plus `users_pkey` for the target; execution was **0.593 ms**;
+- no large-relation sequential scan, unbounded sort, temp spill, OFFSET or application-side filtering/reconciliation was introduced.
+
+Decision: **accept the second M5 role-administration slice**. The exact-candidate CI exercises the real PostgreSQL concurrency and SQL-plan boundary for this backend-only slice; no browser or target-host local-agent gate is required before integration. No new role index is justified by the retained plans.
+
+### Integration status
+
+Pending. Immediately before this state update, live `v2` remained `5e2f108fe43fc473349b52337e513c1a816cf52b`; implementation branch executable head `641d2985eefec3325455d9759937a8f85e3df89f` was ahead with zero divergence. Integrate only by a non-force expected-SHA fast-forward after re-verifying the live ref, then require post-integration `v2 CI` green before closing the slice.
 
 ## M5 role administration — accepted and integrated
 
@@ -705,6 +773,8 @@ The profile older-cursor plan can inspect filtered author rows before finding an
 
 The profile browser gate's media 404 console messages came from benchmark storage keys without corresponding media files in the disposable nginx tree. This did not affect profile route/API/state assertions and is not a candidate defect, but future consolidated browser gates should use real served fixture media when practical so console-noise checks are cleaner.
 
+No unresolved correctness or SQL-plan blocker remains from the accepted second role-administration slice. The bootstrap-only role existence probe scans an empty fresh-install `user_roles` relation by design; current evidence does not justify a role-leading index.
+
 ## Single best next task
 
-Implement the **second M5 role-administration slice**: establish an explicit first-admin bootstrap path and safe admin-role grant/revoke semantics using immutable numeric user IDs and PostgreSQL-authoritative state. Keep the HTTP mutation admin-only after bootstrap; define and enforce concurrent last-admin protection and self-revocation policy transactionally; make grant/revoke idempotent and return authoritative final role state without reconciliation reads; preserve the accepted moderator-role API and existing moderation/tag authorization semantics; add targeted HTTP/PostgreSQL/concurrency tests and actual SQL plans before adding any index. Do not add a frontend admin dashboard, bulk user listing, username-based authorization identity, invitation administration, account disable/delete, Redis/cache/event streams, or unrelated M5 work.
+Expose the existing v2 media-regeneration workflow as the **first M5 regeneration/admin mutation slice**: add one narrow authenticated admin-only same-origin HTTP mutation for a numeric post ID that delegates to the existing PostgreSQL `RequestRegeneration` workflow, returns stable queued/coalesced/superseded outcomes, preserves currently published media while regeneration is pending/running, and preserves lease-generation fencing and retry ownership semantics. Add focused HTTP/PostgreSQL authorization, idempotence/concurrency/error-contract tests and retain actual SQL-plan evidence for any changed hot query. Do not add bulk regeneration, generic job retry/cancel controls, polling/event streams, frontend dashboards, new indexes without bad-plan evidence, Redis/cache state, or unrelated M5 administration.
