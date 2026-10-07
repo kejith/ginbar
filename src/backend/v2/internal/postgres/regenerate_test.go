@@ -360,8 +360,8 @@ func TestRequestRegenerationRequiresAdminWithoutMutation(t *testing.T) {
 			store, cleanup := testIngestionStore(t)
 			defer cleanup()
 			ctx := context.Background()
-			fixture := readyRegenerationFixture(t, store, "regen-auth-target-"+tc.name, mediaJobStateSucceeded)
-			actorID := regenerationActor(t, store, "regen-auth-actor-"+tc.name, tc.actorRole)
+			fixture := readyRegenerationFixture(t, store, "regen-auth-target-" + tc.name, mediaJobStateSucceeded)
+			actorID := regenerationActor(t, store, "regen-auth-actor-" + tc.name, tc.actorRole)
 
 			_, err := store.RequestRegeneration(ctx, actorID, fixture.postID)
 			if !errors.Is(err, regenerate.ErrForbidden) {
@@ -448,7 +448,7 @@ func TestRequestRegenerationConcurrentRequestsCoalesceToOneActiveJob(t *testing.
 			t.Fatalf("unexpected concurrent outcome=%q", result.requested.Outcome)
 		}
 	}
-	if queued != 1 || coalesced != requestCount-1 {
+	if queued != 1 || coalesced != requestCount - 1 {
 		t.Fatalf("queued=%d coalesced=%d", queued, coalesced)
 	}
 
@@ -558,7 +558,7 @@ func TestRequestRegenerationPlanIsBoundedAndIndexBacked(t *testing.T) {
 
 	rows, err := store.pool.Query(
 		ctx,
-		"EXPLAIN (ANALYZE, BUFFERS) "+requestRegenerationSQL,
+		"EXPLAIN (ANALYZE, BUFFERS) " + requestRegenerationSQL,
 		adminID,
 		fixture.postID,
 		mediaJobKindInitialProcess,
