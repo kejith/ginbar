@@ -319,6 +319,9 @@ func (s *Store) RevokeAdmin(
 	}
 	defer rollbackWithTimeout(tx)
 
+	// Acquire the transaction lock in a separate statement. Under READ COMMITTED,
+	// the authorization statement below then gets a fresh snapshot after any wait,
+	// so a concurrently revoked actor cannot remove the remaining admin.
 	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", adminRoleMutationLockKey); err != nil {
 		return roleadmin.State{}, fmt.Errorf("serialize admin revocation: %w", err)
 	}
@@ -376,6 +379,9 @@ func (s *Store) BootstrapFirstAdmin(ctx context.Context, userID int64) (roleadmi
 	}
 	defer rollbackWithTimeout(tx)
 
+	// Acquire the transaction lock in a separate statement. Under READ COMMITTED,
+	// the authorization statement below then gets a fresh snapshot after any wait,
+	// so a concurrently revoked actor cannot remove the remaining admin.
 	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", adminRoleMutationLockKey); err != nil {
 		return roleadmin.State{}, fmt.Errorf("serialize admin bootstrap: %w", err)
 	}
