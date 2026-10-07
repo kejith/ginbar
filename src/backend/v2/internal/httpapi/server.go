@@ -135,6 +135,8 @@ func NewWithConfig(store Store, cfg Config) *Server {
 	s.mux.Handle("GET /api/v2/admin/users/{id}/roles", s.requireAuth(http.HandlerFunc(s.getUserRoles)))
 	s.mux.Handle("PUT /api/v2/admin/users/{id}/roles/moderator", s.requireAuth(http.HandlerFunc(s.grantModerator)))
 	s.mux.Handle("DELETE /api/v2/admin/users/{id}/roles/moderator", s.requireAuth(http.HandlerFunc(s.revokeModerator)))
+	s.mux.Handle("PUT /api/v2/admin/users/{id}/roles/admin", s.requireAuth(http.HandlerFunc(s.grantAdmin)))
+	s.mux.Handle("DELETE /api/v2/admin/users/{id}/roles/admin", s.requireAuth(http.HandlerFunc(s.revokeAdmin)))
 	s.mux.HandleFunc("GET /api/v2/posts/{id}/tags", s.listPostTags)
 	s.mux.Handle("POST /api/v2/posts/{id}/tags", s.requireAuth(http.HandlerFunc(s.addPostTag)))
 	s.mux.Handle("DELETE /api/v2/posts/{id}/tags/{tagId}", s.requireAuth(http.HandlerFunc(s.removePostTag)))
