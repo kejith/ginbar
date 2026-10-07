@@ -26,39 +26,41 @@ type Query struct {
 }
 
 type Record struct {
-	ID              int64
-	PostID          int64
-	Kind            int16
-	State           int16
-	Priority        int16
-	Attempts        int32
-	MaxAttempts     int32
-	AvailableAt     time.Time
-	ClaimedAt       *time.Time
-	ClaimedBy       *string
-	LeaseExpiresAt  *time.Time
-	LeaseGeneration int64
-	LastError       *string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	ID                 int64
+	PostID             int64
+	Kind               int16
+	State              int16
+	Priority           int16
+	Attempts           int32
+	MaxAttempts        int32
+	AvailableAt        time.Time
+	ClaimedAt          *time.Time
+	ClaimedBy          *string
+	LeaseExpiresAt     *time.Time
+	LeaseGeneration    int64
+	LastError          *string
+	LastErrorTruncated bool
+	CreatedAt          time.Time
+	UpdatedAt          time.Time
 }
 
 type Job struct {
-	ID              int64      `json:"id"`
-	PostID          int64      `json:"postId"`
-	Kind            int16      `json:"kind"`
-	State           string     `json:"state"`
-	Priority        int16      `json:"priority"`
-	Attempts        int32      `json:"attempts"`
-	MaxAttempts     int32      `json:"maxAttempts"`
-	AvailableAt     time.Time  `json:"availableAt"`
-	ClaimedAt       *time.Time `json:"claimedAt,omitempty"`
-	ClaimedBy       *string    `json:"claimedBy,omitempty"`
-	LeaseExpiresAt  *time.Time `json:"leaseExpiresAt,omitempty"`
-	LeaseGeneration int64      `json:"leaseGeneration"`
-	LastError       *string    `json:"lastError,omitempty"`
-	CreatedAt       time.Time  `json:"createdAt"`
-	UpdatedAt       time.Time  `json:"updatedAt"`
+	ID                 int64      `json:"id"`
+	PostID             int64      `json:"postId"`
+	Kind               int16      `json:"kind"`
+	State              string     `json:"state"`
+	Priority           int16      `json:"priority"`
+	Attempts           int32      `json:"attempts"`
+	MaxAttempts        int32      `json:"maxAttempts"`
+	AvailableAt        time.Time  `json:"availableAt"`
+	ClaimedAt          *time.Time `json:"claimedAt,omitempty"`
+	ClaimedBy          *string    `json:"claimedBy,omitempty"`
+	LeaseExpiresAt     *time.Time `json:"leaseExpiresAt,omitempty"`
+	LeaseGeneration    int64      `json:"leaseGeneration"`
+	LastError          *string    `json:"lastError,omitempty"`
+	LastErrorTruncated bool       `json:"lastErrorTruncated,omitempty"`
+	CreatedAt          time.Time  `json:"createdAt"`
+	UpdatedAt          time.Time  `json:"updatedAt"`
 }
 
 type Page struct {
@@ -99,21 +101,22 @@ func (s *Service) List(ctx context.Context, query Query) (Page, error) {
 			return Page{}, err
 		}
 		jobs = append(jobs, Job{
-			ID:              record.ID,
-			PostID:          record.PostID,
-			Kind:            record.Kind,
-			State:           state,
-			Priority:        record.Priority,
-			Attempts:        record.Attempts,
-			MaxAttempts:     record.MaxAttempts,
-			AvailableAt:     record.AvailableAt,
-			ClaimedAt:       record.ClaimedAt,
-			ClaimedBy:       record.ClaimedBy,
-			LeaseExpiresAt:  record.LeaseExpiresAt,
-			LeaseGeneration: record.LeaseGeneration,
-			LastError:       record.LastError,
-			CreatedAt:       record.CreatedAt,
-			UpdatedAt:       record.UpdatedAt,
+			ID:                 record.ID,
+			PostID:             record.PostID,
+			Kind:               record.Kind,
+			State:              state,
+			Priority:           record.Priority,
+			Attempts:           record.Attempts,
+			MaxAttempts:        record.MaxAttempts,
+			AvailableAt:        record.AvailableAt,
+			ClaimedAt:          record.ClaimedAt,
+			ClaimedBy:          record.ClaimedBy,
+			LeaseExpiresAt:     record.LeaseExpiresAt,
+			LeaseGeneration:    record.LeaseGeneration,
+			LastError:          record.LastError,
+			LastErrorTruncated: record.LastErrorTruncated,
+			CreatedAt:          record.CreatedAt,
+			UpdatedAt:          record.UpdatedAt,
 		})
 	}
 
