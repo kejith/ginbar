@@ -11,6 +11,7 @@ export const MAX_MESSAGE_CHARACTERS = 10000;
  * @typedef {{id:number, senderId:number, createdAt:string}} LatestMessage
  * @typedef {{peer:InboxPeer, latestMessage:LatestMessage}} ConversationSummary
  * @typedef {{id:number, senderId:number, recipientId:number, body:string, createdAt:string}} PrivateMessage
+ * @typedef {{sequence:number, peerId:number, body:string}} PendingSend
  * @typedef {{kind:"inbox"}|{kind:"thread", peerId:number}} MessagesRoute
  */
 
@@ -43,6 +44,7 @@ export function mergeInboxConversations(
   replace = false,
   maxRetained = MAX_RETAINED_CONVERSATIONS,
 ) {
+  /** @type {Map<number, ConversationSummary>} */
   const byPeer = new Map();
   const source = replace ? incoming : [...current, ...incoming];
   for (const conversation of source) {
@@ -69,6 +71,7 @@ export function mergeThreadMessages(
   replace = false,
   maxRetained = MAX_RETAINED_MESSAGES,
 ) {
+  /** @type {Map<number, PrivateMessage>} */
   const byID = new Map();
   const source = replace ? incoming : [...current, ...incoming];
   for (const message of source) {
@@ -115,4 +118,26 @@ export function clampMessageBody(value) {
   return characters.length <= MAX_MESSAGE_CHARACTERS
     ? value
     : characters.slice(0, MAX_MESSAGE_CHARACTERS).join("");
+}
+
+/**
+ * @param {number|undefined} nextBefore
+ * @param {number} retainedCount
+ * @param {number} maxRetained
+ */
+export function boundedCursor(nextBefore, retainedCount, maxRetained) {
+  const cursor = nextBefore ?? 0;
+  const capped = retainedCount >= maxRetained && cursor > 0;
+  return { nextBefore: capped ? 0 : cursor, capped };
+}
+
+/**
+ * @param {PendingSend[]} pending
+ * @param {number} failedSequence
+ * @param {number} peerId
+ * @param {string} currentDraft
+ */
+export function shouldRestoreFailedDraft(pending, failedSequence, peerId, currentDraft) {
+  return currentDraft === ""
+    && !pending.some((item) => item.peerId === peerId && item.sequence > failedSequence);
 }
