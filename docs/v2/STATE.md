@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-07
-Phase: **M5 moderation/admin/imports complete; consolidated M5 milestone gate accepted; M6 private messages next**
+Phase: **M6 private messages in progress; first backend foundation accepted and integrated**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -22,7 +22,7 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - tag mutations: **accepted, SQL/API/browser-gated and integrated**;
   - public read-only profiles: **accepted, SQL/API/browser-gated and integrated**;
   - consolidated connected-core milestone gate: **accepted; M4 closed**.
-- M5 moderation/admin/imports: **in progress**.
+- M5 moderation/admin/imports: **complete and integrated**.
   - first post/comment moderation slice: **accepted, integrated, and post-integration CI verified green after runner remediation**;
   - first imports HTTP/config slice: **accepted, integrated, exact-candidate CI green, and live local acceptance gate passed**;
   - first jobs/admin observability slice: **accepted, integrated, exact-candidate/local-gate/post-integration CI green**;
@@ -30,6 +30,120 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - second role-administration/bootstrap slice: **accepted, integrated, exact-candidate/post-integration CI green**.
   - first regeneration/admin mutation slice: **accepted, integrated, exact-candidate/post-integration CI green**.
   - consolidated M5 moderation/admin/imports milestone gate: **accepted; M5 closed**.
+- M6 private messages: **in progress**.
+  - first one-to-one private-messages backend foundation: **accepted and integrated; exact-candidate/post-integration CI green**.
+
+## M6 private messages — first backend foundation accepted and integrated
+
+Verified implementation base:
+
+`6609298210d45b30acff725649880394fd2c8736`
+
+Implementation branch:
+
+`astra/m6-private-messages`
+
+Exact accepted executable candidate and integrated executable:
+
+`8a716a035e4f6652d1666d18760eb6590a65b20b`
+
+Exact-candidate `v2 CI`:
+
+- run `37632978004`;
+- job `112831784475`;
+- exact `head_sha=8a716a035e4f6652d1666d18760eb6590a65b20b`;
+- conclusion: **success**;
+- scoped server correctness, Go formatting, `go vet ./...`, PostgreSQL-backed `go test -v -count=1 ./...`, target-worker release-build applicability, exact checkout, and tracked-clean verification all passed;
+- candidate backend log contained **312 test/subtest RUN entries and zero failure markers**;
+- `v2-ci: PASS sha=8a716a035e4f6652d1666d18760eb6590a65b20b scope=server`.
+
+Post-integration `v2 CI`:
+
+- run `37633250892`;
+- job `112832701215`;
+- exact integrated executable `8a716a035e4f6652d1666d18760eb6590a65b20b`;
+- conclusion: **success**;
+- scoped server correctness, target-worker release build, exact checkout, and tracked-clean verification all passed.
+
+Earlier branch heads were not accepted. Initial CI exposed only Go formatting and test-fixture defects, then retained SQL-plan evidence exposed a real cursor-query risk where PostgreSQL could prefer the global message primary key and filter the pair. The accepted candidate fixes that query shape with bounded directional scans before integration.
+
+### Accepted schema and service boundary
+
+- migration `008_private_messages.sql` introduces one fresh `private_messages` relation; no legacy message schema was ported;
+- durable identity is immutable numeric `users.id` only: `sender_user_id` and `recipient_user_id` are foreign keys, and usernames are not duplicated into relational identity;
+- each message has immutable bigint identity, bounded body, and creation timestamp;
+- self-messaging is explicitly **forbidden** both in the service boundary and by a database check constraint;
+- message bodies are valid UTF-8, reject NUL, and contain **1 through 10,000 Unicode code points**; the migration defensively enforces the same character-count bound;
+- recipients/peers must be existing active users under the current user-status model; inactive and missing users deliberately share the same unavailable result;
+- no conversation table is introduced: the first direct-thread slice does not need mutable conversation state, and the simpler message relation avoids speculative group-chat abstractions;
+- the single concrete thread index is `private_messages_thread_idx(sender_user_id, recipient_user_id, id DESC)`, matching actual directional thread scans.
+
+### Accepted HTTP/API contract
+
+- direct thread endpoint is `GET /api/v2/messages/{peerId}`;
+- direct send endpoint is `POST /api/v2/messages/{peerId}`;
+- both require the established authenticated session; sender/actor identity comes only from the session principal's immutable numeric user ID;
+- the request body cannot supply or override sender identity; unknown fields are rejected;
+- POST uses the established same-origin mutation policy and rejects cross-origin requests before persistence;
+- malformed/non-positive peer identity returns 400 `invalid_peer_id`;
+- missing/inactive recipient or peer returns 404 `recipient_unavailable`;
+- self-send/self-thread returns 409 `self_message_forbidden`;
+- invalid, empty, NUL-containing, malformed or oversized bodies return the existing bounded 400 request/body error conventions;
+- internal failures retain the existing 500 `internal` contract and request cancellation/deadline behavior remains inherited from the server boundary;
+- repeated identical sends are distinct messages; no idempotency key or deduplication mechanism was invented;
+- successful send returns the authoritative inserted `id`, numeric sender/recipient IDs, body and `createdAt` directly from PostgreSQL `RETURNING`; there is no application-side reconciliation read.
+
+### Accepted thread and pagination behavior
+
+- a thread contains only messages where authenticated user A and numeric peer B are the sender/recipient pair in either direction;
+- unrelated A↔C and B↔C traffic is excluded;
+- ordering is deterministic **message ID descending**;
+- cursor parameter is `before=<message-id>`, with no OFFSET;
+- default page size is **50**, hard maximum **100**;
+- the store reads `limit+1` to determine continuation; `nextBefore` is the last returned immutable message ID;
+- cursor pages are unique, non-overlapping and exhaust cleanly;
+- the SQL path performs two bounded directional scans—A→B and B→A—through the same composite thread index, combines them with `UNION ALL`, and keeps only the bounded merged page. This avoids the rejected global-primary-key cursor shape and requires no application-side filtering or N+1 work.
+
+### Correctness and PostgreSQL evidence
+
+Focused exact-candidate coverage passed for:
+
+- signed-out send/read rejection;
+- same-origin send enforcement with no durable write on cross-origin rejection;
+- authenticated successful send with session-derived numeric sender identity;
+- numeric sender/recipient persistence and rejection of request-body sender override;
+- invalid numeric peers, missing recipients, inactive recipients and explicit self-message policy;
+- malformed, empty, NUL-containing, oversized and Unicode boundary bodies;
+- pair-only thread visibility with no unrelated-message leakage;
+- deterministic descending ordering, default/max limits, cursor pagination, exhaustion, uniqueness and zero overlap;
+- 12 concurrent identical sends creating exactly 12 distinct immutable IDs and exactly 12 durable rows;
+- authoritative send response matching the inserted durable row;
+- defensive database checks for self-messages and oversized rows;
+- real authenticated HTTP send/read against PostgreSQL;
+- preservation of the existing backend/PostgreSQL suite.
+
+Retained `EXPLAIN (ANALYZE, BUFFERS)` on a meaningful fixture containing roughly 25,000 messages plus 6,000 extra users showed:
+
+- first thread page: `users_pkey` for active-peer validation plus two `private_messages_thread_idx` scans under a bounded `Merge Append`; returned 51 probe rows, used only shared-hit buffers, 28 kB in-memory outer quicksort, planning **1.027 ms**, execution **0.243 ms**;
+- cursor thread page: `users_pkey` plus two `private_messages_thread_idx` scans including the `id < cursor` condition; returned 51 probe rows, 28 kB in-memory outer quicksort, planning **0.301 ms**, execution **0.254 ms**;
+- send path: active-recipient lookup through `users_pkey`, one insert with authoritative `RETURNING`, planning **0.043 ms**, execution **0.286 ms** including foreign-key triggers;
+- no large-relation sequential scan, OFFSET, external merge, disk/temp spill, application-side filtering, reconciliation query, or N+1 behavior was present.
+
+Decision: **accept the first M6 private-messages backend foundation**. PostgreSQL remains authoritative; numeric identity, bounded direct-thread paging, send concurrency, same-origin mutation safety and actual SQL plan shapes are proven by exact-candidate CI. No local execution-agent gate is required for this backend/PostgreSQL-only slice.
+
+### Integration status
+
+Immediately before integration, live `v2` was:
+
+`6609298210d45b30acff725649880394fd2c8736`
+
+Remote `v2` was fast-forwarded non-force with expected-SHA lease to exact executable:
+
+`8a716a035e4f6652d1666d18760eb6590a65b20b`
+
+Post-integration CI is green as recorded above. No frontend messaging UI, inbox/conversation-summary query, unread/read state, attachment/group/system-message abstraction, notification mechanism, polling/SSE/WebSocket path, Redis/cache state, or messaging moderation/admin control was added.
+
+M6 remains **in progress**; only the first direct-thread backend foundation is closed.
 
 ## M5 consolidated moderation/admin/imports milestone gate — accepted; M5 complete
 
@@ -948,6 +1062,8 @@ No unresolved correctness, authorization, concurrency, lease-fencing or SQL-plan
 
 No unresolved M5 milestone blocker remains after the accepted consolidated gate. The gate environment could not provide a global-unicast source for a second live positive URL-import run and did not repeat long-lived worker run-mode renewal; both are explicitly covered by previously accepted dedicated behavior or unchanged worker semantics and do not justify reopening M5.
 
+No unresolved correctness, authorization, concurrency, schema or SQL-plan blocker remains from the accepted first M6 private-messages backend foundation. The rejected pre-acceptance cursor plan that could scan the global message primary key was replaced before acceptance by two bounded directional composite-index scans. No additional message index or conversation table is justified by current query shapes.
+
 ## Single best next task
 
-Implement the **first M6 private-messages backend foundation** from the verified current `v2`: introduce fresh PostgreSQL persistence using immutable numeric user IDs and expose the smallest authenticated one-to-one messaging API that supports sending a bounded text message to an existing user and reading a bounded message-ID cursor page for that two-user thread. Keep send as a same-origin mutation, authorize thread access strictly from the authenticated numeric user, use parameterized bounded/index-backed SQL with no OFFSET or username foreign keys, and return authoritative message identity directly from the mutation without a reconciliation read. Add focused schema/service/HTTP/PostgreSQL tests for authorization, invalid/missing recipients, ordering/cursor boundaries, concurrency, body limits and SQL plans. Do not add frontend messaging UI, inbox/unread counters, notifications, attachments, group conversations, polling/event streams, Redis/cache state, moderation tooling or legacy-schema compatibility in this first slice.
+Implement the **second M6 private-messages backend slice: bounded conversation/inbox summaries** from the verified current `v2`. Expose an authenticated numeric-user inbox that returns one summary per peer with the latest immutable message identity/timestamp and enough peer metadata for a later UI, using bounded cursor pagination with no OFFSET, no username relational identity, no unread/read-receipt state, and no application-side N+1 or reconciliation queries. Design the smallest PostgreSQL query/index shape from actual requirements, retain `EXPLAIN (ANALYZE, BUFFERS)` on a meaningful multi-user/multi-message fixture, and add focused authorization, isolation, ordering, cursor, missing/inactive-peer, concurrency/change-propagation and HTTP tests. Do not add frontend messaging UI, unread counters, notifications, attachments, group/system messages, polling/event streams, Redis/cache state, or moderation/admin messaging controls in this slice.
