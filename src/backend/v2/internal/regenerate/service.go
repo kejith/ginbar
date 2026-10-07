@@ -14,9 +14,9 @@ var (
 type Outcome string
 
 const (
-	OutcomeQueued      Outcome = "queued"
+	OutcomeQueued     Outcome = "queued"
 	OutcomeCoalesced   Outcome = "coalesced"
-	OutcomeSuperseded  Outcome = "superseded"
+	OutcomeSuperseded Outcome = "superseded"
 )
 
 type Requested struct {
