@@ -23,16 +23,26 @@ func (s *apiStore) RevokeModerator(_ context.Context, _, targetUserID int64) (ro
 	return roleadmin.State{UserID: targetUserID}, nil
 }
 
+func (s *apiStore) GrantAdmin(_ context.Context, _, targetUserID int64) (roleadmin.State, error) {
+	return roleadmin.State{UserID: targetUserID, Admin: true}, nil
+}
+
+func (s *apiStore) RevokeAdmin(_ context.Context, _, targetUserID int64) (roleadmin.State, error) {
+	return roleadmin.State{UserID: targetUserID}, nil
+}
+
 type roleAdminAPIStore struct {
 	*apiStore
-	readState   roleadmin.State
-	grantState  roleadmin.State
-	revokeState roleadmin.State
-	err         error
-	actorID     int64
-	targetID    int64
-	action      string
-	calls       int
+	readState        roleadmin.State
+	grantState       roleadmin.State
+	revokeState      roleadmin.State
+	grantAdminState  roleadmin.State
+	revokeAdminState roleadmin.State
+	err              error
+	actorID          int64
+	targetID         int64
+	action           string
+	calls            int
 }
 
 func (s *roleAdminAPIStore) GetUserRoleState(
@@ -47,7 +57,7 @@ func (s *roleAdminAPIStore) GrantModerator(
 	_ context.Context,
 	actorUserID, targetUserID int64,
 ) (roleadmin.State, error) {
-	s.record("grant", actorUserID, targetUserID)
+	s.record("grant-moderator", actorUserID, targetUserID)
 	return s.grantState, s.err
 }
 
@@ -55,8 +65,24 @@ func (s *roleAdminAPIStore) RevokeModerator(
 	_ context.Context,
 	actorUserID, targetUserID int64,
 ) (roleadmin.State, error) {
-	s.record("revoke", actorUserID, targetUserID)
+	s.record("revoke-moderator", actorUserID, targetUserID)
 	return s.revokeState, s.err
+}
+
+func (s *roleAdminAPIStore) GrantAdmin(
+	_ context.Context,
+	actorUserID, targetUserID int64,
+) (roleadmin.State, error) {
+	s.record("grant-admin", actorUserID, targetUserID)
+	return s.grantAdminState, s.err
+}
+
+func (s *roleAdminAPIStore) RevokeAdmin(
+	_ context.Context,
+	actorUserID, targetUserID int64,
+) (roleadmin.State, error) {
+	s.record("revoke-admin", actorUserID, targetUserID)
+	return s.revokeAdminState, s.err
 }
 
 func (s *roleAdminAPIStore) record(action string, actorUserID, targetUserID int64) {
@@ -78,6 +104,8 @@ func TestRoleAdminRoutesRequireAuthentication(t *testing.T) {
 		{http.MethodGet, "/api/v2/admin/users/77/roles"},
 		{http.MethodPut, "/api/v2/admin/users/77/roles/moderator"},
 		{http.MethodDelete, "/api/v2/admin/users/77/roles/moderator"},
+		{http.MethodPut, "/api/v2/admin/users/77/roles/admin"},
+		{http.MethodDelete, "/api/v2/admin/users/77/roles/admin"},
 	} {
 		req := httptest.NewRequest(tc.method, "http://ginbar.test"+tc.path, nil)
 		res := httptest.NewRecorder()
@@ -92,7 +120,7 @@ func TestRoleAdminRoutesRequireAuthentication(t *testing.T) {
 	}
 }
 
-func TestRoleAdminReadGrantAndRevokeContracts(t *testing.T) {
+func TestRoleAdminReadAndMutationContracts(t *testing.T) {
 	base := &apiStore{}
 	grantor := int64(42)
 	adminGrantor := int64(7)
@@ -110,7 +138,9 @@ func TestRoleAdminReadGrantAndRevokeContracts(t *testing.T) {
 			Moderator:                true,
 			ModeratorGrantedByUserID: &grantor,
 		},
-		revokeState: roleadmin.State{UserID: 77},
+		revokeState:      roleadmin.State{UserID: 77},
+		grantAdminState:  roleadmin.State{UserID: 77, Admin: true, AdminGrantedByUserID: &adminGrantor},
+		revokeAdminState: roleadmin.State{UserID: 77},
 	}
 	server := newAuthTestServer(store)
 
@@ -121,8 +151,10 @@ func TestRoleAdminReadGrantAndRevokeContracts(t *testing.T) {
 		want   roleadmin.State
 	}{
 		{http.MethodGet, "/api/v2/admin/users/77/roles", "read", store.readState},
-		{http.MethodPut, "/api/v2/admin/users/77/roles/moderator", "grant", store.grantState},
-		{http.MethodDelete, "/api/v2/admin/users/77/roles/moderator", "revoke", store.revokeState},
+		{http.MethodPut, "/api/v2/admin/users/77/roles/moderator", "grant-moderator", store.grantState},
+		{http.MethodDelete, "/api/v2/admin/users/77/roles/moderator", "revoke-moderator", store.revokeState},
+		{http.MethodPut, "/api/v2/admin/users/77/roles/admin", "grant-admin", store.grantAdminState},
+		{http.MethodDelete, "/api/v2/admin/users/77/roles/admin", "revoke-admin", store.revokeAdminState},
 	}
 	for _, tc := range tests {
 		res := httptest.NewRecorder()
@@ -145,31 +177,44 @@ func TestRoleAdminReadGrantAndRevokeContracts(t *testing.T) {
 	}
 }
 
-func TestRoleAdminMapsForbiddenMissingAndInvalidTarget(t *testing.T) {
+func TestRoleAdminMapsForbiddenMissingSelfRevokeAndInvalidTarget(t *testing.T) {
 	base := &apiStore{}
 	store := &roleAdminAPIStore{apiStore: base}
 	server := newAuthTestServer(store)
 
 	store.err = roleadmin.ErrForbidden
-	for _, method := range []string{http.MethodGet, http.MethodPut, http.MethodDelete} {
-		path := "/api/v2/admin/users/77/roles"
-		if method != http.MethodGet {
-			path += "/moderator"
-		}
+	for _, tc := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/api/v2/admin/users/77/roles"},
+		{http.MethodPut, "/api/v2/admin/users/77/roles/moderator"},
+		{http.MethodDelete, "/api/v2/admin/users/77/roles/moderator"},
+		{http.MethodPut, "/api/v2/admin/users/77/roles/admin"},
+		{http.MethodDelete, "/api/v2/admin/users/77/roles/admin"},
+	} {
 		res := httptest.NewRecorder()
-		server.Handler().ServeHTTP(res, authenticatedRequest(base, method, path, ""))
+		server.Handler().ServeHTTP(res, authenticatedRequest(base, tc.method, tc.path, ""))
 		if res.Code != http.StatusForbidden || !strings.Contains(res.Body.String(), `"code":"forbidden"`) {
-			t.Fatalf("%s forbidden status=%d body=%s", method, res.Code, res.Body.String())
+			t.Fatalf("%s %s forbidden status=%d body=%s", tc.method, tc.path, res.Code, res.Body.String())
 		}
 	}
 
 	store.err = roleadmin.ErrUserNotFound
 	res := httptest.NewRecorder()
-	server.Handler().ServeHTTP(res, authenticatedRequest(base, http.MethodPut, "/api/v2/admin/users/999/roles/moderator", ""))
+	server.Handler().ServeHTTP(res, authenticatedRequest(base, http.MethodPut, "/api/v2/admin/users/999/roles/admin", ""))
 	if res.Code != http.StatusNotFound || !strings.Contains(res.Body.String(), `"code":"user_not_found"`) {
 		t.Fatalf("missing status=%d body=%s", res.Code, res.Body.String())
 	}
 
+	store.err = roleadmin.ErrSelfAdminRevocation
+	res = httptest.NewRecorder()
+	server.Handler().ServeHTTP(res, authenticatedRequest(base, http.MethodDelete, "/api/v2/admin/users/42/roles/admin", ""))
+	if res.Code != http.StatusConflict || !strings.Contains(res.Body.String(), `"code":"self_admin_revoke_forbidden"`) {
+		t.Fatalf("self revoke status=%d body=%s", res.Code, res.Body.String())
+	}
+
+	store.err = nil
 	calls := store.calls
 	for _, id := range []string{"0", "-1", "not-a-number"} {
 		res := httptest.NewRecorder()
@@ -183,22 +228,6 @@ func TestRoleAdminMapsForbiddenMissingAndInvalidTarget(t *testing.T) {
 	}
 	if store.calls != calls {
 		t.Fatalf("invalid targets reached role store: before=%d after=%d", calls, store.calls)
-	}
-}
-
-func TestRoleAdminDoesNotExposeAdminRoleMutation(t *testing.T) {
-	base := &apiStore{}
-	store := &roleAdminAPIStore{apiStore: base}
-	res := httptest.NewRecorder()
-	newAuthTestServer(store).Handler().ServeHTTP(
-		res,
-		authenticatedRequest(base, http.MethodPut, "/api/v2/admin/users/77/roles/admin", ""),
-	)
-	if res.Code != http.StatusNotFound {
-		t.Fatalf("status=%d body=%s", res.Code, res.Body.String())
-	}
-	if store.calls != 0 {
-		t.Fatalf("admin-role path reached role store: calls=%d", store.calls)
 	}
 }
 
