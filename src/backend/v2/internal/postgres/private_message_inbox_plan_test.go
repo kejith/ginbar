@@ -99,7 +99,7 @@ func TestPrivateMessageInboxSQLPlansAreBoundedAndIndexBacked(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	firstPlan := explainPlan(t, store, "EXPLAIN (ANALZE, BUFFERS) "+listPrivateMessageInboxFirstSQL, actorID, privatemessage.DefaultLimit+1, privatemessage.UserStatusActive)
+	firstPlan := explainPlan(t, store, "EXPLAIN (ANALYZE, BUFFERS) "+listPrivateMessageInboxFirstSQL, actorID, privatemessage.DefaultLimit+1, privatemessage.UserStatusActive)
 	t.Logf("private message inbox first-page plan:\n%s", firstPlan)
 	assertPlanContains(t, firstPlan, "private_message_conversations_low_latest_idx")
 	assertPlanContains(t, firstPlan, "private_message_conversations_high_latest_idx")
