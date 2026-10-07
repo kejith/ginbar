@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-07
-Phase: **M5 moderation/admin/imports in progress; moderation and first imports HTTP/config slice accepted/integrated; jobs/admin observability next**
+Phase: **M5 moderation/admin/imports in progress; moderation and first imports HTTP/config slice accepted/integrated; first jobs/admin observability candidate CI-green, local acceptance pending**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -24,7 +24,78 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - consolidated connected-core milestone gate: **accepted; M4 closed**.
 - M5 moderation/admin/imports: **in progress**.
   - first post/comment moderation slice: **accepted, integrated, and post-integration CI verified green after runner remediation**;
-  - first imports HTTP/config slice: **accepted, integrated, exact-candidate CI green, and live local acceptance gate passed**.
+  - first imports HTTP/config slice: **accepted, integrated, exact-candidate CI green, and live local acceptance gate passed**;
+  - first jobs/admin observability slice: **implementation complete on candidate branch; exact-candidate CI and PostgreSQL plan gate green; live local acceptance pending before integration**.
+
+## M5 jobs/admin observability — implementation candidate; local acceptance pending
+
+Verified implementation base:
+
+`def1e1a99b57daa9b32776c1a7108292e7f1bcee`
+
+Implementation branch:
+
+`astra/m5-media-job-observability`
+
+Exact executable candidate:
+
+`08ed07455bd568914f1a23f5831823defaabb88a`
+
+Exact-candidate `v2 CI`:
+
+- run `37604661118`, attempt 1;
+- job `112737109634`;
+- `head_sha=08ed07455bd568914f1a23f5831823defaabb88a`;
+- workflow/job conclusion: **success**;
+- exact checkout/verification: success;
+- scoped correctness: **backend**;
+- Go formatting, vet/compiler checks and PostgreSQL-backed `go test -v -count=1 ./...`: success;
+- target-worker build applicability check: success;
+- tracked checkout unchanged: success;
+- `v2-ci: PASS sha=08ed07455bd568914f1a23f5831823defaabb88a scope=backend`.
+
+An earlier exact branch candidate `42641632868368c236b8f90c42bce1bf7e02f704` failed CI only because `internal/httpapi/server.go` import ordering was not gofmt-clean. That formatting blocker was corrected before the green candidate above.
+
+### Implemented boundary
+
+- read-only moderator/admin endpoint: `GET /api/v2/admin/media-jobs`;
+- authorization is server-side and PostgreSQL-authoritative from immutable numeric session `users.id` through existing `user_roles`; signed-out requests retain the established 401 `unauthenticated` contract and ordinary authenticated members receive 403 `forbidden`;
+- pages are ordered by immutable `media_jobs.id DESC`, use optional `before=<job-id>` cursor pagination, never OFFSET, default to 50 rows and cap at 100 rows;
+- the repository performs one parameterized PostgreSQL statement combining role authorization and the bounded job read, with no N+1 or post-query reconciliation read;
+- the first slice intentionally has no state filter: this keeps the hot path on the existing primary-key ordering and avoids a speculative `(state,id)` index. Queued versus retry work is distinguishable from existing `state`, `attempts`, `maxAttempts` and `availableAt` metadata;
+- operational output is limited to job/post identity, kind/state/priority, attempt counters, availability, claim/lease/generation data, bounded error diagnostics, and created/updated timestamps; source URLs, storage keys, source hashes/content and credentials are not joined or exposed;
+- `claimedBy` is projected to at most 256 characters and `lastError` to at most 2048 characters without changing durable worker state; `lastErrorTruncated=true` marks truncated diagnostics;
+- no mutation, retry/cancel control, dashboard, frontend state, Redis/cache/event stream, polling infrastructure, schema migration or new index was added; worker ownership, lease, retry, generation-fencing and ingestion semantics are unchanged.
+
+### Correctness and PostgreSQL plan evidence
+
+Targeted domain/HTTP/PostgreSQL tests cover:
+
+- signed-out 401 and ordinary-member 403 behavior;
+- moderator/admin role acceptance using numeric identity;
+- deterministic descending job-ID cursor pages with no duplicates/overlap;
+- malformed cursor/limit rejection before store work and bounded default/maximum limits;
+- queued, retrying, running, succeeded and failed authoritative job metadata;
+- bounded `claimedBy` / `lastError` projections and explicit error-truncation signaling;
+- absence of source/media-secret fields from the HTTP response;
+- no OFFSET in the hot SQL shape.
+
+The exact-candidate PostgreSQL plan test populated 5,000 durable jobs and ran `EXPLAIN (ANALYZE, BUFFERS)` on the real list statement with a 51-row `limit+1` probe. The job scan was:
+
+`Index Scan Backward using media_jobs_pkey on media_jobs`
+
+with actual time 0.014..0.023 ms for 51 rows and shared-hit buffers 3. The only result sort was over the already-bounded 51-row CTE output: quicksort, 30 kB memory, no temp spill. Total execution time was 0.220 ms. There was no sequential scan on `media_jobs`; the tiny disposable one-row `user_roles` fixture used a sequential scan, which is not a large-relation/hot-path issue and does not justify an index change.
+
+Existing ingestion/PostgreSQL tests remained green in the exact-candidate backend CI. No worker code changed; worker release-build applicability passed. A live acceptance gate should still run the existing worker tests at this exact SHA and exercise a real authenticated moderator/admin HTTP session against the production PostgreSQL store before integration.
+
+Decision: **implementation candidate is code/CI/SQL-plan clean but not yet accepted or integrated**. Existing indexes are sufficient for the implemented unfiltered cursor contract; do not add a jobs state index unless a future required filtered query demonstrates a bad actual plan.
+
+### Gate status
+
+- executable candidate: `08ed07455bd568914f1a23f5831823defaabb88a`;
+- exact-candidate CI: **green**;
+- local live acceptance: **pending**;
+- integration into `v2`: **blocked until that evidence is accepted**.
 
 ## M5 imports — first HTTP/config slice accepted and integrated
 
@@ -533,4 +604,4 @@ The profile browser gate's media 404 console messages came from benchmark storag
 
 ## Single best next task
 
-Implement the first M5 jobs/admin observability slice from the current live `v2`: add a minimal moderator/admin-only read API for durable media-job inspection that exposes bounded, cursor-paginated operational state needed to diagnose queued/running/retry/failed work without adding job mutation/retry controls yet. Keep PostgreSQL authoritative, use immutable numeric authorization identity, avoid OFFSET/N+1/reconciliation reads, make the query shape bounded/index-backed and verify it with `EXPLAIN (ANALYZE, BUFFERS)`, add targeted API/PostgreSQL authorization and pagination tests, require exact-candidate CI green, and do not add Redis, polling infrastructure, dashboards, bulk import, job cancellation/retry mutation, or unrelated M5 work.
+Run the **M5 first jobs/admin observability local acceptance gate** against exact executable `08ed07455bd568914f1a23f5831823defaabb88a`: use an isolated disposable PostgreSQL/API environment to exercise real signed-out, ordinary-member, moderator and admin sessions against `GET /api/v2/admin/media-jobs`; prove descending cursor pagination, queued/retry/running/failed operational metadata, bounded diagnostic projection, read-only authoritative state and cleanup; retain the actual `EXPLAIN (ANALYZE, BUFFERS)` plan and run the existing worker tests at the same SHA. Use exact-candidate CI run `37604661118` / job `112737109634` as the required green CI prerequisite. Do not modify tracked source, schema, configuration, deployment, or persistent shared state; return one retained evidence ZIP for acceptance here before any integration into `v2`.
