@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-07
-Phase: **M5 moderation/admin/imports in progress; moderation, first imports HTTP/config, and first jobs/admin observability slices accepted/integrated; role administration next**
+Phase: **M5 moderation/admin/imports in progress; first role-administration slice accepted on exact candidate, integration pending**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -25,7 +25,69 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
 - M5 moderation/admin/imports: **in progress**.
   - first post/comment moderation slice: **accepted, integrated, and post-integration CI verified green after runner remediation**;
   - first imports HTTP/config slice: **accepted, integrated, exact-candidate CI green, and live local acceptance gate passed**;
-  - first jobs/admin observability slice: **accepted, integrated, exact-candidate/local-gate/post-integration CI green**.
+  - first jobs/admin observability slice: **accepted, integrated, exact-candidate/local-gate/post-integration CI green**;
+  - first role-administration slice: **accepted on exact executable candidate; integration pending**.
+
+## M5 role administration — exact candidate accepted; integration pending
+
+Verified implementation base:
+
+`9d562f46153510d39ff21e7bef25908ef69ebe22`
+
+Implementation branch:
+
+`astra/m5-role-admin`
+
+Exact accepted executable candidate:
+
+`2aaf24301a1d0129e7827e1069550e9da722f0ba`
+
+Exact-candidate `v2 CI`:
+
+- run `37611366103`, attempt 1;
+- job `112759121707`;
+- `head_sha=2aaf24301a1d0129e7827e1069550e9da722f0ba`;
+- workflow/job conclusion: **success**;
+- backend scope passed the Go 1.25 formatting gate, `go vet ./...`, PostgreSQL-backed `go test -v -count=1 ./...`, target-worker build applicability, and tracked-clean verification;
+- `v2-ci: PASS sha=2aaf24301a1d0129e7827e1069550e9da722f0ba scope=backend`.
+
+An earlier exact branch head `dd113c7b5011f6bf21cdb7247a664296d28c2897` failed only because `internal/postgres/role_admin.go` was not gofmt-clean. The formatting defect was corrected before the accepted candidate.
+
+### Accepted boundary
+
+- admin-only elevated-role read: `GET /api/v2/admin/users/{id}/roles`;
+- explicit moderator grant/revoke only: `PUT` / `DELETE /api/v2/admin/users/{id}/roles/moderator`;
+- target and actor identity are immutable numeric `users.id`; no username authorization identity was added;
+- signed-out callers use the established 401 `unauthenticated` contract; authenticated members and moderators receive 403 `forbidden`;
+- only an existing PostgreSQL `role.Admin` row authorizes reads or mutations;
+- missing targets return stable 404 `user_not_found` and cannot create orphan role state;
+- grant uses the existing `(user_id, role)` primary key and records the numeric granting admin in `granted_by_user_id`;
+- repeated/concurrent grants use the primary-key conflict path while preserving the original grantor instead of rewriting audit ownership; repeated/concurrent revokes remain idempotent;
+- each read or mutation is one bounded parameterized PostgreSQL statement and returns authoritative resulting moderator/admin state directly, with no application-side reconciliation read;
+- existing moderation/tag authorization continues to read `user_roles` directly, so role changes require no cache refresh or duplicated authorization model;
+- no admin-role mutation route exists, and no bootstrap/last-admin/self-lockout policy was introduced;
+- no schema migration, new index, Redis/cache/event stream, bulk user listing, frontend admin dashboard, invitation administration, or account disable/delete surface was added.
+
+### Correctness and SQL-plan evidence
+
+The real PostgreSQL/HTTP tests passed:
+
+- admin role-state inspection, moderator grant/repeated grant/revoke/repeated revoke;
+- 401 signed-out and 403 member/moderator rejection;
+- numeric target/grantor identity, stable missing-target behavior, same-origin mutation enforcement, and absence of any admin-role mutation route;
+- original-grantor preservation across a later admin's repeated grant;
+- 12 concurrent grants produced exactly one moderator row; 12 concurrent revokes left zero moderator rows;
+- a newly granted moderator immediately succeeded through the existing `HidePost` authorization path, and the same user was immediately rejected after revocation;
+- existing tag-removal authorization tests remained green.
+
+On a 5,000-user/role fixture with `ANALYZE users, user_roles`, retained `EXPLAIN (ANALYZE, BUFFERS)` evidence showed:
+
+- role read: `users_pkey` plus `user_roles_pkey`, execution 0.209 ms, shared-buffer hits only;
+- moderator grant: admin/target/admin-state access through those primary keys and conflict arbitration by `user_roles_pkey`, execution 0.547 ms including FK triggers;
+- moderator revoke: primary-key actor/target/delete/admin-state access, execution 0.278 ms;
+- no sequential scan on `users` or `user_roles`, external merge, temp spill, OFFSET, or speculative index requirement.
+
+Decision: **accept the first M5 role-administration slice**. Exact-candidate CI exercises the complete server/PostgreSQL behavior relevant to this backend-only slice, so no browser or target-host local-agent gate is required before integration.
 
 ## M5 jobs/admin observability — accepted and integrated
 
@@ -622,4 +684,4 @@ The profile browser gate's media 404 console messages came from benchmark storag
 
 ## Single best next task
 
-Implement the **first M5 role-administration slice** from current live `v2`: add the smallest admin-only API needed to inspect a target user's elevated roles and grant/revoke the **moderator** role using immutable numeric user IDs and PostgreSQL-authoritative authorization. Keep admin-role assignment itself out of this first mutation slice so it cannot introduce last-admin/self-lockout policy yet. Make grant/revoke idempotent and return authoritative resulting role state in the same bounded statement/transaction without reconciliation reads; reject signed-out, ordinary-member and moderator callers server-side; preserve existing moderation/tag authorization semantics; add targeted HTTP/PostgreSQL/concurrency/idempotence tests and `EXPLAIN (ANALYZE, BUFFERS)` for any changed hot SQL; require exact-candidate CI green. Do not add a frontend admin dashboard, bulk user listing, username-based identity, Redis/cache/event streams, invitation management, account disabling/deletion, admin-role mutation, or unrelated M5 work.
+Fast-forward the accepted first M5 role-administration slice to current live `v2` without force, using an expected-SHA lease, then require post-integration `v2 CI` green on the exact integrated head before closing the slice and choosing the next M5 implementation task.
