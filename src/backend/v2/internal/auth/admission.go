@@ -14,25 +14,25 @@ func newKDFAdmission(maxConcurrent, maxQueued int) *kdfAdmission {
 	}
 }
 
-func (a *kdfAdmission) acquire(ctx context.Context) (func(), error) {
+func (a *kdfAdmission) acquire(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return err
 	}
 
 	select {
 	case a.running <- struct{}{}:
 		if err := ctx.Err(); err != nil {
 			<-a.running
-			return nil, err
+			return err
 		}
-		return a.releaseRunning, nil
+		return nil
 	default:
 	}
 
 	select {
 	case a.waiting <- struct{}{}:
 	default:
-		return nil, ErrKDFSaturated
+		return ErrKDFSaturated
 	}
 
 	select {
@@ -40,13 +40,13 @@ func (a *kdfAdmission) acquire(ctx context.Context) (func(), error) {
 		<-a.waiting
 		if err := ctx.Err(); err != nil {
 			<-a.running
-			return nil, err
+			return err
 		}
-		return a.releaseRunning, nil
+		return nil
 	case <-ctx.Done():
 		<-a.waiting
-		return nil, ctx.Err()
+		return ctx.Err()
 	}
 }
 
-func (a *kdfAdmission) releaseRunning() { <-a.running }
+func (a *kdfAdmission) release() { <-a.running }

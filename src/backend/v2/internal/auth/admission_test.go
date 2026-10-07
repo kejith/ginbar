@@ -10,29 +10,23 @@ import (
 
 func TestKDFAdmissionBoundsConcurrentAndQueuedWork(t *testing.T) {
 	gate := newKDFAdmission(2, 1)
-	first, err := gate.acquire(context.Background())
-	if err != nil {
+	t.Cleanup(func() {
+		for len(gate.running) > 0 {
+			gate.release()
+		}
+	})
+	if err := gate.acquire(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	second, err := gate.acquire(context.Background())
-	if err != nil {
+	if err := gate.acquire(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer first()
-	defer second()
 
-	type result struct {
-		release func()
-		err     error
-	}
-	queued := make(chan result, 1)
-	go func() {
-		release, err := gate.acquire(context.Background())
-		queued <- result{release: release, err: err}
-	}()
+	queued := make(chan error, 1)
+	go func() { queued <- gate.acquire(context.Background()) }()
 	waitForAdmissionCount(t, gate.waiting, 1)
 
-	if _, err := gate.acquire(context.Background()); !errors.Is(err, ErrKDFSaturated) {
+	if err := gate.acquire(context.Background()); !errors.Is(err, ErrKDFSaturated) {
 		t.Fatalf("saturated acquire error = %v", err)
 	}
 	if got := len(gate.running); got != 2 {
@@ -42,11 +36,9 @@ func TestKDFAdmissionBoundsConcurrentAndQueuedWork(t *testing.T) {
 		t.Fatalf("waiting=%d want=1", got)
 	}
 
-	first()
-	first = func() {}
-	acquired := <-queued
-	if acquired.err != nil {
-		t.Fatalf("queued acquire: %v", acquired.err)
+	gate.release()
+	if err := <-queued; err != nil {
+		t.Fatalf("queued acquire: %v", err)
 	}
 	if got := len(gate.running); got != 2 {
 		t.Fatalf("running after dequeue=%d want=2", got)
@@ -54,23 +46,18 @@ func TestKDFAdmissionBoundsConcurrentAndQueuedWork(t *testing.T) {
 	if got := len(gate.waiting); got != 0 {
 		t.Fatalf("waiting after dequeue=%d want=0", got)
 	}
-	acquired.release()
 }
 
 func TestKDFAdmissionCancellationWhileWaitingReleasesCapacity(t *testing.T) {
 	gate := newKDFAdmission(1, 1)
-	release, err := gate.acquire(context.Background())
-	if err != nil {
+	if err := gate.acquire(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	defer release()
+	defer gate.release()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
-	go func() {
-		_, err := gate.acquire(ctx)
-		result <- err
-	}()
+	go func() { result <- gate.acquire(ctx) }()
 	waitForAdmissionCount(t, gate.waiting, 1)
 	cancel()
 	if err := <-result; !errors.Is(err, context.Canceled) {
@@ -81,15 +68,8 @@ func TestKDFAdmissionCancellationWhileWaitingReleasesCapacity(t *testing.T) {
 	}
 
 	nextCtx, nextCancel := context.WithCancel(context.Background())
-	defer nextCancel()
 	next := make(chan error, 1)
-	go func() {
-		nextRelease, err := gate.acquire(nextCtx)
-		if err == nil {
-			nextRelease()
-		}
-		next <- err
-	}()
+	go func() { next <- gate.acquire(nextCtx) }()
 	waitForAdmissionCount(t, gate.waiting, 1)
 	nextCancel()
 	if err := <-next; !errors.Is(err, context.Canceled) {
@@ -100,11 +80,10 @@ func TestKDFAdmissionCancellationWhileWaitingReleasesCapacity(t *testing.T) {
 func TestKDFAdmissionReleaseAllowsReuse(t *testing.T) {
 	gate := newKDFAdmission(1, 0)
 	for i := 0; i < 3; i++ {
-		release, err := gate.acquire(context.Background())
-		if err != nil {
+		if err := gate.acquire(context.Background()); err != nil {
 			t.Fatalf("acquire %d: %v", i, err)
 		}
-		release()
+		gate.release()
 	}
 	if len(gate.running) != 0 || len(gate.waiting) != 0 {
 		t.Fatalf("capacity retained: running=%d waiting=%d", len(gate.running), len(gate.waiting))
@@ -116,11 +95,10 @@ func BenchmarkKDFAdmission(b *testing.B) {
 	ctx := context.Background()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		release, err := gate.acquire(ctx)
-		if err != nil {
+		if err := gate.acquire(ctx); err != nil {
 			b.Fatal(err)
 		}
-		release()
+		gate.release()
 	}
 }
 

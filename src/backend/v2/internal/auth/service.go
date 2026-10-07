@@ -136,11 +136,10 @@ func (s *Service) Register(ctx context.Context, request RegistrationRequest) (Pr
 
 	tokenHash := sha256.Sum256([]byte(request.InvitationToken))
 	verifier, err := func() (string, error) {
-		release, err := s.kdfAdmission.acquire(ctx)
-		if err != nil {
+		if err := s.kdfAdmission.acquire(ctx); err != nil {
 			return "", err
 		}
-		defer release()
+		defer s.kdfAdmission.release()
 
 		if err := s.store.CheckInvitation(ctx, tokenHash, s.now()); err != nil {
 			if errors.Is(err, ErrInvalidInvitation) {
@@ -174,11 +173,10 @@ func (s *Service) Login(ctx context.Context, username, password string) (LoginRe
 	}
 
 	credential, err := func() (PasswordCredential, error) {
-		release, err := s.kdfAdmission.acquire(ctx)
-		if err != nil {
+		if err := s.kdfAdmission.acquire(ctx); err != nil {
 			return PasswordCredential{}, err
 		}
-		defer release()
+		defer s.kdfAdmission.release()
 
 		credential, err := s.store.LookupPasswordCredential(ctx, username)
 		if err != nil {
