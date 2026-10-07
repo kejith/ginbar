@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   MAX_MESSAGE_CHARACTERS,
+  boundedCursor,
   clampMessageBody,
   mergeInboxConversations,
   mergeThreadMessages,
@@ -11,6 +12,7 @@ import {
   messagesForDisplay,
   pathForMessagePeer,
   requestStillCurrent,
+  shouldRestoreFailedDraft,
   touchThreadOrder,
 } from "./messages-state.js";
 
@@ -84,4 +86,35 @@ test("message body counting and clamping use Unicode code points", () => {
   const value = "😀".repeat(MAX_MESSAGE_CHARACTERS + 2);
   const clamped = clampMessageBody(value);
   assert.equal(messageBodyLength(clamped), MAX_MESSAGE_CHARACTERS);
+});
+
+test("cursor state distinguishes exhaustion from the explicit retention cap", () => {
+  assert.deepEqual(boundedCursor(undefined, 0, 200), { nextBefore: 0, capped: false });
+  assert.deepEqual(boundedCursor(undefined, 150, 200), { nextBefore: 0, capped: false });
+  assert.deepEqual(boundedCursor(25, 150, 200), { nextBefore: 25, capped: false });
+  assert.deepEqual(boundedCursor(25, 200, 200), { nextBefore: 0, capped: true });
+});
+
+test("inbox and thread retention caps drop only the oldest immutable IDs", () => {
+  const conversations = Array.from({ length: 5 }, (_, index) => summary(index + 1, 100 - index));
+  assert.deepEqual(
+    mergeInboxConversations([], conversations, true, 3).map((item) => item.latestMessage.id),
+    [100, 99, 98],
+  );
+  const messages = Array.from({ length: 5 }, (_, index) => message(100 - index));
+  assert.deepEqual(
+    mergeThreadMessages([], messages, true, 3).map((item) => item.id),
+    [100, 99, 98],
+  );
+});
+
+test("failed rapid sends restore only the newest eligible body and never overwrite a newer draft", () => {
+  const pending = [
+    { sequence: 1, peerId: 7, body: "first" },
+    { sequence: 2, peerId: 7, body: "second" },
+    { sequence: 3, peerId: 8, body: "other peer" },
+  ];
+  assert.equal(shouldRestoreFailedDraft(pending, 1, 7, ""), false);
+  assert.equal(shouldRestoreFailedDraft(pending, 2, 7, ""), true);
+  assert.equal(shouldRestoreFailedDraft(pending, 2, 7, "new draft"), false);
 });
