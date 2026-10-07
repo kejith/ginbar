@@ -71,7 +71,7 @@ func TestMediaJobsAdminReturnsBoundedCursorPage(t *testing.T) {
 		records: []mediajobadmin.Record{
 			{
 				ID: 12, PostID: 102, Kind: 0, State: mediajobadmin.StateFailed, Attempts: 5, MaxAttempts: 5,
-				AvailableAt: now, LastError: &lastError, CreatedAt: now, UpdatedAt: now,
+				AvailableAt: now, LastError: &lastError, LastErrorTruncated: true, CreatedAt: now, UpdatedAt: now,
 			},
 			{
 				ID: 11, PostID: 101, Kind: 0, State: mediajobadmin.StateRunning, Attempts: 2, MaxAttempts: 5,
@@ -101,9 +101,12 @@ func TestMediaJobsAdminReturnsBoundedCursorPage(t *testing.T) {
 		page.Jobs[1].ID != 11 || page.Jobs[1].State != "running" || page.NextBefore != 11 {
 		t.Fatalf("page=%#v", page)
 	}
-	if page.Jobs[0].LastError == nil || *page.Jobs[0].LastError != lastError ||
+	if page.Jobs[0].LastError == nil || *page.Jobs[0].LastError != lastError || !page.Jobs[0].LastErrorTruncated ||
 		page.Jobs[1].ClaimedBy == nil || *page.Jobs[1].ClaimedBy != claimedBy {
 		t.Fatalf("operational metadata missing: %#v", page.Jobs)
+	}
+	if !strings.Contains(res.Body.String(), `"lastErrorTruncated":true`) {
+		t.Fatalf("truncation marker missing: %s", res.Body.String())
 	}
 	for _, forbiddenField := range []string{"sourceUrl", "storageKey", "sha256", "credential"} {
 		if strings.Contains(res.Body.String(), forbiddenField) {
