@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-07
-Phase: **M6 private messages in progress; backend foundation, bounded inbox summaries, and first messaging frontend accepted and integrated; consolidated M6 gate next**
+Phase: **M6 private messages complete; consolidated M6 gate accepted; M7 production hardening next**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -30,11 +30,11 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - second role-administration/bootstrap slice: **accepted, integrated, exact-candidate/post-integration CI green**.
   - first regeneration/admin mutation slice: **accepted, integrated, exact-candidate/post-integration CI green**.
   - consolidated M5 moderation/admin/imports milestone gate: **accepted; M5 closed**.
-- M6 private messages: **in progress**.
+- M6 private messages: **complete and integrated**.
   - first one-to-one private-messages backend foundation: **accepted and integrated; exact-candidate/post-integration CI green**.
   - second bounded conversation/inbox summaries backend slice: **accepted and integrated; exact-candidate/post-integration CI green**.
   - first authenticated inbox/direct-thread frontend slice: **accepted, browser-gated and integrated; exact-candidate/post-integration CI green**.
-  - consolidated M6 private-messages milestone gate: **next**.
+  - consolidated M6 private-messages milestone gate: **accepted; M6 closed**.
 
 ## M6 private messages — first backend foundation accepted and integrated
 
@@ -384,6 +384,77 @@ Post-integration CI is green as recorded above.
 
 M6 remains **in progress** pending one consolidated milestone gate across the accepted backend/inbox/frontend messaging slices.
 
+
+## M6 consolidated private-messages milestone gate — accepted; M6 complete
+
+Exact executable validated:
+
+`310a6f046d2ad0f74d5855d829d7d1d2948a9486`
+
+Live `v2` at gate start was documentation/state-only:
+
+`bf53fa30036566aaf57667e427aed44872c0c19b`
+
+Applicable executable CI remained green:
+
+- exact-candidate `v2 CI`: run `37669465599`, job `112957170929`, exact SHA `310a6f046d2ad0f74d5855d829d7d1d2948a9486`, success;
+- post-integration `v2 CI`: run `37673153104`, job `112969758771`, exact executable SHA `310a6f046d2ad0f74d5855d829d7d1d2948a9486`, success.
+
+Accepted retained execution evidence:
+
+- ZIP: `m6gate-20261007T193138Z.zip`;
+- authoritative SHA-256: `9be6437290573684038135fa00a811be4154d277fe28cb2b817f2e33febced0e`;
+- size: 2,486,201 bytes;
+- archive integrity check passed with no compressed-data errors;
+- primary-assistant review verified the uploaded ZIP hash exactly and inspected the raw contracts, browser summaries, SQL plans, traces/screenshots inventory and cleanup evidence.
+
+### Consolidated correctness and browser evidence
+
+The gate used real PostgreSQL, the real Go API, the built SolidJS frontend, nginx and headless Chromium against a disposable fixture with 227 users, 212 actor conversations at seed, bidirectional long threads, an inactive-peer tombstone, 40 released SFW posts with real served AVIF media/thumbnails, tags, a populated profile and unrelated traffic.
+
+All 50 raw API contract assertions passed:
+
+- 19/19 authentication, origin, validation and boundary assertions;
+- 21/21 inbox/thread pagination, ordering, tombstone, isolation and durable-send assertions;
+- 10/10 concurrent-send assertions, including 100 successful concurrent sends with unique immutable IDs and exactly one canonical conversation row per pair whose `latest_message_id` equaled the true durable maximum.
+
+All required browser assertions passed across inbox/thread, send/tombstone, stale-navigation/retention, board/profile and signed-out phases. Supplemental browser files contain overlapping phase probes, so no synthetic aggregate assertion count is used here. The accepted evidence demonstrated:
+
+- exact 200-summary inbox retention and exact 300-message thread retention of the newest window;
+- four-thread retained-state eviction;
+- stale-response isolation under deliberately held real requests;
+- coherent rapid route switching and Back/Forward;
+- immediate pending-send presentation, exactly-once authoritative reconciliation and no whole-thread refetch;
+- deterministic reconciliation of deliberately out-of-order send responses;
+- failed-send preservation/restoration behavior and recipient-unavailable transitions;
+- numeric route identity surviving username changes;
+- signed-out message routes issuing no private-message API reads and exposing no private bodies;
+- a populated board/profile/search/vote/keyboard regression tour with no board row or thumbnail-source churn attributable to messaging.
+
+No application defect or concrete missing M6 requirement was found. The consolidated scope review found no requirement for unread/read receipts, notifications, polling, SSE/WebSockets, Redis synchronization, attachments, reactions, rich text, message editing/deletion, typing indicators, presence, groups, message search or messaging-specific moderation/admin controls.
+
+### Consolidated SQL/performance evidence
+
+Raw retained `EXPLAIN (ANALYZE, BUFFERS)` plans for the accepted hot shapes remained sub-millisecond in the disposable fixture:
+
+- inbox first page: about **0.482 ms** execution in the retained raw plan;
+- inbox cursor page: about **0.438 ms**;
+- thread first page: about **0.114 ms**;
+- thread cursor page: about **0.176 ms**;
+- send plus canonical conversation upsert: about **0.428 ms** including FK-trigger work;
+- forced no-sequential-scan inbox probe: about **0.188 ms**, confirming the accepted index-backed alternative.
+
+The small-fixture planner chose small-relation sequential scans for latest-message/user probes in some normal plans; the retained no-sequential-scan probe demonstrated index capability. No OFFSET, external/disk sort, temp spill, history-wide aggregation, application-side grouping/filtering, reconciliation query or N+1 behavior was found, and the evidence does not justify a new index.
+
+Measured warmed browser transitions remained in the tens of milliseconds where directly measured: inbox settle about 62 ms, populated-thread switch about 24 ms, board settle about 64 ms, board→inbox about 35 ms and messaging→board about 31 ms. Append, held-send and some Back/Forward measurements intentionally included scripted waits and are retained only as upper bounds, not interaction-latency claims. JS heap was about 5.3 MB on the capped inbox. The environment exposed the Long Tasks observer but the probe did not provide a meaningful retained Long-Task count; traces are retained instead.
+
+### Cleanup and decision
+
+Cleanup evidence shows temporary API/nginx processes stopped, gate ports free, disposable PostgreSQL state dropped, detached worktree removed, temporary build/media/config scratch deleted, unrelated workloads untouched and the canonical tracked checkout left clean.
+
+Decision: **accept the consolidated M6 private-messages milestone gate and close M6**. The accepted one-to-one messaging product is coherent across PostgreSQL/API/frontend boundaries, bounded in retained client state, preserves established board/profile behavior, and has no measured correctness, security, SQL-plan or browser-performance issue requiring additional messaging architecture.
+
+M7 production hardening is now the active milestone.
 
 ## M5 consolidated moderation/admin/imports milestone gate — accepted; M5 complete
 
@@ -1283,7 +1354,7 @@ Do not pull these into the next task without a concrete requirement:
 - media orphan/janitor hardening;
 - deployment UID/GID/media-storage permissions;
 - stronger filesystem hardening if the media-tree threat model changes;
-- auth abuse/rate limits and KDF admission controls before production-hardening evidence requires them;
+- broader per-client/distributed abuse controls, proxy-IP policy and Redis-backed limiting until measured need/topology requires them;
 - virtualization, Redis synchronization, event streams or a large frontend store;
 - v1-v2 end-to-end speedup claims before an apples-to-apples benchmark exists;
 - profile edit/bio/avatar/display-name/rename functionality until a later explicit product slice requires it.
@@ -1306,8 +1377,8 @@ No unresolved correctness, authorization, concurrency, schema or SQL-plan blocke
 
 No unresolved correctness, authorization, concurrency, schema or SQL-plan blocker remains from the accepted second M6 inbox slice. The first inbox candidate's peer-metadata sequential scan was rejected and replaced by bounded primary-key lookups before acceptance. The accepted cursor plan uses the canonical conversation indexes and bounded top-N heapsorts with no spill; no additional inbox index, cache, event stream, unread state or aggregation machinery is justified by current evidence.
 
-No unresolved correctness, navigation, stale-response, retained-state or browser-performance blocker remains from the accepted first M6 frontend slice. The dedicated messaging browser fixture had no board posts, so whole-board thumbnail churn was not directly exercised there, and headless Chromium did not expose the Long Tasks observer. These are validation limitations rather than observed defects; use a populated board/media fixture and retained traces in the consolidated M6 gate before closing the milestone.
+No unresolved correctness, navigation, stale-response, retained-state or browser-performance blocker remains from M6. The consolidated gate exercised populated board/profile/media state, verified zero messaging-induced board row/thumbnail churn, retained browser traces, revalidated the API/SQL contracts and found no concrete missing M6 capability. The dedicated frontend gate limitations are therefore closed as milestone blockers.
 
 ## Single best next task
 
-Run the **consolidated M6 private-messages milestone gate** on exact executable `310a6f046d2ad0f74d5855d829d7d1d2948a9486`. Validate the accepted direct-thread backend, canonical inbox summaries and authenticated messaging frontend together against real PostgreSQL/API/nginx/Chromium with a meaningful many-user/many-conversation/many-message fixture plus populated board/profile/media state. Recheck authentication/authorization, numeric identity, concurrent sends and authoritative latest-message updates, inbox/thread cursor semantics, unavailable peers, stale-response isolation, bounded frontend retention, send failure/reconciliation, Back/Forward/direct navigation, and preservation of board/profile behavior. Retain representative PostgreSQL plans for the actual hot messaging read/send shapes and browser traces/performance evidence; close M6 only if no concrete missing private-message requirement or regression is found. Do not add unread/read receipts, notifications, attachments, groups, polling/SSE/WebSockets, Redis/cache state, moderation controls, new indexes or virtualization without evidence from this gate.
+Implement the **first M7 production-hardening slice: bounded password-KDF admission control**. Registration and login currently perform Argon2id work with default 64 MiB memory cost per operation and no concurrency admission boundary, so a request flood can multiply memory/CPU work before broader rate-limiting policy exists. Add the smallest cancellation-aware, configurable concurrency gate around password hashing/verification, preserve existing authentication and error semantics, bound queued/in-flight work, and add deterministic service/HTTP concurrency tests plus an applicable resource/latency benchmark. Do not add Redis, distributed limiting, trusted-proxy/client-IP parsing or broad nginx rate-limit policy in this slice; choose any production concurrency default from measured target-host evidence rather than guesswork.
