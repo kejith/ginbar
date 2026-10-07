@@ -28,9 +28,25 @@ const listPrivateMessagesFirstSQL = `
 	FROM users AS peer
 	LEFT JOIN LATERAL (
 		SELECT id, sender_user_id, recipient_user_id, body, created_at
-		FROM private_messages
-		WHERE LEAST(sender_user_id, recipient_user_id) = LEAST($1::bigint, $2::bigint)
-		  AND GREATEST(sender_user_id, recipient_user_id) = GREATEST($1::bigint, $2::bigint)
+		FROM (
+			(
+				SELECT id, sender_user_id, recipient_user_id, body, created_at
+				FROM private_messages
+				WHERE sender_user_id = $1
+				  AND recipient_user_id = $2
+				ORDER BY id DESC
+				LIMIT $3
+			)
+			UNION ALL
+			(
+				SELECT id, sender_user_id, recipient_user_id, body, created_at
+				FROM private_messages
+				WHERE sender_user_id = $2
+				  AND recipient_user_id = $1
+				ORDER BY id DESC
+				LIMIT $3
+			)
+		) AS directional
 		ORDER BY id DESC
 		LIMIT $3
 	) AS message ON true
@@ -49,10 +65,27 @@ const listPrivateMessagesBeforeSQL = `
 	FROM users AS peer
 	LEFT JOIN LATERAL (
 		SELECT id, sender_user_id, recipient_user_id, body, created_at
-		FROM private_messages
-		WHERE LEAST(sender_user_id, recipient_user_id) = LEAST($1::bigint, $2::bigint)
-		  AND GREATEST(sender_user_id, recipient_user_id) = GREATEST($1::bigint, $2::bigint)
-		  AND id < $3
+		FROM (
+			(
+				SELECT id, sender_user_id, recipient_user_id, body, created_at
+				FROM private_messages
+				WHERE sender_user_id = $1
+				  AND recipient_user_id = $2
+				  AND id < $3
+				ORDER BY id DESC
+				LIMIT $4
+			)
+			UNION ALL
+			(
+				SELECT id, sender_user_id, recipient_user_id, body, created_at
+				FROM private_messages
+				WHERE sender_user_id = $2
+				  AND recipient_user_id = $1
+				  AND id < $3
+				ORDER BY id DESC
+				LIMIT $4
+			)
+		) AS directional
 		ORDER BY id DESC
 		LIMIT $4
 	) AS message ON true

@@ -10,10 +10,7 @@ CREATE TABLE private_messages (
     CONSTRAINT private_messages_body_length CHECK (char_length(body) BETWEEN 1 AND 10000)
 );
 
-CREATE INDEX private_messages_thread_idx ON private_messages (
-    LEAST(sender_user_id, recipient_user_id),
-    GREATEST(sender_user_id, recipient_user_id),
-    id DESC
-);
+CREATE INDEX private_messages_thread_idx
+    ON private_messages (sender_user_id, recipient_user_id, id DESC);
 
 COMMIT;

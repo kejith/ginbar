@@ -227,21 +227,17 @@ func TestPrivateMessageSQLPlansAreBoundedAndIndexBacked(t *testing.T) {
 	if _, err := store.pool.Exec(ctx, `
 		INSERT INTO private_messages (sender_user_id, recipient_user_id, body)
 		SELECT
-			CASE WHEN g % 2 = 0 THEN $1::bigint ELSE $2::bigint END,
-			CASE WHEN g % 2 = 0 THEN $2::bigint ELSE $1::bigint END,
-			'target-' || g::text
-		FROM generate_series(1, 5000) AS g
-	`, actorID, peerID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := store.pool.Exec(ctx, `
-		INSERT INTO private_messages (sender_user_id, recipient_user_id, body)
-		SELECT
-			CASE WHEN g % 2 = 0 THEN $1::bigint ELSE $2::bigint END,
-			CASE WHEN g % 2 = 0 THEN $2::bigint ELSE $1::bigint END,
-			'noise-' || g::text
-		FROM generate_series(1, 20000) AS g
-	`, noiseA, noiseB); err != nil {
+			CASE
+				WHEN g % 5 = 0 THEN CASE WHEN (g / 5) % 2 = 0 THEN $1::bigint ELSE $2::bigint END
+				ELSE CASE WHEN g % 2 = 0 THEN $3::bigint ELSE $4::bigint END
+			END,
+			CASE
+				WHEN g % 5 = 0 THEN CASE WHEN (g / 5) % 2 = 0 THEN $2::bigint ELSE $1::bigint END
+				ELSE CASE WHEN g % 2 = 0 THEN $4::bigint ELSE $3::bigint END
+			END,
+			CASE WHEN g % 5 = 0 THEN 'target-' ELSE 'noise-' END || g::text
+		FROM generate_series(1, 25000) AS g
+	`, actorID, peerID, noiseA, noiseB); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.pool.Exec(ctx, "ANALYZE users, private_messages"); err != nil {
@@ -256,7 +252,7 @@ func TestPrivateMessageSQLPlansAreBoundedAndIndexBacked(t *testing.T) {
 
 	var before int64
 	if err := store.pool.QueryRow(ctx, `
-		SELECT min(id) + 2500
+		SELECT (min(id) + max(id)) / 2
 		FROM private_messages
 		WHERE LEAST(sender_user_id, recipient_user_id) = LEAST($1::bigint, $2::bigint)
 		  AND GREATEST(sender_user_id, recipient_user_id) = GREATEST($1::bigint, $2::bigint)

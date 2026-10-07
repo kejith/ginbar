@@ -136,9 +136,7 @@ func TestMigrationSet(t *testing.T) {
 		[]byte("private_messages_distinct_users"),
 		[]byte("private_messages_body_length"),
 		[]byte("private_messages_thread_idx"),
-		[]byte("LEAST(sender_user_id, recipient_user_id)"),
-		[]byte("GREATEST(sender_user_id, recipient_user_id)"),
-		[]byte("id DESC"),
+		[]byte("(sender_user_id, recipient_user_id, id DESC)"),
 	} {
 		if !bytes.Contains(privateMessages, required) {
 			t.Fatalf("private messages migration missing %q", required)
