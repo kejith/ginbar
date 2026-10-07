@@ -144,7 +144,12 @@ const listPrivateMessageInboxFirstSQL = `
 		latest.created_at
 	FROM page
 	JOIN private_messages AS latest ON latest.id = page.latest_message_id
-	LEFT JOIN users AS peer ON peer.id = page.peer_user_id
+	LEFT JOIN LATERAL (
+		SELECT username, status
+		FROM users
+		WHERE id = page.peer_user_id
+		LIMIT 1
+	) AS peer ON true
 	ORDER BY page.latest_message_id DESC
 `
 
@@ -182,7 +187,12 @@ const listPrivateMessageInboxBeforeSQL = `
 		latest.created_at
 	FROM page
 	JOIN private_messages AS latest ON latest.id = page.latest_message_id
-	LEFT JOIN users AS peer ON peer.id = page.peer_user_id
+	LEFT JOIN LATERAL (
+		SELECT username, status
+		FROM users
+		WHERE id = page.peer_user_id
+		LIMIT 1
+	) AS peer ON true
 	ORDER BY page.latest_message_id DESC
 `
 
