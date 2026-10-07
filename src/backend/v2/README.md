@@ -27,3 +27,16 @@ Runtime variables:
 - `DB_MAX_CONNS` (default `8`)
 
 The first server benchmark should populate realistic released posts/tags, then capture `EXPLAIN (ANALYZE, BUFFERS)` for the feed, tag search, and around-post shapes before changing indexes.
+
+
+## First admin bootstrap
+
+After creating the first user on a fresh installation, establish the first admin through the local operational command:
+
+```bash
+DATABASE_URL='postgres://...' go run ./cmd/bootstrap-admin --user-id <numeric-user-id>
+```
+
+The bootstrap command talks directly to PostgreSQL; there is no unauthenticated HTTP bootstrap endpoint. It is one-shot: after any admin exists, further bootstrap attempts are rejected. The initial role records the bootstrapped numeric user ID as its grant provenance.
+
+After bootstrap, authenticated admins may grant or revoke admin status with `PUT` or `DELETE /api/v2/admin/users/{id}/roles/admin`. Admin self-revocation is intentionally rejected so a successful revocation always leaves the acting admin in place.
