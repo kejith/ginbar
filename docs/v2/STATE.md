@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-07
-Phase: **M6 private messages in progress; first backend foundation accepted and integrated**
+Phase: **M6 private messages in progress; direct-thread foundation and bounded inbox summaries accepted and integrated**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -32,6 +32,7 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - consolidated M5 moderation/admin/imports milestone gate: **accepted; M5 closed**.
 - M6 private messages: **in progress**.
   - first one-to-one private-messages backend foundation: **accepted and integrated; exact-candidate/post-integration CI green**.
+  - second bounded conversation/inbox summaries backend slice: **accepted and integrated; exact-candidate/post-integration CI green**.
 
 ## M6 private messages — first backend foundation accepted and integrated
 
@@ -144,6 +145,115 @@ Remote `v2` was fast-forwarded non-force with expected-SHA lease to exact execut
 Post-integration CI is green as recorded above. No frontend messaging UI, inbox/conversation-summary query, unread/read state, attachment/group/system-message abstraction, notification mechanism, polling/SSE/WebSocket path, Redis/cache state, or messaging moderation/admin control was added.
 
 M6 remains **in progress**; only the first direct-thread backend foundation is closed.
+
+
+## M6 private messages — bounded inbox summaries accepted and integrated
+
+Verified implementation base:
+
+`78f83eaa2151facb5fe49c84d586b2057a62b4e9`
+
+This base was documentation/state-only; its accepted executable parent was:
+
+`8a716a035e4f6652d1666d18760eb6590a65b20b`
+
+Implementation branch:
+
+`astra/m6-inbox-summaries`
+
+Exact accepted executable candidate and integrated executable:
+
+`f6b918654b04f867070338dee2390908db9bf8dd`
+
+Exact-candidate `v2 CI`:
+
+- run `37667045577`;
+- job `112948834540`;
+- exact `head_sha=f6b918654b04f867070338dee2390908db9bf8dd`;
+- conclusion: **success**;
+- Go formatting, `go vet ./...`, PostgreSQL-backed `go test -v -count=1 ./...`, schema coverage, target-worker release-build applicability, exact checkout, and tracked-clean verification all passed;
+- candidate backend log contained **321 test/subtest RUN entries and zero failure markers**;
+- `v2-ci: PASS sha=f6b918654b04f867070338dee2390908db9bf8dd scope=backend`.
+
+Post-integration `v2 CI`:
+
+- run `37667381457`;
+- job `112949956705`;
+- exact integrated executable `f6b918654b04f867070338dee2390908db9bf8dd`;
+- conclusion: **success**;
+- scoped correctness, target-worker release build, exact checkout, and tracked-clean verification all passed.
+
+An earlier exact candidate `6b1efdf2cd6f648bcb91771c8278c2bb95985113` was **not accepted**. CI run `37666783319`, job `112948031198`, exposed a real plan defect: PostgreSQL attached peer metadata with a hash join that sequentially scanned all 6,401 fixture users for a 51-row inbox page. The accepted executable replaces that join with a bounded lateral primary-key lookup before integration.
+
+### Accepted schema and authoritative update path
+
+- migration `009_private_message_inbox.sql` introduces `private_message_conversations`, a minimal canonical one-row-per-user-pair relation keyed by ordered immutable numeric user IDs;
+- the relation stores only `user_low_id`, `user_high_id`, and authoritative `latest_message_id`; it does **not** duplicate usernames, bodies, timestamps, unread state, or speculative UI state;
+- migration backfill derives one row per existing pair from `private_messages` with `max(id)`, so messages created by the accepted first M6 slice immediately participate in inbox summaries;
+- `private_message_conversations_low_latest_idx(user_low_id, latest_message_id DESC, user_high_id)` and `private_message_conversations_high_latest_idx(user_high_id, latest_message_id DESC, user_low_id)` exist only for the actual inbox query shape;
+- the accepted direct-thread index `private_messages_thread_idx(sender_user_id, recipient_user_id, id DESC)` is preserved unchanged;
+- successful sends insert the authoritative `private_messages` row and update the canonical pair's `latest_message_id` in one PostgreSQL statement;
+- the conflict path uses `GREATEST(existing.latest_message_id, excluded.latest_message_id)`, so concurrent/opposite-direction sends cannot let an older immutable message ID overwrite a newer one because of transaction completion order;
+- send responses still come directly from the inserted PostgreSQL row; there is no reconciliation read, trigger-maintained summary, background aggregation job, Redis/cache state, or application-side grouping.
+
+Decision: the small canonical conversation relation is justified by measured inbox requirements. Deriving latest-per-peer summaries directly from unbounded message history would make inbox work grow with historical messages; retaining one authoritative latest-message pointer per pair makes read work depend on conversation summaries instead.
+
+### Accepted inbox/API and cursor contract
+
+- new endpoint is authenticated `GET /api/v2/messages`; existing `GET /api/v2/messages/{peerId}` and `POST /api/v2/messages/{peerId}` behavior is preserved;
+- inbox actor identity comes exclusively from the session principal's immutable numeric `users.id`;
+- each result contains exactly one peer summary and authoritative latest-message identity sufficient for ordering/rendering: peer numeric ID, current username only when currently active, availability, latest message ID, latest sender numeric ID, and latest timestamp;
+- usernames are joined current presentation metadata only and never relational or authorization identity;
+- inactive peers remain represented as an unavailable tombstone with numeric peer ID and latest-message state but no username; the existing direct-thread availability contract remains 404 `recipient_unavailable`;
+- valid durable state cannot have a physically missing peer because message/conversation user foreign keys prevent deletion while rows reference that user;
+- ordering is deterministic **latest immutable message ID descending**;
+- cursor is `before=<latest-message-id>`; cursor reads consider only current conversation summaries whose latest message ID is lower than the cursor;
+- default page size is **50**, hard maximum **100**, store reads `limit+1`, and `nextBefore` is the last returned summary's latest message ID;
+- sequential pages are unique and non-overlapping and exhaust cleanly;
+- pagination is intentionally non-snapshot: if a conversation receives a newer message after an earlier page was read, it can move above that old cursor and therefore be omitted from continuation below the old cursor, while a fresh first page immediately reflects the new authoritative latest message/order;
+- no OFFSET, pagination session/snapshot state, unread/read receipt, notification, polling, SSE/WebSocket, or Redis state was introduced.
+
+### Correctness and PostgreSQL evidence
+
+Focused exact-candidate coverage passed for:
+
+- signed-out inbox rejection and session-derived numeric actor identity;
+- empty inbox;
+- one summary per peer despite multiple messages in both directions;
+- unrelated-user conversation isolation;
+- deterministic latest-message-ID descending ordering;
+- current username presentation metadata without username relational identity;
+- inactive-peer tombstone behavior and preservation of direct-thread unavailability semantics;
+- default/max page bounds, cursor exhaustion, uniqueness and zero overlap;
+- fresh-read reordering after a new send;
+- concurrent sends across multiple peers with exactly one durable canonical row per pair and authoritative maximum latest message ID;
+- stable HTTP internal-error handling;
+- migration/backfill/index assertions;
+- preservation of accepted direct-thread send/read tests and the existing PostgreSQL/backend suite.
+
+Retained `EXPLAIN (ANALYZE, BUFFERS)` used a meaningful fixture with 200 lower-ID peers, the actor, 200 higher-ID peers, 6,000 unrelated users, roughly 8,000 actor↔peer messages, and roughly 15,000 unrelated messages:
+
+- first inbox page: both canonical directional indexes participated under a bounded `Merge Append`; latest-message lookup used `private_messages_pkey` and peer metadata used `users_pkey` through the accepted lateral lookup, each for the bounded returned page; no large-relation sequential scan occurred; execution **0.381 ms**;
+- cursor inbox page: both canonical directional indexes handled actor/cursor predicates, feeding bounded top-N heapsorts using **28 kB** each in the retained fixture; latest messages and peer metadata were primary-key lookups for 51 probe rows; no message-history scan, large-relation sequential scan, external merge, temp/disk spill or OFFSET occurred; planning **0.293 ms**, execution **0.526 ms**;
+- inbox-aware send: recipient validation used `users_pkey`, the message insert remained authoritative, and the canonical pair update used `private_message_conversations_pkey` conflict resolution; no reconciliation query or large-relation sequential scan occurred; planning **0.153 ms**, execution **0.514 ms** including foreign-key triggers.
+
+The initially rejected peer-metadata plan scanned 6,401 users and was removed before acceptance. The accepted first-page plan instead executed 51 bounded `users_pkey` lookups. The actual query/store path contains no application-side peer filtering/grouping and no application-side N+1 query pattern.
+
+Decision: **accept the second M6 bounded conversation/inbox summaries backend slice**. PostgreSQL remains authoritative; the concrete durable summary relation and its two directional indexes are justified by the measured query shape. No local execution-agent gate is required for this backend/PostgreSQL-only slice.
+
+### Integration status
+
+Immediately before integration, live `v2` was still the verified documentation/state-only base:
+
+`78f83eaa2151facb5fe49c84d586b2057a62b4e9`
+
+Remote `v2` was fast-forwarded non-force with an expected-SHA lease to exact executable:
+
+`f6b918654b04f867070338dee2390908db9bf8dd`
+
+Post-integration CI is green as recorded above.
+
+M6 remains **in progress**. The direct-thread backend foundation and bounded inbox-summary backend are closed; frontend messaging UX and later explicitly justified messaging features remain.
 
 ## M5 consolidated moderation/admin/imports milestone gate — accepted; M5 complete
 
@@ -1064,6 +1174,8 @@ No unresolved M5 milestone blocker remains after the accepted consolidated gate.
 
 No unresolved correctness, authorization, concurrency, schema or SQL-plan blocker remains from the accepted first M6 private-messages backend foundation. The rejected pre-acceptance cursor plan that could scan the global message primary key was replaced before acceptance by two bounded directional composite-index scans. No additional message index or conversation table is justified by current query shapes.
 
+No unresolved correctness, authorization, concurrency, schema or SQL-plan blocker remains from the accepted second M6 inbox slice. The first inbox candidate's peer-metadata sequential scan was rejected and replaced by bounded primary-key lookups before acceptance. The accepted cursor plan uses the canonical conversation indexes and bounded top-N heapsorts with no spill; no additional inbox index, cache, event stream, unread state or aggregation machinery is justified by current evidence.
+
 ## Single best next task
 
-Implement the **second M6 private-messages backend slice: bounded conversation/inbox summaries** from the verified current `v2`. Expose an authenticated numeric-user inbox that returns one summary per peer with the latest immutable message identity/timestamp and enough peer metadata for a later UI, using bounded cursor pagination with no OFFSET, no username relational identity, no unread/read-receipt state, and no application-side N+1 or reconciliation queries. Design the smallest PostgreSQL query/index shape from actual requirements, retain `EXPLAIN (ANALYZE, BUFFERS)` on a meaningful multi-user/multi-message fixture, and add focused authorization, isolation, ordering, cursor, missing/inactive-peer, concurrency/change-propagation and HTTP tests. Do not add frontend messaging UI, unread counters, notifications, attachments, group/system messages, polling/event streams, Redis/cache state, or moderation/admin messaging controls in this slice.
+Implement the **first M6 private-messages frontend slice: authenticated inbox and direct-thread messaging UI** from the verified current `v2`. Connect the accepted `GET /api/v2/messages`, `GET /api/v2/messages/{peerId}`, and `POST /api/v2/messages/{peerId}` contracts into the smallest coherent SolidJS UI: bounded incremental inbox/thread loading, current peer availability presentation, immediate/stable local send state with authoritative server reconciliation, and coherent route/history behavior using numeric peer identity. Preserve existing board/profile behavior and separate route, ephemeral UI and server state. Measure browser rendering/navigation on a meaningful many-conversation/many-message fixture before considering virtualization. Do not add unread/read receipts, notifications, attachments, group/system messages, polling/SSE/WebSockets, Redis/cache state, or messaging moderation/admin controls in this slice.
