@@ -10,6 +10,7 @@ import (
 
 	"github.com/kejith/ginbar/backend/v2/internal/adminbootstrap"
 	"github.com/kejith/ginbar/backend/v2/internal/httpapi"
+	"github.com/kejith/ginbar/backend/v2/internal/mediajobadmin"
 	"github.com/kejith/ginbar/backend/v2/internal/role"
 	"github.com/kejith/ginbar/backend/v2/internal/roleadmin"
 )
@@ -180,6 +181,10 @@ func TestHTTPAdminRoleGrantRevokeAuthorizationAndImmediateAuthority(t *testing.T
 		t.Fatalf("new admin read state=%#v", got)
 	}
 
+	if _, err := store.ListMediaJobs(ctx, targetID, 0, 1); err != nil {
+		t.Fatalf("new admin media-job authorization error=%v", err)
+	}
+
 	res = serveRoleAdminRequest(server, http.MethodDelete, "/api/v2/admin/users/"+fmt.Sprint(adminID)+"/roles/admin", adminToken)
 	assertRoleAdminError(t, res, http.StatusConflict, "self_admin_revoke_forbidden")
 
@@ -192,6 +197,9 @@ func TestHTTPAdminRoleGrantRevokeAuthorizationAndImmediateAuthority(t *testing.T
 	}
 	res = serveRoleAdminRequest(server, http.MethodGet, "/api/v2/admin/users/"+fmt.Sprint(memberID)+"/roles", targetToken)
 	assertRoleAdminError(t, res, http.StatusForbidden, "forbidden")
+	if _, err := store.ListMediaJobs(ctx, targetID, 0, 1); !errors.Is(err, mediajobadmin.ErrForbidden) {
+		t.Fatalf("revoked admin media-job authorization error=%v", err)
+	}
 
 	// adminID is now the sole admin; the explicit no-self-revocation policy is
 	// also the single-admin lockout guard.
@@ -255,6 +263,61 @@ func TestConcurrentCrossAdminRevocationCannotRemoveLastAdmin(t *testing.T) {
 	}
 	if adminCount != 1 {
 		t.Fatalf("admins after concurrent cross-revoke=%d", adminCount)
+	}
+}
+
+func TestConcurrentAdminGrantsStayUniqueAndPreserveOneGrantor(t *testing.T) {
+	store, cleanup := testAuthStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	adminA := createRoleAdminUser(t, store, "admin-grant-a")
+	adminB := createRoleAdminUser(t, store, "admin-grant-b")
+	targetID := createRoleAdminUser(t, store, "admin-grant-target")
+	grantRole(t, store, adminA, role.Admin)
+	grantRole(t, store, adminB, role.Admin)
+
+	const workers = 12
+	start := make(chan struct{})
+	errs := make(chan error, workers)
+	var wg sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		actorID := adminA
+		if i%2 == 1 {
+			actorID = adminB
+		}
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			state, err := store.GrantAdmin(ctx, actorID, targetID)
+			if err == nil && (!state.Admin || state.AdminGrantedByUserID == nil) {
+				err = fmt.Errorf("incomplete state: %#v", state)
+			}
+			errs <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent admin grant error=%v", err)
+		}
+	}
+
+	var count int
+	var grantorID int64
+	if err := store.pool.QueryRow(ctx, `
+		SELECT count(*), min(granted_by_user_id)
+		FROM user_roles
+		WHERE user_id = $1
+		  AND role = $2
+	`, targetID, role.Admin).Scan(&count, &grantorID); err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 || (grantorID != adminA && grantorID != adminB) {
+		t.Fatalf("concurrent admin grant rows=%d grantor=%d", count, grantorID)
 	}
 }
 
