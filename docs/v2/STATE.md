@@ -1879,3 +1879,67 @@ SHA-256 ZIP manifest and cleanup proof in one evidence ZIP under
 `.local-agent-results/`. LOCAL must not change tracked files, integration
 refs or production services. CODING reviews raw ZIP and decides acceptance,
 threshold policy and guarded integration in a separate step. No other M7 slice.
+
+### Independent evidence ZIP review — provenance mismatch, candidate amended (2026-10-08)
+
+**Result: BLOCKED for independent acceptance; no integration.** Uploaded
+`perf-regression-20261008T202505Z.zip`; independently calculated SHA-256
+`e1a4fa1c96fd7ffb125841e364759885731b85a57c20d673d35a4c3f6c81b5b9`.
+ZIP CRC passes. Normalizing `./` path prefixes in `MANIFEST.sha256`
+shows **100/100 hash matches**, with no missing or extra evidence files.
+
+Three remote fixture runs each returned exit 0, 100,000 seeded posts,
+5/5 indexed/spill-free query plans, and 2,000/2,000 HTTP 200 requests in
+each of five cases (15 cells; 30,000 successful measured HTTP requests).
+Raw p95 ranges: first feed c1 0.894–0.972 ms; cursor c1
+0.924–1.112 ms; tag+score c1 2.700–2.739 ms; around c1
+2.048–2.059 ms; around c8 3.726–3.975 ms. All three intentional
+validator faults return exit 1 with actionable errors. Raw run result
+JSON, EXPLAIN plans, failure logs and cleanup markers were inspected,
+not just the agent's summary. No numerical performance budget justified.
+
+**Acceptance blocker:** All three remote run `environment.txt` files and
+`run*-fixture.log` trailers identify `tested_sha=5b574024dc9024a026d632434c01eec96b5577a1`
+and `tested_branch=master`, **not** candidate SHA
+`fa9df460c00b78175b748a08510c225b76592700`.
+Although six source/fixture input paths have local/remote byte-identical
+SHA-256 hashes, that does not prove the full Go API source tree built by
+the remote harness matched the executable candidate. A scripted archive
+transfer inside another Git checkout can benchmark the caller's other
+repository because the original fixture used `git rev-parse --show-toplevel`
+from the caller cwd. The 3-run evidence therefore demonstrates the
+benchmark pattern and validator correctness but **does not confer
+INDEPENDENT_EVIDENCE_PASS for the exact SHA**.
+The findings document has a mistaken correctness job ID
+`113493599564`; raw embedded job JSON and live GitHub API agree that
+`113518519620` is correct for green candidate run `37837443059`.
+The summary also incorrectly says 30 cells; there are 15 cells. These
+are corrected here rather than silently accepted.
+The evidence lacks a full before/during/after remote host-resource
+series, a further limitation for numerical calibration.
+
+**Coding fix:** On the same feature branch, the benchmark harness now
+resolves its root relative to the script path; requires an actual clean
+Git checkout at exactly `GINBAR_PERF_EXPECT_SHA` (or Actions
+`GITHUB_SHA`), fails closed for wrong/missing SHA, and records both
+actual/expected SHA in the environment. Documentation updated.
+The **new executable/configuration candidate is**
+`d25046f78e4343d7612f04fbff9f58dc9cb81f74` (prior
+`fa9df460...` superseded). Docs/config preceding this commit are
+included. The previous green run applies only to the superseded
+executable and cannot authorize the new one. New exact-candidate CI
+`v2 CI` workflow `374214168`, run `37844850570`,
+feature branch `push`, initially `pending` when observed; job and
+result unknown. Any later STATE-only commit is documentation-only.
+No `v2` merge or deployment occurred.
+
+**Gate:** IMPLEMENTED, pending new EXACT_CANDIDATE_CI_GREEN and
+new independent acceptance. No numeric thresholds; M7 remains open.
+
+**Exactly ONE next task:** Verify new exact-candidate CI for SHA
+`d25046f78e4343d7612f04fbff9f58dc9cb81f74` and remedy any concrete
+failure. Once GREEN, request **a fresh independent** LOCAL acceptance
+run from a detached, tracked-clean worktree at **that exact SHA** with
+`GINBAR_PERF_EXPECT_SHA` explicitly set and complete raw host evidence.
+Do not replay acceptance based on the master-SHA runs and do not integrate
+before the corrected independent gate passes.
