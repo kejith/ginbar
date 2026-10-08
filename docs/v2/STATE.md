@@ -2080,3 +2080,75 @@ and close only this performance-regression fixture slice;
 otherwise report the first actionable failure and route fixes
 through a fresh exact-candidate gate. Do not start another
 M7 slice or infer success from stale candidate CI.
+
+### M7 performance-regression fixture: post-integration push CI GREEN and slice CLOSED — 2026-10-09
+
+- **Exact integrated executable/configuration SHA:**
+  `5712176ceb2e6e886578bad71d1515ee6d0cec1a`.
+  Prior guarded non-force, expected-SHA fast-forward of
+  `v2` moved from `36e27ed4f1671f7a50a3e99833ffb2fecb2c6e7f`
+  to this exact executable SHA. Following previous documentation-only
+  `docs/v2/STATE.md` update had HEAD
+  `301579fee6561b2487584f823071cfffd168c61a`, which
+  differs from executable only in STATE; this closing commit is also
+  documentation-only.
+- **POST_INTEGRATION_CI_GREEN independently verified** from fresh
+  authenticated GitHub Actions run/job/step API and downloaded
+  full raw job log (293,803 characters), distinct from
+  feature-branch exact-candidate CI:
+  - Workflow `v2 CI` ID `374214168`.
+  - Run **`37855607480`**, attempt 1;
+    event **`push`**, branch **`v2`**, head SHA
+    **`5712176ceb2e6e886578bad71d1515ee6d0cec1a`**.
+  - Run `completed/success`, updated
+    **`2026-10-08T22:52:41Z`**.
+    Correctness job **`113578910879`** `completed/success`;
+    all **8/8** GitHub job steps completed/success, including
+    exact revision checkout + SHA verification, full
+    scoped correctness, target Rust worker release build,
+    tracked-checkout-unchanged, postcheckout and complete.
+  - Raw success markers:
+    `v2-perf-regression: PASS shape=bounded/indexed/no-spill http=all-200 budget=not-yet-calibrated`,
+    `v2-perf-regression: exit=0 sha=5712176ceb2e6e886578bad71d1515ee6d0cec1a ... containers_removed=yes`,
+    and
+    `v2-ci: PASS sha=5712176ceb2e6e886578bad71d1515ee6d0cec1a scope=all`.
+  - Post-integration CI VM HTTP observations, p95/p99/RPS:
+    first feed c1 `1.088/1.251/1139.1`,
+    ID cursor c1 `1.278/1.582/986.6`,
+    tag+score c1 `3.023/3.361/494.7`,
+    around-post c1 `2.400/2.738/509.6`,
+    around-post c8 `7.178/9.166/1838.3`.
+    These are CI VM measurements only, not target SLOs.
+- The independently reviewed authorized target acceptance archive
+  remains `m7-perf-shared-auth-20261008T224019Z.zip`
+  SHA-256
+  `3c768f4d92f2c15c456ba1c95a76d1a6834a741bc74c52cd6bdb7bb3bd7ac781`,
+  133/133 manifest entries matching, three exact-source
+  first-attempt successful isolated runs, total 30,000/30,000
+  HTTP 200 requests, 15/15 accepted indexed SQL plans,
+  missing/wrong SHA rejection, and host cleanup proof.
+  This acceptance is limited to structural regression checks
+  and repeatable timing evidence; **no accepted numeric
+  latency, p99, RPS or environment-independent threshold has
+  been established**, and the gate does not claim one.
+- **FINAL SLICE GATE:**
+  `IMPLEMENTED → LOCAL_FIXTURE_PASS → EXACT_CANDIDATE_CI_GREEN
+  → INDEPENDENT_EVIDENCE_PASS → CODING_ACCEPTED → INTEGRATED
+  → POST_INTEGRATION_CI_GREEN → CLOSED`.
+  M7 **performance-regression fixture slice CLOSED**.
+  **M7 production hardening overall remains open** until all
+  other STATE/PLAN requirements receive their own evidenced gates.
+  No production deployment, modification to live databases or
+  legacy `master` branch occurred.
+
+**Exactly ONE next task:** CODING AGENT performs a narrowly
+scoped **M7 numeric performance-budget calibration decision**
+using accepted target-host raw runs from the retained independent
+ZIP versus comparable CI fixture observations. Inspect variability
+and background host load, propose target-/environment-specific
+p95/p99/RPS budgets with explicit provenance and documented
+tradeoffs, and decide whether the available evidence is adequate.
+Do **not** silently insert speculative numeric thresholds into CI,
+make schema/index changes, run production-data benchmarks or
+start a new implementation before establishing a defensible
+baseline and separate acceptance gate.
