@@ -44,7 +44,7 @@ resolve_auto_scope() {
       src/frontend/*)
         frontend=1
         ;;
-      nginx/v2/*|systemd/v2/*|scripts/v2-nginx-test.sh|scripts/v2-pg-backup-test.sh|scripts/v2-service-limits-test.sh)
+      nginx/v2/*|systemd/v2/*|scripts/v2-nginx-test.sh|scripts/v2-pg-backup-test.sh|scripts/v2-service-limits-test.sh|scripts/v2-deploy-dry-run-test.sh)
         nginx=1
         ;;
       go.work|scripts/v2-ci.sh|.github/workflows/v2-ci.yml|.gitignore)
@@ -336,6 +336,11 @@ fi
 if ((run_frontend)); then
   run_frontend_gate
 fi
+if ((run_nginx)); then
+  printf '\n== deployment: isolated update and rollback dry-run ==\n'
+  bash scripts/v2-deploy-dry-run-test.sh
+fi
+
 if ((run_nginx)); then
   printf '\n== PostgreSQL: disposable logical backup/restore ==\n'
   bash scripts/v2-pg-backup-test.sh
