@@ -6,7 +6,33 @@ for cmd in docker git python3 mktemp; do
   command -v "$cmd" >/dev/null 2>&1 || { echo "v2-perf-regression: missing $cmd" >&2; exit 2; }
 done
 
-root="$(git rev-parse --show-toplevel)"
+# Resolve the source tree from this script, never from the caller's cwd.
+# Requiring the exact checkout prevents a copied archive inside another Git
+# repository from benchmarking that other repository's backend sources.
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+root="$(cd -- "$script_dir/.." && pwd -P)"
+checkout_root="$(git -C "$root" rev-parse --show-toplevel 2>/dev/null)" || {
+  echo "v2-perf-regression: source tree must be an exact Git checkout, not a copied archive" >&2
+  exit 2
+}
+[[ "$(cd -- "$checkout_root" && pwd -P)" == "$root" ]] || {
+  echo "v2-perf-regression: script resides inside a different Git checkout" >&2
+  exit 2
+}
+actual_sha="$(git -C "$root" rev-parse HEAD)"
+expected_sha="${GINBAR_PERF_EXPECT_SHA:-${GITHUB_SHA:-}}"
+[[ "$expected_sha" =~ ^[[:xdigit:]]{40}$ ]] || {
+  echo "v2-perf-regression: supply GINBAR_PERF_EXPECT_SHA (40 hex digits; GITHUB_SHA in CI)" >&2
+  exit 2
+}
+[[ "$actual_sha" == "$expected_sha" ]] || {
+  echo "v2-perf-regression: incorrect checkout; expected $expected_sha, got $actual_sha" >&2
+  exit 2
+}
+[[ -z "$(git -C "$root" status --porcelain --untracked-files=no)" ]] || {
+  echo "v2-perf-regression: tracked source checkout must be clean" >&2
+  exit 2
+}
 bench="$root/src/backend/v2/bench"
 [[ -f "$bench/seed.sql" && -f "$bench/explain.sql" && -f "$bench/check_regression.py" ]] || {
   echo "v2-perf-regression: missing existing benchmark inputs" >&2; exit 2;
