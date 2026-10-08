@@ -2006,3 +2006,77 @@ LOCAL must not edit tracked files, commit, merge, deploy or run on a
 production host without new explicit approval. CODING must independently
 inspect the new raw evidence before any `CODING_ACCEPTED`, guarded
 fast-forward integration or distinct post-integration `v2` push CI.
+
+### Independent target ZIP audit and PostgreSQL initialization-race fix — 2026-10-08
+
+- Uploaded evidence archive: `m7-perf-target-20261008T212942Z.zip`,
+  exact uploaded-byte SHA-256
+  `e893dea286547f49d901eee2a0f760920ed86db46cdb1512b9e4d0bd0cf80ccc`.
+  Independently rechecked valid ZIP CRC, **104/104** manifest SHA-256
+  entries, and no missing/extra evidence entries; inspected
+  `findings.md`, preflight refs, all raw `environment.txt`, Git statuses,
+  HTTP JSON, SQL EXPLAINs, logs, negative tests, calibration, versions
+  and cleanup.
+- Exact earlier executable tested: `d25046f78e4343d7612f04fbff9f58dc9cb81f74`,
+  genuinely detached tracked-clean worktree, `expected_sha=tested_sha`
+  in all three passing runs, Go API built in the isolated fixture from
+  that worktree; confirmed from independent raw evidence (unlike earlier
+  invalid `master` evidence). Three passing runs each had 100,000 seeded
+  posts and five HTTP cases with 2,000/2,000 HTTP 200 and no errors:
+  **30,000** successful requests over **15** cells. Each run had five
+  completed `EXPLAIN (ANALYZE, BUFFERS)` plans, indexed hot paths, and
+  no reported hot-table seq scan or spill; negative wrong/missing expected
+  SHA each returned exit 2. p95 target run ranges in ms: first feed
+  **0.905–0.964**, post-ID cursor **0.934–0.984**, tag+score
+  **2.697–2.847**, around c1 **2.031–2.061**, around c8
+  **3.814–4.078**. Run-to-run p95 range within 1.4–6.9%.
+  No numeric budget has been accepted or enabled.
+- **First actionable failure in raw evidence:** run 2 attempt 1 exited
+  **2** before any benchmarks because `pg_isready` passed during
+  PostgreSQL entrypoint's temporary bootstrap server while database
+  `ginbar_perf` did not exist. Raw `postgres.log` contains FATAL
+  database missing before `CREATE DATABASE`; retry passed. This is
+  a fixture provisioning **defect**, not an API SQL or latency failure.
+- **Fix implemented** on the feature branch in executable/configuration
+  commit `5712176ceb2e6e886578bad71d1515ee6d0cec1a`:
+  replace `pg_isready` with bounded authenticated `SELECT 1` to
+  `ginbar_perf` over **TCP 127.0.0.1**, excluding the temporary
+  Unix-socket-only bootstrap server; unchanged disposable isolation and
+  cleanup. No other application SQL, index, frontend, API or production
+  behavior was modified. The prior CI success at `d25046f7...` is
+  not evidence of success for the new executable.
+- **Authorization / limitations:** local evidence was executed on
+  `root@amp.kejith.de`, a shared production-adjacent host, whereas
+  the previous LOCAL handoff explicitly prohibited production target
+  access without fresh user authorization. No fresh authorization was
+  established in this coding session for that particular execution.
+  Therefore this archive is useful **technical diagnostic evidence**,
+  but not an accepted independent gate under the agreed permission
+  boundary. Before/during/after host-resource samples are also
+  incomplete (before/after snapshots, no continuous during series).
+  Cleanup evidence shows temporary perf containers/networks removed,
+  detached worktree removed, original checkout still tracked-clean;
+  a retained result-evidence directory remains on the host.
+  No operator-side cleanup or target-host action was initiated here.
+- New exact-candidate feature-branch push run `37848213706`
+  (`v2 CI`, workflow ID `374214168`, SHA
+  `5712176ceb2e6e886578bad71d1515ee6d0cec1a`) was observed
+  `in_progress`; correctness job `113554321060` in progress,
+  final result **not yet verified** at this STATE write.
+  Live integration branch `v2` remained
+  `36e27ed4f1671f7a50a3e99833ffb2fecb2c6e7f`;
+  prior accepted executable `ac92e9e91d6ccdbb19982c929f8d66832d515a0b`.
+  This STATE update is documentation-only above executable
+  `5712176ceb2e6e886578bad71d1515ee6d0cec1a`.
+
+**Gate:** `IMPLEMENTED`; exact-candidate CI on corrected SHA pending.
+No `INDEPENDENT_EVIDENCE_PASS`, coding acceptance, integration or
+post-integration CI. M7 remains open.
+
+**Exactly ONE next task:** Verify exact-candidate CI on executable
+`5712176ceb2e6e886578bad71d1515ee6d0cec1a` (workflow
+`374214168`, run `37848213706`, job `113554321060`), fix any
+concrete failure, then request fresh independent LOCAL acceptance in
+a user-authorized **non-production isolated environment**. Never
+silently reuse unauthorized target-host evidence, and do not integrate
+or start another M7 slice before independent acceptance.
