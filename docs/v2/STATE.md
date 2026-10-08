@@ -1943,3 +1943,66 @@ run from a detached, tracked-clean worktree at **that exact SHA** with
 `GINBAR_PERF_EXPECT_SHA` explicitly set and complete raw host evidence.
 Do not replay acceptance based on the master-SHA runs and do not integrate
 before the corrected independent gate passes.
+
+### Corrected exact-candidate CI GREEN — 2026-10-08; independent acceptance next
+
+**Verified live refs before this state update:** `v2` =
+`36e27ed4f1671f7a50a3e99833ffb2fecb2c6e7f`; candidate branch
+`astra/m7-performance-regression-gate` =
+`00384ecd5d59387a20a729b522db698fedcf9b83` (STATE-only above
+candidate). **Exact executable/configuration SHA**:
+`d25046f78e4343d7612f04fbff9f58dc9cb81f74`.
+
+**EXACT_CANDIDATE_CI_GREEN verified from live Actions run/job API and
+independently fetched raw runner logs.** Workflow `v2 CI`
+ID `374214168`, run `37844850570`, correctness job
+`113543437071`; branch `astra/m7-performance-regression-gate`,
+event `push`, exact `head_sha=d25046f78e4343d7612f04fbff9f58dc9cb81f74`,
+run `completed/success` updated `2026-10-08T21:16:52Z`,
+attempt 1; **8/8 job steps success**: setup, exact checkout, checkout SHA
+verification, full scoped correctness, target worker release build,
+tracked-checkout-unchanged, postcheckout, complete. Raw markers:
+`v2-perf-regression: PASS shape=bounded/indexed/no-spill http=all-200 budget=not-yet-calibrated`,
+`v2-perf-regression: exit=0 sha=d25046f78e4343d7612f04fbff9f58dc9cb81f74 results=... containers_removed=yes`,
+and `v2-ci: PASS sha=d25046f78e4343d7612f04fbff9f58dc9cb81f74 scope=all`.
+The corrected script's clean Git checkout/expected-SHA guard runs before
+launching Docker; its successful exit on this run confirms guard acceptance
+under Actions `GITHUB_SHA`. The ephemeral results directory path was
+reported by the CI harness; retained independently transferable raw
+results are **not** asserted from the CI run.
+
+**CI synthetic-data measurements** (2,000 requests/cell, errors zero;
+p95 / p99 in milliseconds, then RPS):
+- first feed c1: **0.982 / 1.153 / 1236.0**;
+- ID cursor feed c1: **1.091 / 1.316 / 1166.2**;
+- tag+score c1: **2.670 / 3.377 / 519.8**;
+- around-post c1: **2.351 / 2.766 / 530.5**;
+- around-post c8: **7.623 / 8.985 / 1784.2**.
+
+Five raw `EXPLAIN (ANALYZE, BUFFERS)` plans, in order: first feed
+**0.220 ms**, ID cursor **0.247 ms**, tag+score **3.084 ms**,
+tag+exclude+score **2.279 ms**, around-post **0.372 ms**.
+Post/media indexed scans visible; no hot-table sequential scan or spill
+failure. Numerical p95/p99/RPS budgets remain **uncalibrated** and
+**unenforced**, rather than treating single-CI host numbers or old M2
+measurements as universal budgets.
+
+**Decision:** No executable repair warranted; gate now
+`EXACT_CANDIDATE_CI_GREEN`. The prior ZIP
+`perf-regression-20261008T202505Z.zip` does NOT become independent
+acceptance because its `master`-SHA provenance mismatch remains.
+Do not integrate or mark this M7 slice closed; M7 remains open.
+No production DB/host, `master`, or integration ref was modified.
+
+**Exactly ONE next task:** Ask LOCAL EXECUTION AGENT for a *new independent
+acceptance* against a clean detached Git worktree at exact executable SHA
+`d25046f78e4343d7612f04fbff9f58dc9cb81f74`, with
+`GINBAR_PERF_EXPECT_SHA` explicitly set, three disposable PostgreSQL
+benchmark runs and captured full-source provenance, errors/negative tests,
+raw HTTP JSON, EXPLAIN plans, before/during/after host conditions and
+cleanup proof. Return exactly one archive under `.local-agent-results/`
+with `findings.md`, manifest hashes, external ZIP SHA-256 and path.
+LOCAL must not edit tracked files, commit, merge, deploy or run on a
+production host without new explicit approval. CODING must independently
+inspect the new raw evidence before any `CODING_ACCEPTED`, guarded
+fast-forward integration or distinct post-integration `v2` push CI.
