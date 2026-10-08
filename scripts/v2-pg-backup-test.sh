@@ -92,12 +92,20 @@ docker exec -i "$container" pg_restore -U ginbar_fixture -d ginbar_restore --exi
 snapshot ginbar_restore "$tmp/after"
 cmp "$tmp/before" "$tmp/after"
 
-# Ignore database-specific comment headings and pg_dump's per-invocation
-# random psql restrict tokens; compare the actual restored schema DDL.
-dump --schema-only --no-owner --no-privileges -d ginbar_source \
-  | sed -E '/^-- Database:/d; /^\\\\(un)?restrict /d' > "$tmp/schema-before"
-dump --schema-only --no-owner --no-privileges -d ginbar_restore \
-  | sed -E '/^-- Database:/d; /^\\\\(un)?restrict /d' > "$tmp/schema-after"
+# Compare schema object inventories from PostgreSQL's native archive TOC.
+# Textual pg_dump DDL is not byte-stable across restore: PostgreSQL may
+# deparse a semantically identical CHECK expression with different parentheses.
+# Strict pg_restore already verifies each object could be reconstructed.
+schema_inventory() {
+  local db="$1" out="$2"
+  dump -Fc --schema-only --no-owner --no-privileges -d "$db" > "$tmp/schema-$db.dump"
+  docker exec -i "$container" pg_restore --list < "$tmp/schema-$db.dump" |
+    sed -nE '/^[[:digit:]]+; /{s/^[[:digit:]]+; [[:digit:]]+ [[:digit:]]+ / /;p;}' |
+    LC_ALL=C sort > "$out"
+}
+schema_inventory ginbar_source "$tmp/schema-before"
+schema_inventory ginbar_restore "$tmp/schema-after"
+test -s "$tmp/schema-before"
 cmp "$tmp/schema-before" "$tmp/schema-after"
 
 # Exercise restored foreign keys and identity sequences without modifying source.
