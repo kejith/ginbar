@@ -57,7 +57,8 @@ docker run -d --rm --name "$container" --privileged --cgroupns=private \
 
 ready=0
 for i in $(seq 1 40); do
-  if docker exec "$container" systemctl is-system-running --wait 2>/dev/null | grep -Eq 'running|degraded'; then ready=1; break; fi
+  state="$(docker exec "$container" systemctl is-system-running 2>/dev/null || true)"
+  if [[ "$state" == running || "$state" == degraded ]]; then ready=1; break; fi
   sleep 1
 done
 [[ "$ready" -eq 1 ]] || { docker logs "$container" >&2; echo "systemd did not boot" >&2; exit 1; }
