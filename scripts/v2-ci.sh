@@ -38,7 +38,7 @@ resolve_auto_scope() {
         worker=1
         backend=1
         ;;
-      src/backend/v2/*)
+      src/backend/v2/*|scripts/v2-perf-regression-test.sh)
         backend=1
         ;;
       src/frontend/*)
@@ -332,6 +332,10 @@ if ((run_worker)); then
 fi
 if ((run_backend)); then
   run_backend_gate
+fi
+if ((run_backend)); then
+  printf '\n== backend: disposable PostgreSQL performance-regression evidence ==\n'
+  bash scripts/v2-perf-regression-test.sh
 fi
 if ((run_frontend)); then
   run_frontend_gate
