@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-08
-Phase: **M7 production hardening in progress; API/worker health-readiness boundary accepted and integrated, post-integration CI pending**
+Phase: **M7 production hardening in progress; API/worker health-readiness boundary CLOSED (accepted, integrated, post-integration CI green)**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -1722,7 +1722,7 @@ Verify the **post-integration** `v2 CI` branch-push run `37828358188` for exact 
 **Exactly ONE next task:** Implement a narrowly scoped v2 API/worker operational health and readiness observability boundary, starting from freshly verified live `v2`: establish low-cost health/readiness signals and deterministic isolated tests without new deployment automation, production host changes, metrics storage, or alerting infrastructure. Obtain exact-SHA green CI and independent evidence before integration.
 
 
-## M7 API/worker health-readiness observability — accepted and integrated; post-integration CI pending
+## M7 API/worker health-readiness observability — CLOSED (accepted, integrated, post-integration CI green)
 
 **Decision 2026-10-08: ACCEPT independent evidence and integrate exact executable. Do not mark CLOSED until verified post-integration push CI GREEN.**
 
@@ -1736,4 +1736,12 @@ Verify the **post-integration** `v2 CI` branch-push run `37828358188` for exact 
 - **Post-integration CI:** workflow `v2 CI` ID `374214168`, run `37828358188`, branch `v2`, event `push`, exact head SHA `5da0bbad5c21f2ee289265c128f84a1cf7a597c9`, observed `queued`; correctness job/result not yet verified. The feature-branch candidate run cannot substitute for it.
 - No deployment, persistent production change, live systemd/nginx change, backup/PITR or `master` modification.
 
-**Exactly ONE next task:** Verify `v2` push run `37828358188` and its correctness job to GREEN for exact executable SHA, then update STATE and mark CLOSED only if successful.
+### Final post-integration verification and closure — 2026-10-08
+
+- Received independent LOCAL read-only post-integration CI evidence ZIP `post-integration-ci-20261008T190005Z.zip`. Verified ZIP integrity (no corrupt entries); SHA-256 of the exact uploaded ZIP bytes `3206f2311ffa3f2b1bba0ece466e6f4084b0120e50a033aac56a030736ceb3bd`. All 21 entries listed in `MANIFEST.sha256` match, with no missing or additional evidence entries; inspected `findings.md`, initial/poll/final raw workflow/job JSON, provenance, versions and cleanup proof. Sidecar ZIP checksum from the local agent was not supplied here, so the verified SHA above is independently calculated from uploaded bytes.
+- Independently re-read authenticated GitHub Actions API: workflow `v2 CI` ID `374214168`, integration push run `37828358188` (run number 252), event `push`, branch `v2`, exact executable SHA `5da0bbad5c21f2ee289265c128f84a1cf7a597c9`, status `completed`, conclusion `success`, updated `2026-10-08T19:02:36Z`; correctness job `113486954645` matches run/SHA/branch and is `completed/success`. All **8/8** job steps completed/success: setup, checkout exact revision, verify checkout, scoped correctness, target worker release build, verify tracked checkout unchanged, postcheckout and complete.
+- Raw workflow logs were inaccessible to the independent agent (public GitHub API HTTP 403); raw Actions run/job/step JSON is sufficient for the exact-SHA CI completion/conclusion gate and is cross-verified against live GitHub API. The exact-candidate feature run `37826767139` is separate and was not substituted.
+- Integration base and final HEAD relation re-verified: `5da0bbad5c21f2ee289265c128f84a1cf7a597c9` is the direct ancestor of previously live docs-only `9d86def3d1c400ce8bf109f8a6bfd3c271fe1a15`; `compare_commits` shows the only following file change is `docs/v2/STATE.md`. Closing this gate changes only documentation; no executable/configuration changes or new CI claims.
+- **Final gate transitions:** IMPLEMENTED → LOCAL_FIXTURE_PASS → EXACT_CANDIDATE_CI_GREEN → INDEPENDENT_EVIDENCE_PASS → CODING_ACCEPTED → INTEGRATED → POST_INTEGRATION_CI_GREEN → **CLOSED**. The API/worker readiness boundary is closed; overarching M7 is still in progress. No production deployment, monitoring service, or alerting stack is implied.
+
+**Exactly ONE next task:** Define and implement the first narrowly scoped **v2 deployment/update-and-rollback dry-run procedure** using disposable local services only, beginning with live `v2` and the deployment units already in-repo. Exclude production deployment and host writes. Obtain exact executable/configuration SHA green CI and independent LOCAL evidence before integration.
