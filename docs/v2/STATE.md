@@ -1700,9 +1700,9 @@ Verify the **first narrowly scoped PostgreSQL backup/restore boundary** for v2 o
 - **ONE next task:** Execute and repair the fixture on an authorized Docker CI runner and obtain verified successful `v2 CI` for the exact executable SHA, updating STATE with its workflow/run/job/SHA/result before independent local acceptance.
 
 
-## M7 PostgreSQL disposable logical backup/restore — independently accepted, integrated; post-integration CI pending
+## M7 PostgreSQL disposable logical backup/restore — CLOSED (accepted, integrated, post-integration CI green)
 
-**Gate state: INTEGRATED, NOT CLOSED.** Live `v2` base before integration: `8732c12b0e8998d12df5b8d0ff26661847790359` (documentation-only). Non-force expected-SHA fast-forward to exact accepted executable/configuration `6eb1721ba280278f022bf11c13c1fd698b565b3b` succeeded, and remote `v2` was independently verified identical after update. Feature branch `astra/m7-pg-backup-restore`; its STATE-only commits were not integrated.
+**Gate state: CLOSED after verified post-integration CI.** Live `v2` base before integration: `8732c12b0e8998d12df5b8d0ff26661847790359` (documentation-only). Non-force expected-SHA fast-forward to exact accepted executable/configuration `6eb1721ba280278f022bf11c13c1fd698b565b3b` succeeded, and remote `v2` was independently verified identical after update. Feature branch `astra/m7-pg-backup-restore`; its STATE-only commits were not integrated.
 
 - Added `scripts/v2-pg-backup-test.sh`: disposable PostgreSQL source/restore, sorted migrations, FK-linked fixture, native `pg_dump -Fc` / `pg_restore --exit-on-error`, deterministic public-table data fingerprints, sequences, native pg_restore TOC object inventory comparison, and rolled-back restored usability. Added `scripts/v2-ci.sh` and `.github/workflows/v2-ci.yml` coverage.
 - Exact-candidate `v2 CI`: run `37821288937`, correctness job `113462683224`, event push, branch `astra/m7-pg-backup-restore`, exact SHA `6eb1721ba280278f022bf11c13c1fd698b565b3b`, completed/**success** (8 successful job steps per raw archived API result).
@@ -1712,3 +1712,13 @@ Verify the **first narrowly scoped PostgreSQL backup/restore boundary** for v2 o
 - **Post-integration `v2 CI` for the exact executable SHA: pending verification; no run/job/result is claimed here.** Do not mark CLOSED based on feature-branch candidate CI.
 
 **Exactly ONE next task:** Verify the post-integration `v2 CI` push workflow/run/job, exact head SHA `6eb1721ba280278f022bf11c13c1fd698b565b3b`, and conclusion through an authorized Actions API host; update STATE and close this slice only on GREEN. Do not begin another M7 slice first.
+
+### Final post-integration verification and closure — 2026-10-08
+
+- Received independent read-only CI evidence ZIP `pg-backup-postci-20261008T183443Z.zip`, verified ZIP integrity and SHA-256 `0f059eea7558f5a698900501e73095972790128674b264abe2c55b7d98236b84`. Reviewed raw GitHub Actions JSON and findings. Live `v2` prior to this STATE-only update was `9d32d6fec80a673c935dc509ae67c1c11a7ce1be`, executable remains `6eb1721ba280278f022bf11c13c1fd698b565b3b`.
+- **Post-integration `v2 CI`: SUCCESS.** Workflow `v2 CI` ID `374214168`, run `37824673076`, event `push`, branch `v2`, exact head SHA `6eb1721ba280278f022bf11c13c1fd698b565b3b`, status `completed`, conclusion `success`. Raw `ci-jobs-37824673076.json` establishes correctness job **`113474314789`**, exact SHA, completed/success and 8/8 successful recorded steps (including scoped correctness, worker release-build applicability and tracked-clean verification).
+- **Evidence correction:** the local handoff summary and archived findings incorrectly repeated candidate correctness job `113462683224` for the post-integration run. This is **not** the post-integration job ID. The actual post-integration job is `113474314789` as recorded in raw job API JSON. Candidate CI remains run `37821288937` / job `113462683224` and is not substituted for post-integration verification.
+- Integration-triggered CI scope `all` was applicable because the pushed executable range changes the workflow, CI script, and backup fixture paths. The feature implementation was a fast-forward, no merge or production deployment. Separate doc-only STATE updates are not executable CI triggers.
+- All mandatory gates are now complete: IMPLEMENTED → diagnostic fixture PASS → EXACT_CANDIDATE_CI_GREEN → INDEPENDENT_EVIDENCE_PASS → CODING_ACCEPTED → INTEGRATED → POST_INTEGRATION_CI_GREEN → **CLOSED**. No known backup/restore primitive correctness or CI blocker remains. This establishes a disposable logical-backup/restore verification procedure, not scheduled/off-host backup durability or PITR. M7 remains open.
+
+**Exactly ONE next task:** Implement a narrowly scoped v2 API/worker operational health and readiness observability boundary, starting from freshly verified live `v2`: establish low-cost health/readiness signals and deterministic isolated tests without new deployment automation, production host changes, metrics storage, or alerting infrastructure. Obtain exact-SHA green CI and independent evidence before integration.
