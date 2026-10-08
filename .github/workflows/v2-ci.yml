@@ -15,6 +15,7 @@ on:
       - 'scripts/v2-nginx-test.sh'
       - 'scripts/v2-pg-backup-test.sh'
       - 'scripts/v2-service-limits-test.sh'
+      - 'scripts/v2-deploy-dry-run-test.sh'
       - 'scripts/v2-worker-build.sh'
       - 'src/backend/v2/**'
       - 'src/frontend/**'
