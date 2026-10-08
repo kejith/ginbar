@@ -6,7 +6,7 @@ This is not a target-host benchmark result or a v1/v2 speedup claim.
 Run from the repository root, with Docker access and Python 3:
 
 ```sh
-bash scripts/v2-perf-regression-test.sh
+GINBAR_PERF_EXPECT_SHA="$(git rev-parse HEAD)" bash scripts/v2-perf-regression-test.sh
 ```
 
 This command starts an isolated, ephemeral PostgreSQL 17.11 container on a
@@ -67,6 +67,12 @@ budget file is bundled yet, to avoid inventing unverified limits.
 
 ## Execution and boundaries
 
+- `GINBAR_PERF_EXPECT_SHA`: required explicit 40-character exact checked-out Git
+  commit SHA when running manually (in CI, the workflow provides `GITHUB_SHA`).
+  Execute from a **clean checkout at this exact SHA**, never from a copied
+  archive embedded in another repository. The fixture resolves its own
+  source root and refuses mismatched SHA, dirty tracked files, or an
+  archive without its own checkout.
 - `GINBAR_PERF_RESULTS_DIR`: retain raw results at the specified path.
 - `GINBAR_PERF_REQUESTS`: measured requests/case (default 2,000; minimum 100,
   useful only for diagnostics; do not mix with acceptance baselines).
