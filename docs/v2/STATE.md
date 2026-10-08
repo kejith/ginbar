@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-08
-Phase: **M7 production hardening in progress; nginx authentication-ingress limiter accepted, integrated, and post-integration CI verified green**
+Phase: **M7 production hardening in progress; API/worker health-readiness candidate exact-SHA CI green, awaiting independent acceptance**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -1640,9 +1640,7 @@ No known resource-limit unit, applied-cgroup, real-binary startup, graceful shut
 
 ## Single best next task
 
-Verify the **first narrowly scoped PostgreSQL backup/restore boundary** for v2 on disposable data only: prove a full logical backup of a seeded disposable database restores into an isolated target with byte-identical authoritative application state (row counts plus SHA-256 over ordered dumps of the authoritative tables, or an equivalent exact comparison), then record the exact commands, tool versions, timings and restore verification as the first backup/recovery procedure. Never touch production data, the shared development database, or live services. Add no backup automation, scheduling, WAL archiving, PITR, off-host storage, or retention policy in this slice; establish only the verified restore primitive and the recorded procedure. Start on a feature branch from freshly verified live `v2` (accepted executable `1e60983597f1651a738f9c095e915c7facf6e305` beneath documentation-only STATE). Scope is the backup/restore primitive only: no DB tuning, backend per-user limiter, Redis, WAF, observability, or deployment automation. Require applicable exact-SHA green CI before independent acceptance/integration and update STATE with evidence, unresolved issues, and exactly ONE next task.
-
-
+Run a separate **LOCAL INDEPENDENT ACCEPTANCE** gate for the exact health/readiness executable candidate `5da0bbad5c21f2ee289265c128f84a1cf7a597c9`. Verify real Go API liveness/readiness against disposable PostgreSQL through healthy, unavailable, and recovered dependency states; verify bounded concurrent `/readyz` behavior and safe response disclosure; verify the exact Rust worker binary `ready` command against healthy, unavailable, and recovered disposable PostgreSQL without claiming jobs or requiring the media root; confirm bounded connection/resource behavior, exact candidate CI provenance, tracked-clean detached execution, and cleanup. Do not edit tracked files, integrate, deploy, or modify persistent/live state. Return one evidence ZIP under `.local-agent-results/` for CODING review.
 
 ## M7 native nginx authentication-ingress limiting — accepted and integrated
 
@@ -1722,3 +1720,21 @@ Verify the **first narrowly scoped PostgreSQL backup/restore boundary** for v2 o
 - All mandatory gates are now complete: IMPLEMENTED → diagnostic fixture PASS → EXACT_CANDIDATE_CI_GREEN → INDEPENDENT_EVIDENCE_PASS → CODING_ACCEPTED → INTEGRATED → POST_INTEGRATION_CI_GREEN → **CLOSED**. No known backup/restore primitive correctness or CI blocker remains. This establishes a disposable logical-backup/restore verification procedure, not scheduled/off-host backup durability or PITR. M7 remains open.
 
 **Exactly ONE next task:** Implement a narrowly scoped v2 API/worker operational health and readiness observability boundary, starting from freshly verified live `v2`: establish low-cost health/readiness signals and deterministic isolated tests without new deployment automation, production host changes, metrics storage, or alerting infrastructure. Obtain exact-SHA green CI and independent evidence before integration.
+
+
+## M7 API/worker operational health and readiness boundary — exact-candidate CI GREEN, awaiting independent acceptance
+
+**Status (2026-10-08): IMPLEMENTED → EXACT_CANDIDATE_CI_GREEN. Not independently accepted, not CODING-accepted, not integrated.** No production host/service or legacy `master` change occurred.
+
+- Fresh verified integration base before implementation: remote `v2` `2550fac27c9d7fd1dbf7c96c85f5daaf7d68dce9`, a documentation-only closure commit above accepted executable `6eb1721ba280278f022bf11c13c1fd698b565b3b`. Feature branch: `astra/m7-health-readiness`.
+- Exact executable candidate: `5da0bbad5c21f2ee289265c128f84a1cf7a597c9`. Any STATE commit above it is documentation-only and is not the executable under test.
+- Go API: existing unauthenticated `GET /healthz` remains process liveness only and never touches PostgreSQL. New `GET /readyz` uses an injected readiness checker wired to the production PostgreSQL store, one-second default deadline, one in-flight probe per API process, HTTP 200 `{"status":"ready"}` on success and HTTP 503 `{"status":"not_ready"}` on dependency failure, timeout, missing readiness wiring, or overlapping probe. Responses remain `Cache-Control: no-store` and do not expose dependency errors, addresses, credentials, or SQL.
+- Rust worker: new one-shot `ready` command performs exactly one bounded PostgreSQL connection plus `SELECT 1`, using fixed one-second connect and statement timeouts, without claiming jobs or requiring `GINBAR_MEDIA_ROOT`. Success prints only `ready`; dependency failures collapse to generic `worker not ready`. Long-running worker liveness/retry semantics are unchanged; systemd remains the process-liveness authority and no listener/monitoring daemon was added.
+- Operational boundary remains host-local: supplied API systemd unit listens on `127.0.0.1:8080`; nginx does not proxy top-level `/healthz` or `/readyz`. No metrics infrastructure, dashboards, alerting, tracing, deployment automation, database tuning, backups/WAL/PITR or other M7 scope was added.
+- Deterministic tests cover API liveness independence, unavailable dependency, recovery, missing readiness wiring, deadline bounding, one-probe concurrency bounding, generic disclosure; worker tests cover fixed readiness timeout configuration, generic failure/recovery, and real PostgreSQL readiness when `GINBAR_TEST_DATABASE_URL` is available.
+- Superseded CI attempt: exact SHA `e77dded8136134389770eb4b012dbb5bc3d4869a`, run `37826494215` / job `113480845050`, failed only at `cargo fmt --check`; no later gate result is inferred from it. Formatter output was applied before the final candidate.
+- **Exact-candidate `v2 CI`: GREEN.** Workflow `v2 CI` ID `374214168`, run `37826767139`, branch `astra/m7-health-readiness`, event `push`, exact head SHA `5da0bbad5c21f2ee289265c128f84a1cf7a597c9`, status `completed`, conclusion `success`; correctness job `113481508806`, completed/success. All eight recorded job steps succeeded, including exact checkout, full scoped correctness gate, target worker release build and tracked-clean verification.
+- CI ran `scope=all` against `origin/v2`. Relevant log evidence: `v2-service-limits-test: PASS`; Rust readiness configuration/failure-recovery/real-PostgreSQL tests passed; Go `TestHealthIsLivenessOnly`, all four `TestReadiness...` cases passed; disposable backup/restore and nginx fixtures remained green; final marker `v2-ci: PASS sha=5da0bbad5c21f2ee289265c128f84a1cf7a597c9 scope=all`.
+- Remaining gate/risk: independent real-binary/disposable-dependency acceptance has not run. CI proves correctness against its disposable PostgreSQL and release build but does not replace the required separate LOCAL evidence gate, including explicit dependency-loss/recovery observation on the real binaries.
+
+**Exactly ONE next task:** Perform the LOCAL INDEPENDENT ACCEPTANCE described in “Single best next task” on exact executable SHA `5da0bbad5c21f2ee289265c128f84a1cf7a597c9`; return one raw evidence ZIP for CODING review. Do not integrate first.
