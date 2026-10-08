@@ -319,6 +319,11 @@ run_frontend_gate() {
     bash -lc 'cp -a /repo/src/frontend /tmp/frontend && cd /tmp/frontend && npm ci --cache /npm-cache --no-audit --no-fund && npm run validate'
 }
 
+if ((run_nginx)); then
+  printf '\n== services: v2 systemd resource-limits boundary ==\n'
+  bash scripts/v2-service-limits-test.sh
+fi
+
 if ((run_worker || run_backend)); then
   start_postgres
 fi
@@ -334,8 +339,6 @@ fi
 if ((run_nginx)); then
   printf '\n== nginx: v2 production serving boundary ==\n'
   bash scripts/v2-nginx-test.sh
-  printf '\n== services: v2 systemd resource-limits boundary ==\n'
-  bash scripts/v2-service-limits-test.sh
 fi
 
 printf '\nv2-ci: PASS sha=%s scope=%s\n' "$(git rev-parse HEAD)" "$requested_scope"
