@@ -43,18 +43,25 @@ type Store interface {
 	roleadmin.Store
 }
 
+type ReadinessChecker interface {
+	Ping(context.Context) error
+}
+
 type Config struct {
 	RequestTimeout       time.Duration
+	ReadinessTimeout     time.Duration
 	IngestRequestTimeout time.Duration
 	CookieSecure         bool
 	TrustLoopbackProxy   bool
 	Auth                 auth.Config
 	Ingest               *ingest.Service
+	Readiness            ReadinessChecker
 }
 
 func DefaultConfig() Config {
 	return Config{
 		RequestTimeout:       3 * time.Second,
+		ReadinessTimeout:     time.Second,
 		IngestRequestTimeout: 2 * time.Minute,
 		CookieSecure:         true,
 		Auth:                 auth.DefaultConfig(),
@@ -78,10 +85,13 @@ type Server struct {
 	ingest               *ingest.Service
 	mux                  *http.ServeMux
 	requestTimeout       time.Duration
+	readinessTimeout     time.Duration
 	ingestRequestTimeout time.Duration
 	cookieSecure         bool
 	trustLoopbackProxy   bool
 	sessionTTL           time.Duration
+	readiness            ReadinessChecker
+	readinessProbe       chan struct{}
 }
 
 type errorEnvelope struct {
@@ -99,6 +109,9 @@ func NewWithConfig(store Store, cfg Config) *Server {
 	defaults := DefaultConfig()
 	if cfg.RequestTimeout <= 0 {
 		cfg.RequestTimeout = defaults.RequestTimeout
+	}
+	if cfg.ReadinessTimeout <= 0 {
+		cfg.ReadinessTimeout = defaults.ReadinessTimeout
 	}
 	if cfg.IngestRequestTimeout <= 0 {
 		cfg.IngestRequestTimeout = defaults.IngestRequestTimeout
@@ -126,12 +139,16 @@ func NewWithConfig(store Store, cfg Config) *Server {
 		ingest:               cfg.Ingest,
 		mux:                  http.NewServeMux(),
 		requestTimeout:       cfg.RequestTimeout,
+		readinessTimeout:     cfg.ReadinessTimeout,
 		ingestRequestTimeout: cfg.IngestRequestTimeout,
 		cookieSecure:         cfg.CookieSecure,
 		trustLoopbackProxy:   cfg.TrustLoopbackProxy,
 		sessionTTL:           cfg.Auth.SessionTTL,
+		readiness:            cfg.Readiness,
+		readinessProbe:       make(chan struct{}, 1),
 	}
 	s.mux.HandleFunc("GET /healthz", s.health)
+	s.mux.HandleFunc("GET /readyz", s.ready)
 	s.mux.HandleFunc("GET /api/v2/feed", s.listFeed)
 	s.mux.HandleFunc("GET /api/v2/users/{id}", s.getProfile)
 	s.mux.Handle("GET /api/v2/messages", s.requireAuth(http.HandlerFunc(s.listPrivateMessageInbox)))
@@ -193,6 +210,29 @@ func (s *Server) isIngestRequest(r *http.Request) bool {
 
 func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
+	if s.readiness == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready"})
+		return
+	}
+
+	select {
+	case s.readinessProbe <- struct{}{}:
+		defer func() { <-s.readinessProbe }()
+	default:
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), s.readinessTimeout)
+	defer cancel()
+	if err := s.readiness.Ping(ctx); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ready"})
 }
 
 func (s *Server) listFeed(w http.ResponseWriter, r *http.Request) {

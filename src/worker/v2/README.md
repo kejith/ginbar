@@ -108,6 +108,17 @@ Runner tuning variables are optional:
 
 Keep the accepted one-job/one-encoder-thread still-image concurrency until new measurements justify a change.
 
+## Operational readiness probe
+
+`ready` performs one bounded PostgreSQL connection plus `SELECT 1` and exits without claiming or mutating a media job. It does not require `GINBAR_MEDIA_ROOT`. The probe uses a fixed 1 second connect and statement timeout, opens at most one database connection, prints only `ready` on success, and returns the generic error `worker not ready` on failure so connection details are not disclosed.
+
+Worker process liveness remains the service manager's responsibility; readiness is intentionally separate because the long-running worker stays alive and retries with bounded backoff while PostgreSQL is temporarily unavailable. Re-running `ready` observes recovery without restarting the worker.
+
+```sh
+DATABASE_URL='postgres://...' \
+cargo run --release --locked --manifest-path src/worker/v2/Cargo.toml -- ready
+```
+
 ## One-shot processing probes
 
 `process-once` claims and processes at most one still-image job end to end. It does not renew the lease and remains useful for isolated processing probes.

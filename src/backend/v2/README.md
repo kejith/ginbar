@@ -40,3 +40,15 @@ DATABASE_URL='postgres://...' go run ./cmd/bootstrap-admin --user-id <numeric-us
 The bootstrap command talks directly to PostgreSQL; there is no unauthenticated HTTP bootstrap endpoint. It is one-shot: after any admin exists, further bootstrap attempts are rejected. The initial role records the bootstrapped numeric user ID as its grant provenance.
 
 After bootstrap, authenticated admins may grant or revoke admin status with `PUT` or `DELETE /api/v2/admin/users/{id}/roles/admin`. Admin self-revocation is intentionally rejected so a successful revocation always leaves the acting admin in place.
+
+
+## Operational health and readiness
+
+The API exposes two unauthenticated, body-minimal operational probes on its own listener:
+
+- `GET /healthz` is process liveness only. It returns HTTP 200 with `{"status":"ok"}` without touching PostgreSQL.
+- `GET /readyz` is dependency readiness. Production wiring performs one PostgreSQL ping with a 1 second deadline and returns HTTP 200 with `{"status":"ready"}` or HTTP 503 with `{"status":"not_ready"}`.
+
+At most one readiness database probe may be in flight per API process; overlapping probes fail closed with 503 rather than adding database pressure. Probe failures never expose database errors, addresses, credentials, or SQL. Both responses use `Cache-Control: no-store`.
+
+The supplied native systemd unit binds the API to `127.0.0.1:8080`. The production nginx configuration intentionally does not proxy the top-level `/healthz` or `/readyz` paths, so these are host-local operational signals unless an operator deliberately changes that boundary.

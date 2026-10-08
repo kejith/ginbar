@@ -61,6 +61,7 @@ func run() error {
 		return err
 	}
 	defer store.Close()
+	cfg.api.Readiness = store
 
 	localStore, err := ingest.NewLocalStore(cfg.mediaSourceRoot, cfg.mediaSourceMax)
 	if err != nil {

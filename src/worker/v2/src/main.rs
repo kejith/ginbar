@@ -21,6 +21,7 @@ const RETRY_BASE: Duration = Duration::from_secs(2);
 const RETRY_MAX: Duration = Duration::from_secs(30);
 const DB_TIMEOUT_DIVISOR: u64 = 10;
 const MAX_DB_OPERATION_TIMEOUT_MS: u64 = 3_000;
+const READINESS_DB_TIMEOUT: Duration = Duration::from_secs(1);
 static TERMINATION_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 fn main() -> ExitCode {
@@ -38,21 +39,28 @@ fn run() -> Result<(), String> {
     let program = args.next().unwrap_or_else(|| "ginbar-worker-v2".to_owned());
     let command = match (args.next(), args.next()) {
         (Some(command), None)
-            if command == "claim-once" || command == "process-once" || command == "run" =>
+            if command == "claim-once"
+                || command == "process-once"
+                || command == "ready"
+                || command == "run" =>
         {
             command
         }
         _ => {
             return Err(format!(
-                "usage: {program} <claim-once|process-once|run>\n\n\
+                "usage: {program} <claim-once|process-once|ready|run>\n\n\
                  claim-once claims at most one durable job and intentionally leaves its lease to expire.\n\
                  process-once claims and processes at most one media job; it requires GINBAR_MEDIA_ROOT.\n\
+                 ready performs one bounded PostgreSQL readiness probe and exits without claiming work.\n\
                  run starts the production one-job-at-a-time polling worker with lease renewal and graceful shutdown."
             ));
         }
     };
 
     let config = Config::from_env()?;
+    if command == "ready" {
+        return ready_once(&config.database_url);
+    }
     if command == "run" {
         return run_forever(&config);
     }
@@ -63,6 +71,33 @@ fn run() -> Result<(), String> {
         return claim_once(&mut client, &config);
     }
     process_once(&mut client, &config)
+}
+
+fn ready_once(database_url: &str) -> Result<(), String> {
+    check_database_readiness(database_url)?;
+    println!("ready");
+    Ok(())
+}
+
+fn check_database_readiness(database_url: &str) -> Result<(), String> {
+    readiness_result(|| {
+        let factory = ProductionConnectionFactory::new_with_timeout(
+            database_url,
+            READINESS_DB_TIMEOUT,
+        )?;
+        let mut client = factory.connect()?;
+        client
+            .simple_query("SELECT 1")
+            .map_err(|error| format!("probe PostgreSQL: {error}"))?;
+        Ok(())
+    })
+}
+
+fn readiness_result<F>(check: F) -> Result<(), String>
+where
+    F: FnOnce() -> Result<(), String>,
+{
+    check().map_err(|_| "worker not ready".to_owned())
 }
 
 fn run_forever(config: &Config) -> Result<(), String> {
@@ -98,7 +133,13 @@ struct ProductionConnectionFactory {
 
 impl ProductionConnectionFactory {
     fn new(database_url: &str, lease_ms: NonZeroU64) -> Result<Self, String> {
-        let timeout = production_db_timeout(lease_ms);
+        Self::new_with_timeout(database_url, production_db_timeout(lease_ms))
+    }
+
+    fn new_with_timeout(database_url: &str, timeout: Duration) -> Result<Self, String> {
+        if timeout.is_zero() {
+            return Err("PostgreSQL timeout must be positive".to_owned());
+        }
         let mut config = database_url
             .parse::<PostgresConfig>()
             .map_err(|error| format!("parse PostgreSQL configuration: {error}"))?;
@@ -364,5 +405,63 @@ mod tests {
             statement_timeout_options(Some("-c lock_timeout=1000"), Duration::from_millis(250)),
             "-c lock_timeout=1000 -c statement_timeout=250"
         );
+    }
+
+    #[test]
+    fn readiness_connection_factory_is_strictly_bounded() {
+        let factory = ProductionConnectionFactory::new_with_timeout(
+            "postgresql://localhost/ginbar",
+            READINESS_DB_TIMEOUT,
+        )
+        .expect("parse readiness PostgreSQL configuration");
+
+        assert_eq!(
+            factory.config.get_connect_timeout(),
+            Some(&READINESS_DB_TIMEOUT)
+        );
+        assert_eq!(
+            factory.config.get_options(),
+            Some("-c statement_timeout=1000")
+        );
+    }
+
+    #[test]
+    fn readiness_failure_is_generic_and_recovery_is_observable() {
+        let injected = "postgresql://operator:super-secret@db.invalid/ginbar";
+        let failed = readiness_result(|| Err(injected.to_owned())).expect_err("failure expected");
+        assert_eq!(failed, "worker not ready");
+        assert!(!failed.contains("super-secret"));
+
+        let mut dependency_ready = false;
+        let first = readiness_result(|| {
+            if dependency_ready {
+                Ok(())
+            } else {
+                Err("database unavailable".to_owned())
+            }
+        });
+        assert_eq!(first.as_deref(), Err("worker not ready"));
+
+        dependency_ready = true;
+        let second = readiness_result(|| {
+            if dependency_ready {
+                Ok(())
+            } else {
+                Err("database unavailable".to_owned())
+            }
+        });
+        assert!(second.is_ok(), "readiness did not recover: {second:?}");
+    }
+
+    #[test]
+    fn readiness_probe_accepts_available_test_database() {
+        let url = match std::env::var("GINBAR_TEST_DATABASE_URL") {
+            Ok(url) => url,
+            Err(_) => {
+                eprintln!("skipping: GINBAR_TEST_DATABASE_URL is not set");
+                return;
+            }
+        };
+        check_database_readiness(&url).expect("test PostgreSQL should be ready");
     }
 }

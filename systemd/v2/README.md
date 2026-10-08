@@ -20,3 +20,10 @@ Prerequisites for a future reviewed deployment:
 These initial values are containment policies, **not workload-derived capacity recommendations**. A legitimate large media job may exceed the worker's 4 GiB cgroup cap and be retried; record peak cgroup memory, threads and FD usage on an isolated production-class host before applying to the live service. Durable job leases/fencing allow recovery from a terminated worker without publishing stale results.
 
 Run `bash scripts/v2-service-limits-test.sh` **only on a disposable/isolated CI VM**: it builds an ephemeral Docker systemd environment with privileged container capabilities, verifies unit syntax and real cgroup/FD properties, checks both service startup paths using small stand-in executables, and proves restart on a forced API failure. It does **not** validate production binary startup or representative peak usage; the existing PostgreSQL-backed application CI runs separately, and a dedicated isolated real-binary acceptance gate must precede deployment. No host systemd unit is installed, enabled, modified or reloaded by the fixture.
+
+
+## Operational health/readiness boundary
+
+The service manager remains the liveness authority for the native processes. The API separately exposes host-local `/healthz` (process liveness) and `/readyz` (PostgreSQL readiness) on its loopback listener. The Rust worker deliberately has no additional listening socket: invoke `ginbar-worker-v2 ready` with the same `DATABASE_URL` environment as the worker to perform a one-shot, one-connection, 1 second PostgreSQL readiness probe.
+
+A PostgreSQL outage therefore does not require killing a live worker: the production runner keeps its existing bounded retry/recovery loop, while the readiness command reports failure until the dependency recovers. No probe writes durable application state, emits credentials, or introduces a monitoring daemon, metrics store, dashboard, or alerting service.
