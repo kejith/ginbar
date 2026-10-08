@@ -1767,3 +1767,65 @@ Verify the **post-integration** `v2 CI` branch-push run `37828358188` for exact 
 
 **Exactly ONE next task:** Starting from freshly fetched live `v2` and reviewing `docs/v2/PERFORMANCE.md` and the existing `src/backend/v2/bench/` tools, define the next narrowly scoped **M7 performance-regression gate** for representative workloads on disposable PostgreSQL; implement only a reproducible evidence-based regression fixture with explicit metrics/budgets, not speculative DB indexes, production data benchmarking, production changes or another M7 slice. Obtain exact-candidate CI and separate independent acceptance before integration.
 
+
+## M7 representative API/PostgreSQL performance-regression fixture — IMPLEMENTED, candidate CI pending
+
+**Status as of 2026-10-08:** implementation committed; no local Docker/PostgreSQL
+execution was possible in the CODING environment, so neither local fixture
+success nor independent acceptance is claimed. No integration or production
+change. Repository `v2` base verified at
+`36e27ed4f1671f7a50a3e99833ffb2fecb2c6e7f` (documentation-only),
+previous accepted executable/configuration
+`ac92e9e91d6ccdbb19982c929f8d66832d515a0b`.
+Implementation branch `astra/m7-performance-regression-gate`;
+exact executable/configuration candidate
+`fa9df460c00b78175b748a08510c225b76592700`.
+Any subsequent `STATE.md` edit on the feature branch is **documentation-only**
+and does not change the executable candidate.
+
+**Implementation:** `scripts/v2-perf-regression-test.sh` creates only disposable
+network/container PostgreSQL 17.11 and API/Go 1.25.0 fixture resources; loads
+existing `001_core.sql`, `bench/seed.sql` (100,000 synthetic posts) and
+`bench/explain.sql` (five `EXPLAIN (ANALYZE, BUFFERS)` queries); builds and
+runs existing Go `httpbench.go` against the real Go API with no published
+ports. It measures first/cursor/tag+score feed c1 and around-post c1/c8,
+2,000 measured requests with 20 warmups each. The Python standard-library
+validator `bench/check_regression.py` enforces exactly 100% HTTP 200
+success with zero errors, finite timings, five completed indexed/buffered
+SQL plans, no sequential hot-table scan and no disk spill, and records
+p95/p99/RPS. Optional external accepted budget JSON enables numeric
+latency/throughput limits with provenance; no arbitrary numeric budgets
+were invented or silently enforced. CI wiring: `scripts/v2-ci.sh` backend
+scope, workflow path filter for new fixture. Detailed run, calibration and
+isolation contract: `src/backend/v2/bench/REGRESSION.md`.
+
+**Historical comparison limitation:** accepted M2 around-post p95 c1
+2.277 ms and c8 4.871 ms were measured on the target host with 2,000
+requests/cell; they are not directly comparable to CI VM results without
+controlled same-fixture host/database/runtime/background-load measurements.
+The candidate therefore delivers a deterministic structural/correctness
+regression gate and raw timing capture; **numeric latency regression
+thresholds are NOT calibrated**. Target repeated measurements and separate
+explicit threshold acceptance are required before a numerical performance
+gate is claimed.
+
+**Execution availability:** GitHub repository push and Actions read possible;
+fresh remote ref confirmed. Docker daemon, native psql, target-host access,
+and direct Git clone/network were unavailable in the CODING runtime.
+Feature-branch push triggered workflow `v2 CI` ID `374214168`,
+initial exact-executable run `37837443059` (`push`, SHA
+`fa9df460c00b78175b748a08510c225b76592700`); last observation:
+`pending`, job and conclusion **unknown**. Superseded earlier branch runs
+must not be used for exact-candidate acceptance. Any green result must be
+verified from run/job/steps and logs where accessible.
+
+**Gate:** `IMPLEMENTED` only. `LOCAL_FIXTURE_PASS`,
+`EXACT_CANDIDATE_CI_GREEN`, `INDEPENDENT_EVIDENCE_PASS`,
+`CODING_ACCEPTED`, `INTEGRATED`, `POST_INTEGRATION_CI_GREEN`,
+and `CLOSED` remain unverified.
+
+**Exactly ONE next task:** Resolve and verify the exact-candidate CI run for
+`fa9df460c00b78175b748a08510c225b76592700`, repairing concrete
+failures on this branch if necessary. Only after green CI should a separate
+LOCAL INDEPENDENT ACCEPTANCE task execute the disposable fixture and
+supply raw evidence. Do not integrate this slice or start another M7 slice.
