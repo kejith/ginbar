@@ -2006,3 +2006,77 @@ LOCAL must not edit tracked files, commit, merge, deploy or run on a
 production host without new explicit approval. CODING must independently
 inspect the new raw evidence before any `CODING_ACCEPTED`, guarded
 fast-forward integration or distinct post-integration `v2` push CI.
+
+### M7 performance regression: accepted exact executable integrated; post-integration CI pending — 2026-10-09
+
+- **INDEPENDENT_EVIDENCE_PASS / CODING_ACCEPTED:** user explicitly
+  authorized one disposable three-run acceptance on shared
+  `amp.kejith.de` despite other live services. Received
+  `m7-perf-shared-auth-20261008T224019Z.zip`, exact uploaded-byte
+  SHA-256
+  `3c768f4d92f2c15c456ba1c95a76d1a6834a741bc74c52cd6bdb7bb3bd7ac781`.
+  Independent CRC check PASS; **133/133** manifest entries hash-match,
+  no extra/missing entries. Independently audited actual commands
+  and exits, clean detached source checkout at exact executable
+  `5712176ceb2e6e886578bad71d1515ee6d0cec1a`, per-run
+  `tested_sha=expected_sha`, raw SQL EXPLAIN/buffers, HTTP JSON,
+  negative checks, hosts before/during/after and cleanup.
+  Three fresh sequential first-attempt runs returned exit 0, each
+  using a fresh disposable PostgreSQL 17.11 database with 100,000
+  seeded posts, five index-backed SQL plans without hot-table
+  sequential scans or spills, and 2,000/2,000 HTTP 200 for each
+  of five cases. Total **30,000/30,000 successful requests**.
+  Missing/wrong expected SHA both exited 2 before Docker resource
+  creation. Original canonical checkout remained tracked-clean.
+  Persistent container and network inventories identical before/
+  after; during snapshot identified temporary isolated Go/API/PG
+  resources; all temporary containers/network/cache/worktree
+  removed. No source changes, deployment, existing service restart,
+  persistent DB writes or production-data benchmark.
+- Per-cell p95 intervals (ms) across three independent runs:
+  first feed c1 `0.893–0.933`, cursor c1 `0.946–1.032`,
+  tag+score c1 `2.701–2.771`, around c1 `2.013–2.117`,
+  around c8 `3.726–4.290`. These provide reproducibility
+  observations only, **not calibrated numeric budgets**.
+  `GINBAR_PERF_BUDGET_FILE` remains unset. The structural
+  correctness/measurement fixture is the accepted scope.
+- Previously verified exact-candidate feature `v2 CI`,
+  workflow `374214168`, run `37848213706`,
+  correctness job `113554321060`, exact executable
+  `5712176ceb2e6e886578bad71d1515ee6d0cec1a`,
+  completed/success, 8/8 steps success.
+- **INTEGRATED:** verified fresh live `v2` ref
+  `36e27ed4f1671f7a50a3e99833ffb2fecb2c6e7f`
+  and compare to accepted executable SHA: **ahead 14, behind 0**.
+  Performed **non-force, expected-SHA** guarded ref update to
+  `5712176ceb2e6e886578bad71d1515ee6d0cec1a`.
+  GitHub update succeeded and re-read live `v2` confirms
+  exact SHA. Feature branch documents-only HEAD
+  `347c0a6fab9a878e162da799236389a54c960c57`
+  was **not** integrated. This note is a following
+  documentation-only `STATE.md` commit.
+- **POST-INTEGRATION CI NOT YET VERIFIED:** distinct integration
+  push started workflow `v2 CI` `374214168`, run
+  **`37855607480`**, correctness job **`113578910879`**,
+  event `push`, branch `v2`, exact executable SHA
+  `5712176ceb2e6e886578bad71d1515ee6d0cec1a`,
+  last observed **in_progress**, step `Run scoped v2
+  correctness gate` in progress, result **unknown**.
+  The feature-branch candidate CI must not substitute for
+  this integration push CI. No closure until completed/success,
+  all required steps green and exact SHA verified.
+
+**Gate:** `IMPLEMENTED` → `LOCAL_FIXTURE_PASS` (CI fixture)
+→ `EXACT_CANDIDATE_CI_GREEN` → `INDEPENDENT_EVIDENCE_PASS`
+→ `CODING_ACCEPTED` → **`INTEGRATED`**;
+`POST_INTEGRATION_CI_GREEN` and `CLOSED` pending. Overall M7
+remains open outside this narrow performance fixture.
+
+**Exactly ONE next task:** Verify distinct post-integration `v2`
+push CI workflow `374214168`, run `37855607480`,
+job `113578910879`, event/branch/exact SHA, all steps/result
+and raw logs. If green, record `POST_INTEGRATION_CI_GREEN`
+and close only this performance-regression fixture slice;
+otherwise report the first actionable failure and route fixes
+through a fresh exact-candidate gate. Do not start another
+M7 slice or infer success from stale candidate CI.
