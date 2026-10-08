@@ -102,12 +102,23 @@ docker run -d --rm --name "$pg" --network "$network" --network-alias pg \
   "$pg_image" >/dev/null
 pg_running=1
 
+# The postgres image briefly runs a Unix-socket-only bootstrap server.
+# pg_isready can report success before POSTGRES_DB has been created. Probe
+# the named database over TCP, which becomes available on the final server.
 ready=0
 for _ in $(seq 1 60); do
-  if docker exec "$pg" pg_isready -U perf -d ginbar_perf >/dev/null 2>&1; then ready=1; break; fi
+  if probe="$(docker exec -e PGPASSWORD=perf_ci_only "$pg" \
+    psql -X -h 127.0.0.1 -U perf -d ginbar_perf \
+    -v ON_ERROR_STOP=1 -Atqc 'SELECT 1' 2>/dev/null)" && [[ "$probe" == "1" ]]; then
+    ready=1
+    break
+  fi
   sleep 1
 done
-(( ready )) || { echo "v2-perf-regression: disposable PostgreSQL not ready" >&2; exit 1; }
+(( ready )) || {
+  echo "v2-perf-regression: disposable PostgreSQL database did not become queryable over TCP" >&2
+  exit 1
+}
 docker exec "$pg" psql -X -U perf -d ginbar_perf -Atqc 'SHOW server_version' \
   > "$results/postgres-version.txt"
 docker exec -i "$pg" psql -X -v ON_ERROR_STOP=1 -U perf -d ginbar_perf \
