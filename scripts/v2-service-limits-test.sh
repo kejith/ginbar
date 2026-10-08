@@ -50,8 +50,8 @@ docker run --rm --entrypoint systemd-analyze "$image" verify \
 
 # Docker is on the disposable CI VM. The private cgroup namespace keeps the
 # fixture services/cgroup mutations out of the host systemd unit namespace.
-docker run -d --name "$container" --privileged --cgroupns=private \
-  -e SYSTEMD_LOG_TARGET=console -e SYSTEMD_LOG_LEVEL=debug \
+docker run -d -t --name "$container" --privileged --cgroupns=private \
+  -e container=docker -e SYSTEMD_LOG_TARGET=console -e SYSTEMD_LOG_LEVEL=debug \
   --tmpfs /run --tmpfs /run/lock \
   -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
   "$image" >/dev/null
