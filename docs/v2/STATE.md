@@ -2143,3 +2143,75 @@ manifest, SHA-256, versions and cleanup proof under
 `.local-agent-results/`. Local cannot write tracked files, deploy,
 merge or authorize target-host access. CODING reviews evidence before
 any integration or subsequent M7 slice.
+
+### New LOCAL independent archive: technical PASS, environment authorization BLOCKED — 2026-10-09
+
+- Independently inspected uploaded `m7-perf-acceptance-20261008T221230Z.zip`.
+  SHA-256 calculated from exact uploaded ZIP bytes:
+  `d62ee01f08614daa19f0462e76f19a565d56e3f2a006f66272e25b78eb9e8f23`.
+  CRC PASS; all **131** manifest entry SHA-256 hashes verified, no
+  missing or additional files. Checked raw results, SQL plans,
+  manifests, before/after host resources, negative tests and cleanup,
+  not just `findings.md`.
+- Exact executable SHA throughout three fresh detached tracked-clean
+  executions: `5712176ceb2e6e886578bad71d1515ee6d0cec1a`;
+  `expected_sha=tested_sha` in each environment record; each
+  started and exited **0 on first attempt**; no startup readiness
+  race reproduced. Every run seeded exactly 100,000 posts. All five
+  HTTP JSON cases per run show 2,000/2,000 HTTP 200 with zero
+  errors: **15** successful cases, **30,000** measured successes.
+  Each run had five completed buffered/indexed EXPLAIN plans, no
+  hot `posts`/`media` sequential scan and no disk spill.
+  Negative wrong/unset SHA tests all rejected with exit code 2
+  before resource creation. Raw per-run p95 ranges (ms):
+  first feed **0.899–0.961**; cursor **0.954–0.999**;
+  tag+score **2.742–2.772**; around c1 **2.018–2.113**;
+  around c8 **3.791–4.614**. No numeric latency/RPS budgets
+  enabled or calibrated.
+- Cleanup evidence: no remaining performance containers in post-test
+  `docker ps`, detached worktree absent after cleanup,
+  original `master` checkout tracked-clean with untracked
+  `.local-agent-results/` only; no production DB data use
+  indicated. Cleanup seal reports exit 128 because the worktree
+  had already been removed, corroborated by worktree list.
+- Independent CI check remains GREEN: workflow `v2 CI`
+  `374214168`, feature-branch push run `37848213706`,
+  correctness job `113554321060`, exact executable SHA above,
+  completed/success, eight job steps success, raw fixture exit 0.
+- **Material permission blocker** despite technical PASS: the
+  environment resource snapshots show an active shared service host
+  with long-running `wallium`, `AMP_*`, `nextcloud`, `owncast`,
+  and other persistent production-adjacent containers, matching the
+  profile of the earlier excluded target machine. The LOCAL
+  handoff required a **user-authorized isolated non-production host**,
+  and prohibited production-host execution without **fresh explicit
+  user approval**. Neither fresh authorization nor proof that this is
+  a distinct authorized non-production host is present. The archive
+  also contains only before/after snapshots, not during-run resource
+  snapshots. Technical isolation within Docker does not itself
+  satisfy the host permission boundary. Do not retroactively assume
+  consent from the uploaded ZIP.
+- **CODING acceptance decision:** technical independent checks PASS
+  for the exact executable; formal `INDEPENDENT_EVIDENCE_PASS`
+  **WITHHELD** on authorization/provenance grounds.
+  Consequently `CODING_ACCEPTED`, `INTEGRATED`,
+  `POST_INTEGRATION_CI_GREEN`, and `CLOSED` are NOT reached.
+  `v2` remains `36e27ed4f1671f7a50a3e99833ffb2fecb2c6e7f`,
+  accepted executable beneath it remains
+  `ac92e9e91d6ccdbb19982c929f8d66832d515a0b`.
+  No integration, persistent host action, or `master` edit made
+  by CODING. Current executable candidate unchanged;
+  this STATE update alone is documentation-only.
+  Numeric budgets remain uncalibrated, not an accepted numerical
+  performance SLO.
+
+**Exactly ONE next task:** Have a capable LOCAL executor obtain a
+user-authorized **non-production isolated Docker host** (not the
+shared `AMP_*` services host), then perform *only* fresh independent
+acceptance of the unchanged exact executable SHA
+`5712176ceb2e6e886578bad71d1515ee6d0cec1a`, including
+before/during/after host snapshots and raw manifest ZIP evidence.
+If no suitable host or authorization exists, return BLOCKED
+with the exact missing capability and do **not** rerun on a
+production host. Only after independently reviewing compliant
+evidence may CODING consider guarded integration; no other M7 slice.
