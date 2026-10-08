@@ -1692,3 +1692,9 @@ Verify the **first narrowly scoped PostgreSQL backup/restore boundary** for v2 o
 - No changes to legacy `master`, persistent production state, services, deployment, WAL/PITR, retention, or automation. No integration performed.
 
 **Exactly ONE next task:** Run/fix the disposable PostgreSQL backup/restore fixture and exact-SHA `v2 CI` to GREEN, document precise results, then request independent LOCAL EXECUTION AGENT acceptance. Do not integrate until accepted.
+
+### Backup fixture candidate correction — 2026-10-08
+
+- Exact latest executable/CI candidate: `37f801861bd90aa2327b0b9c448c6b684e018b8d` (supersedes pre-correction `501ddefffb637d73a62d5ec6bc4e5f049ec9ecc6`). Schema DDL comparison normalizes volatile pg_dump database headings and restrict tokens before byte comparison.
+- **Exact-SHA CI and disposable PostgreSQL execution remain NOT VERIFIED**; no test timing, workflow run/job/result or green conclusion is asserted. Do not pass to independent acceptance or integrate without green exact-SHA CI.
+- **ONE next task:** Execute and repair the fixture on an authorized Docker CI runner and obtain verified successful `v2 CI` for the exact executable SHA, updating STATE with its workflow/run/job/SHA/result before independent local acceptance.
