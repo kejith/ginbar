@@ -2215,3 +2215,48 @@ If no suitable host or authorization exists, return BLOCKED
 with the exact missing capability and do **not** rerun on a
 production host. Only after independently reviewing compliant
 evidence may CODING consider guarded integration; no other M7 slice.
+
+### Local BLOCKED evidence: unchanged environment permission gate — 2026-10-09
+
+- Uploaded `m7-perf-blocked-20261008T222451Z.zip` and independently
+  verified its exact-byte SHA-256
+  `8ee93e2ec4bce16d19fc0a448a4ad9a270d6e84be9985a149285e4e517316dce`,
+  ZIP CRC valid, 13/13 listed manifest SHA-256 hashes matched,
+  with no missing or extra evidence files. Read `findings.md`,
+  `host-authorization-proof.txt`, raw CI run/job JSON, Git
+  provenance, Docker process/network snapshots and cleanup records.
+- LOCAL **correctly returned BLOCKED**: no fresh task-specific
+  authorization to run on the shared host with persistent `AMP_*`,
+  `wallium`, `nextcloud` and other services; no distinct authorized
+  non-production Docker execution host found. **Zero** fresh benchmark
+  runs, containers, temporary networks or detached worktrees created.
+  Tracked checkout clean; no production service or DB modifications.
+  A standing skill note does not override this handoff's per-execution
+  explicit-permission requirement.
+- Cross-verified live Actions API with evidence: `v2 CI` workflow
+  `374214168`, feature `push` run `37848213706`, correctness job
+  `113554321060`, exact candidate
+  `5712176ceb2e6e886578bad71d1515ee6d0cec1a`,
+  `completed/success`, 8/8 job steps success. The previous
+  `m7-perf-acceptance-20261008T221230Z.zip` remains
+  a technical PASS only, not a permission-compliant independent
+  acceptance. Do not conflate that with this BLOCKED-only report.
+- Live integration `v2` re-verified unchanged at
+  `36e27ed4f1671f7a50a3e99833ffb2fecb2c6e7f`;
+  candidate branch before this STATE-only update
+  `1c1d6afa7aacf403b9b2805fe132edca948f538e`.
+  Executable SHA unchanged. **Gate remains EXACT_CANDIDATE_CI_GREEN**,
+  with `INDEPENDENT_EVIDENCE_PASS`, `CODING_ACCEPTED`, integration,
+  post-integration CI and closure all blocked. No numerical budget
+  calibrated. No repeated LOCAL execution handoff is justified without
+  an actual capability or permission change.
+
+**Exactly ONE next task (operator decision; not a repeated executor
+handoff):** Supply either an explicitly authorized isolated
+non-production Docker host/VM, **or** grant fresh explicit,
+task-specific authorization for a disposable benchmark execution on
+the existing shared host despite its persistent services. Once this
+single missing permission/environment capability changes, CODING
+may issue one new independent-acceptance execution handoff with
+narrow permissions and exact SHA. Do not run tests on that host or
+integrate before authorization and compliant evidence.
