@@ -347,15 +347,6 @@ func TestLogoutRejectsCrossOriginBeforeRevocation(t *testing.T) {
 	}
 }
 
-func TestSameOriginHonorsReverseProxyScheme(t *testing.T) {
-	req := httptest.NewRequest(http.MethodPost, "http://ginbar.test/api/v2/auth/logout", nil)
-	req.Header.Set("Origin", "https://ginbar.test")
-	req.Header.Set("X-Forwarded-Proto", "https")
-	if !sameOrigin(req) {
-		t.Fatal("same origin behind TLS-terminating proxy was rejected")
-	}
-}
-
 func TestCurrentUserUnauthorizedHasStableSemantics(t *testing.T) {
 	server := newAuthTestServer(&apiStore{})
 	for _, cookieValue := range []string{"", "malformed"} {

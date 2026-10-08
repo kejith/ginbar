@@ -8,6 +8,7 @@ Prerequisites for a future reviewed deployment:
 - built Go API installed at `/usr/local/bin/ginbar-api-v2` (from `src/backend/v2/cmd/api`), and Rust worker at `/usr/local/bin/ginbar-worker-v2` (from `src/worker/v2`); the worker runtime must also have its existing FFmpeg/FFprobe dependencies;
 - separate `/etc/ginbar/v2/api.env` and `worker.env` containing the required `DATABASE_URL` credentials; restrict file permissions and do not commit credentials;
 - nginx v2 serves processed media from `/srv/ginbar/media/media` and proxies API to localhost port 8080; do not expose the ingestion `sources` directory.
+- The Go API distrusts all `X-Forwarded-Proto` headers by default. The supplied native API unit explicitly sets `GINBAR_TRUST_LOOPBACK_PROXY=true` because the accepted nginx upstream uses `127.0.0.1:8080`; the API only trusts a single canonical `http` or `https` value from an immediate loopback TCP peer. Keep the API listener loopback-only when enabling this switch. Other local processes with access to the loopback API socket are part of this host-local trust boundary; do not enable the flag on a publicly reachable listener.
 
 | Service | Open files per process | Tasks per service cgroup | Cgroup memory maximum |
 | --- | ---: | ---: | ---: |

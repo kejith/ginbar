@@ -151,3 +151,34 @@ func cloneEnv(values map[string]string) map[string]string {
 	}
 	return clone
 }
+
+func TestLoadRuntimeConfigProxyTrustRequiresExplicitOptIn(t *testing.T) {
+	base := map[string]string{
+		"DATABASE_URL": "postgres://example",
+		"GINBAR_MEDIA_SOURCE_ROOT": "/srv/ginbar/media",
+	}
+	cfg, err := loadRuntimeConfig(mapEnv(base))
+	if err != nil || cfg.api.TrustLoopbackProxy {
+		t.Fatalf("default proxy trust config=%#v err=%v", cfg.api, err)
+	}
+	for _, tt := range []struct {
+		value string
+		want bool
+		valid bool
+	}{
+		{"true", true, true},
+		{"false", false, true},
+		{"1", true, true},
+		{"not-a-boolean", false, false},
+	} {
+		env := cloneEnv(base)
+		env["GINBAR_TRUST_LOOPBACK_PROXY"] = tt.value
+		got, err := loadRuntimeConfig(mapEnv(env))
+		if (err == nil) != tt.valid {
+			t.Fatalf("env=%q err=%v valid=%v", tt.value, err, tt.valid)
+		}
+		if tt.valid && got.api.TrustLoopbackProxy != tt.want {
+			t.Fatalf("env=%q trusted=%v want=%v", tt.value, got.api.TrustLoopbackProxy, tt.want)
+		}
+	}
+}

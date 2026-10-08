@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/netip"
+	"net"
 	"net/url"
 	"strings"
 	"time"
@@ -41,7 +43,7 @@ type loginRequest struct {
 }
 
 func (s *Server) register(w http.ResponseWriter, r *http.Request) {
-	if !sameOrigin(r) {
+	if !s.sameOrigin(r) {
 		writeError(w, http.StatusForbidden, "origin_not_allowed", "request origin is not allowed")
 		return
 	}
@@ -71,7 +73,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {
-	if !sameOrigin(r) {
+	if !s.sameOrigin(r) {
 		writeError(w, http.StatusForbidden, "origin_not_allowed", "request origin is not allowed")
 		return
 	}
@@ -97,7 +99,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) logout(w http.ResponseWriter, r *http.Request) {
-	if !sameOrigin(r) {
+	if !s.sameOrigin(r) {
 		writeError(w, http.StatusForbidden, "origin_not_allowed", "request origin is not allowed")
 		return
 	}
@@ -188,7 +190,7 @@ func decodeBoundedJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 	return true
 }
 
-func sameOrigin(r *http.Request) bool {
+func (s *Server) sameOrigin(r *http.Request) bool {
 	raw := r.Header.Get("Origin")
 	if raw == "" {
 		return false
@@ -197,19 +199,32 @@ func sameOrigin(r *http.Request) bool {
 	if err != nil || origin.User != nil || origin.Host == "" || origin.RawQuery != "" || origin.Fragment != "" || (origin.Path != "" && origin.Path != "/") {
 		return false
 	}
-	if origin.Scheme != requestScheme(r) {
+	if origin.Scheme != s.requestScheme(r) {
 		return false
 	}
 	return strings.EqualFold(origin.Host, r.Host)
 }
 
-func requestScheme(r *http.Request) string {
-	if forwarded := r.Header.Get("X-Forwarded-Proto"); forwarded != "" {
-		scheme := strings.TrimSpace(strings.Split(forwarded, ",")[0])
-		if scheme == "http" || scheme == "https" {
-			return scheme
+// requestScheme only accepts the TLS terminator's scheme when the immediate
+// TCP peer is loopback and explicitly trusted by runtime configuration.
+// A direct request must never be able to select its scheme via HTTP headers.
+func (s *Server) requestScheme(r *http.Request) string {
+	if s.trustLoopbackProxy {
+		peer, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err == nil {
+			addr, parseErr := netip.ParseAddr(peer)
+			if parseErr == nil && addr.Unmap().IsLoopback() {
+				values := r.Header.Values("X-Forwarded-Proto")
+				if len(values) != 0 {
+					// nginx overwrites this with one unambiguous $scheme.
+					// Never accept chains, duplicates or noncanonical values.
+					if len(values) != 1 || (values[0] != "http" && values[0] != "https") {
+						return ""
+					}
+					return values[0]
+				}
+			}
 		}
-		return ""
 	}
 	if r.TLS != nil {
 		return "https"

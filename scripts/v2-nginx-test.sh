@@ -203,6 +203,18 @@ api_body="$TMP_ROOT/api.body"
   "$HTTPS_URL/api/v2/auth/login"
 grep -Fq "\"host\":\"ginbar.test:$HTTPS_PORT\"" "$api_body" || fail "proxy did not preserve Host including explicit port"
 grep -Fq '"forwardedProto":"https"' "$api_body" || fail "proxy did not propagate X-Forwarded-Proto=https"
+
+# nginx must overwrite client-supplied forwarded scheme with its own TLS state,
+# including malformed/chained input, while preserving the explicit Host port.
+"${CURL_HTTPS[@]}" \
+  -H 'X-Forwarded-Proto: http, https' \
+  -H "Origin: https://ginbar.test:$HTTPS_PORT" \
+  -H 'Content-Type: application/json' \
+  --data-binary '{"username":"fixture","password":"fixture"}' \
+  -o "$api_body" \
+  "$HTTPS_URL/api/v2/auth/login"
+grep -Fq '"forwardedProto":"https"' "$api_body" || fail "nginx forwarded a client-supplied scheme"
+grep -Fq "\"host\":\"ginbar.test:$HTTPS_PORT\"" "$api_body" || fail "nginx rewrote Host while sanitizing forwarding header"
 grep -Fq '"url":"/api/v2/auth/login"' "$api_body" || fail "API path was not preserved"
 
 small_upload="$TMP_ROOT/small-upload.bin"

@@ -12,6 +12,7 @@ Group=ginbar
 EnvironmentFile=/etc/ginbar/v2/api.env
 Environment=LISTEN_ADDR=127.0.0.1:8080
 Environment=GINBAR_MEDIA_SOURCE_ROOT=/srv/ginbar/media
+Environment=GINBAR_TRUST_LOOPBACK_PROXY=true
 ExecStart=/usr/local/bin/ginbar-api-v2
 Restart=on-failure
 RestartSec=10s

@@ -47,6 +47,7 @@ type Config struct {
 	RequestTimeout       time.Duration
 	IngestRequestTimeout time.Duration
 	CookieSecure         bool
+	TrustLoopbackProxy   bool
 	Auth                 auth.Config
 	Ingest               *ingest.Service
 }
@@ -79,6 +80,7 @@ type Server struct {
 	requestTimeout       time.Duration
 	ingestRequestTimeout time.Duration
 	cookieSecure         bool
+	trustLoopbackProxy   bool
 	sessionTTL           time.Duration
 }
 
@@ -126,6 +128,7 @@ func NewWithConfig(store Store, cfg Config) *Server {
 		requestTimeout:       cfg.RequestTimeout,
 		ingestRequestTimeout: cfg.IngestRequestTimeout,
 		cookieSecure:         cfg.CookieSecure,
+		trustLoopbackProxy:   cfg.TrustLoopbackProxy,
 		sessionTTL:           cfg.Auth.SessionTTL,
 	}
 	s.mux.HandleFunc("GET /healthz", s.health)

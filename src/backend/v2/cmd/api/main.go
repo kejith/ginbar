@@ -172,6 +172,13 @@ func loadRuntimeConfig(getenv func(string) string) (runtimeConfig, error) {
 	if cfg.urlFetcher.MaxRedirects, err = envNonNegativeInt(getenv, "GINBAR_URL_MAX_REDIRECTS", cfg.urlFetcher.MaxRedirects); err != nil {
 		return runtimeConfig{}, err
 	}
+	if raw := getenv("GINBAR_TRUST_LOOPBACK_PROXY"); raw != "" {
+		trust, parseErr := strconv.ParseBool(raw)
+		if parseErr != nil {
+			return runtimeConfig{}, errors.New("GINBAR_TRUST_LOOPBACK_PROXY must be a boolean")
+		}
+		cfg.api.TrustLoopbackProxy = trust
+	}
 	if raw := getenv("GINBAR_SESSION_COOKIE_SECURE"); raw != "" {
 		secure, parseErr := strconv.ParseBool(raw)
 		if parseErr != nil {
