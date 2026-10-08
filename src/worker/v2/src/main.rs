@@ -440,7 +440,7 @@ mod tests {
                 Err("database unavailable".to_owned())
             }
         });
-        assert_eq!(first.as_deref(), Err("worker not ready"));
+        assert_eq!(first.expect_err("dependency should be unavailable"), "worker not ready");
 
         dependency_ready = true;
         let second = readiness_result(|| {
