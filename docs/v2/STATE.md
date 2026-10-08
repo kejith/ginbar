@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-08
-Phase: **M7 production hardening in progress; nginx authentication-ingress limiter accepted and integrated; post-integration CI verification pending**
+Phase: **M7 production hardening in progress; nginx authentication-ingress limiter accepted, integrated, and post-integration CI verified green**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -36,7 +36,7 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - first authenticated inbox/direct-thread frontend slice: **accepted, browser-gated and integrated; exact-candidate/post-integration CI green**.
   - consolidated M6 private-messages milestone gate: **accepted; M6 closed**.
 - M7 production hardening: **in progress**.
-  - nginx authentication-ingress rate limiter: **independently accepted and integrated; post-integration CI verification pending**.
+  - nginx authentication-ingress rate limiter: **accepted, integrated, exact-candidate/post-integration CI green; live target-host nginx unchanged**.
   - first trusted reverse-proxy scheme-header boundary: **ACCEPTED and integrated, nginx→real-Go/PostgreSQL and nonloopback direct-peer independently gated, exact-candidate/post-integration CI green; no production deployment**.
   - first native process/file resource-limits boundary: **accepted, integrated, independently real-binary validated and exact-candidate/post-integration CI green; live deployment unchanged**.
   - bounded password-KDF admission control: **accepted, target-host profiled and integrated; exact-candidate/post-integration CI green**.
@@ -1640,7 +1640,7 @@ No known resource-limit unit, applied-cgroup, real-binary startup, graceful shut
 
 ## Single best next task
 
-Implement the **first narrowly scoped nginx authentication-ingress rate-limit boundary** for v2 `POST /api/v2/auth/login` and `POST /api/v2/auth/register` to bound abusive KDF submissions *before* they reach Go, using nginx's native low-overhead rate limiting keyed from the **actual immediate TCP peer** (`$binary_remote_addr`), never attacker-controlled `X-Forwarded-For`. Keep existing nginx Host/`X-Forwarded-Proto`, TLS, upload/URL-import streaming, and all other API routes unchanged. Define conservative explicit rate/burst policy and status (429), consider shared-NAT tradeoffs, bounded memory and burst behavior; add deterministic isolated nginx fixture tests for threshold/recovery, spoofed XFF immunity, allowed normal auth, and unaffected non-auth routes. Coordinate final shutdown of the prior disposable evidence-transfer HTTP server on port `18182` only after verifying its PID/command identity (or request manual host cleanup); never touch production/live services. Start on feature branch from freshly verified live `v2` (accepted executable `a142272cde7a74d40a128cdd9803c903fc86ef02` beneath documentation-only STATE). Scope is the nginx authentication ingress boundary only: no backend per-user limiter, Redis, WAF, DB tuning, backups, observability or deployment automation. Require applicable exact-SHA green CI before independent acceptance/integration and update STATE with evidence, unresolved issues, and exactly ONE next task.
+Verify the **first narrowly scoped PostgreSQL backup/restore boundary** for v2 on disposable data only: prove a full logical backup of a seeded disposable database restores into an isolated target with byte-identical authoritative application state (row counts plus SHA-256 over ordered dumps of the authoritative tables, or an equivalent exact comparison), then record the exact commands, tool versions, timings and restore verification as the first backup/recovery procedure. Never touch production data, the shared development database, or live services. Add no backup automation, scheduling, WAL archiving, PITR, off-host storage, or retention policy in this slice; establish only the verified restore primitive and the recorded procedure. Start on a feature branch from freshly verified live `v2` (accepted executable `1e60983597f1651a738f9c095e915c7facf6e305` beneath documentation-only STATE). Scope is the backup/restore primitive only: no DB tuning, backend per-user limiter, Redis, WAF, observability, or deployment automation. Require applicable exact-SHA green CI before independent acceptance/integration and update STATE with evidence, unresolved issues, and exactly ONE next task.
 
 
 
@@ -1665,3 +1665,16 @@ Implement the **first narrowly scoped nginx authentication-ingress rate-limit bo
 - Rechecked candidate SHA through available GitHub connector: commit-associated workflow-run listing returned `[]` (this integration only covers pull-request-triggered runs) and combined commit statuses returned `[]` (not an authoritative Actions check-run listing). Direct GitHub Actions and API web retrieval failed. Therefore post-integration workflow/run/job/head SHA/conclusion **remain unverified**, neither PASS nor FAIL. Do not conflate feature-branch candidate CI run `37791902843` with a `v2` post-integration run.
 - No executable, CI configuration or production host/service changes were made; accepted integration remains in place. No process was signaled at port `18182` (no target-host PID/command identity available).
 - **Exactly ONE next task:** On a network-capable authorized host with Actions API access, locate the `v2`-branch `v2 CI` push run for `1e60983597f1651a738f9c095e915c7facf6e305`; verify its correctness job and conclusion, then record exact run/job/SHA and close the slice only on success. If absent or failed, diagnose the CI gate before any next M7 implementation.
+
+
+### Post-integration CI verified GREEN — 2026-10-08
+
+- Verified from a network-capable host via the public GitHub Actions API against workflow `v2 CI` (`374214168`, `.github/workflows/v2-ci.yml`).
+- All 33 `v2`-branch push runs enumerated; exactly one run has `head_sha=1e60983597f1651a738f9c095e915c7facf6e305`, and it is not the feature-branch candidate run `37791902843`.
+- Post-integration `v2 CI`: run `37801213689`, branch `v2`, event `push`, exact `head_sha=1e60983597f1651a738f9c095e915c7facf6e305`, status `completed`, conclusion `success` (created 2026-10-08T15:29:41Z).
+- Correctness job `113393626580` (`correctness`), identical `head_sha`, status `completed`, conclusion `success`; all 8 recorded steps success (setup, exact-revision checkout, checkout verification, scoped v2 correctness gate, target worker release build, tracked-clean verification, post-checkout, completion).
+- Documentation-only pushes `7344dc83b62e5bffb36fd9e1a1038cf57b7e2f85` and `b481c03f03be6652c00d6b21f383599808f66a1d` have no `v2 CI` runs in the full 33-run listing because `docs/**` matches no entry in the workflow `paths` filter (verified in `.github/workflows/v2-ci.yml`); the executable-SHA run above is the applicable gate and it is green.
+- Live remote `v2` verified as documentation-only `b481c03f03be6652c00d6b21f383599808f66a1d` with integrated executable `1e60983597f1651a738f9c095e915c7facf6e305` (ancestor, zero divergence). No executable, CI configuration, production host/service, or legacy `master` change was made by this verification. No local process listens on port `18182`; nothing was signaled (target-host evidence-server identity still unverified from here).
+- Raw API JSON (workflows, both run-listing pages, run, jobs, branch) retained in evidence ZIP `post-integration-ci-20261008T160515Z.zip`.
+
+**Decision: the nginx authentication-ingress slice is CLOSED.** Exact-candidate CI, independent nginx acceptance, and post-integration CI are all green with no known correctness, security-boundary, burst/recovery, spoof-immunity, or CI blocker remaining. Shared-NAT budget tuning stays a real-load calibration item, not a slice blocker. M7 production hardening remains in progress.
