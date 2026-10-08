@@ -1829,3 +1829,53 @@ and `CLOSED` remain unverified.
 failures on this branch if necessary. Only after green CI should a separate
 LOCAL INDEPENDENT ACCEPTANCE task execute the disposable fixture and
 supply raw evidence. Do not integrate this slice or start another M7 slice.
+
+### Exact-candidate CI verification and next gate — 2026-10-08
+
+- **EXACT_CANDIDATE_CI_GREEN: verified.** Workflow `v2 CI` ID `374214168`,
+  feature-branch push run **`37837443059`**, correctness job **`113518519620`**,
+  exact head SHA **`fa9df460c00b78175b748a08510c225b76592700`**,
+  completed/**success** (updated `2026-10-08T20:18:07Z`).
+  All **8/8** job steps completed/success: setup, checkout exact revision,
+  verify checkout, full scoped correctness, target worker release build,
+  verify tracked checkout unchanged, postcheckout, complete.
+  Raw job logs were fetched and independently inspected in the coding session.
+  CI log explicitly contains `v2-ci: PASS sha=fa9df460c00b78175b748a08510c225b76592700 scope=all`.
+- **CI disposable fixture: PASS.** Raw log contains
+  `v2-perf-regression: PASS shape=bounded/indexed/no-spill http=all-200 budget=not-yet-calibrated`
+  and `exit=0 sha=fa9df460c00b78175b748a08510c225b76592700`.
+  Five `EXPLAIN (ANALYZE, BUFFERS)` statement execution times:
+  first feed **0.219 ms**, old post-ID cursor **0.204 ms**,
+  required tag+score **3.145 ms**, included/excluded tags+score
+  **2.086 ms**, around post **0.405 ms**. First/cursor feeds return
+  61 rows; hot post/media index scans and buffer evidence observed.
+  No tracked edits or direct production database connections were made.
+- **Observed CI VM HTTP workload measurements** (2,000 successful requests,
+  zero HTTP errors per cell; p95 / p99 / RPS):
+  - first feed c1: **1.151 ms / 1.353 ms / 1124.0**;
+  - cursor feed c1: **1.158 ms / 1.286 ms / 1050.3**;
+  - tag+score search c1: **2.586 ms / 3.434 ms / 513.3**;
+  - around post c1: **2.328 ms / 2.682 ms / 540.9**;
+  - around post c8: **7.307 ms / 9.055 ms / 1839.4**.
+  These are single CI-environment observations, **not accepted latency
+  budgets** or controlled comparisons with M2 target-host timings.
+- Source code is still exact executable candidate
+  `fa9df460c00b78175b748a08510c225b76592700`. Feature branch
+  documents-only HEAD above it does not alter the tested code. Live `v2`
+  remains `36e27ed4f1671f7a50a3e99833ffb2fecb2c6e7f`; no integration
+  or production deployment has occurred.
+- **Remaining gate:** `INDEPENDENT_EVIDENCE_PASS` and CODING acceptance,
+  after representative target-host disposable fixture execution with
+  multiple runs and raw evidence. The local CODING environment still
+  lacks Docker/PostgreSQL, so no LOCAL workstation PASS is claimed.
+  No timing threshold is enforced without an accepted comparable baseline.
+
+**Exactly ONE next task:** LOCAL INDEPENDENT ACCEPTANCE of executable SHA
+`fa9df460c00b78175b748a08510c225b76592700` now that exact-candidate
+CI is green. Execute this fixture in a detached clean checkout with
+disposable services, collect multiple comparable baseline measurements,
+raw query plans, result JSON, versions, host-load snapshots, error paths,
+SHA-256 ZIP manifest and cleanup proof in one evidence ZIP under
+`.local-agent-results/`. LOCAL must not change tracked files, integration
+refs or production services. CODING reviews raw ZIP and decides acceptance,
+threshold policy and guarded integration in a separate step. No other M7 slice.
