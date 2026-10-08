@@ -154,7 +154,7 @@ func cloneEnv(values map[string]string) map[string]string {
 
 func TestLoadRuntimeConfigProxyTrustRequiresExplicitOptIn(t *testing.T) {
 	base := map[string]string{
-		"DATABASE_URL": "postgres://example",
+		"DATABASE_URL":             "postgres://example",
 		"GINBAR_MEDIA_SOURCE_ROOT": "/srv/ginbar/media",
 	}
 	cfg, err := loadRuntimeConfig(mapEnv(base))
