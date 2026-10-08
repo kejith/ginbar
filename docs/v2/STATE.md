@@ -2313,3 +2313,79 @@ one evidence ZIP with internal manifest plus external ZIP SHA-256.
 If host resources are unsafe or permission scope cannot be honored,
 stop and return BLOCKED with the first concrete reason. CODING then
 reviews raw evidence; no integration before independent acceptance.
+
+### Fresh explicitly authorized shared-host independent acceptance — CODING ACCEPTED (2026-10-09)
+
+- Uploaded raw LOCAL ZIP `m7-perf-shared-auth-20261008T224019Z.zip`;
+  independently calculated exact uploaded-byte SHA-256
+  **`3c768f4d92f2c15c456ba1c95a76d1a6834a741bc74c52cd6bdb7bb3bd7ac781`**.
+  ZIP CRC valid; all **133/133** manifest entries match SHA-256,
+  with no missing or additional entries beyond manifest. Independently
+  inspected raw Git/CI metadata, full per-run environment/HTTP
+  JSON/validator/EXPLAIN output, fixture stdout/stderr, actual exits,
+  database initialization logs, negative checks, host before/during/
+  after snapshots and resource cleanup, not merely LOCAL findings.
+- User granted fresh **task-specific** authorization for a disposable
+  three-run test on shared `amp.kejith.de` despite pre-existing
+  services; this new evidence falls within that scoped exception.
+  Provenance: LOCAL detached tracked-clean worktree at exact
+  `5712176ceb2e6e886578bad71d1515ee6d0cec1a`,
+  source root bound to its Git checkout, `expected_sha=tested_sha`
+  on every run. Canonical `master` HEAD remained
+  `181fa44d79c7b4a1984c1a35795762dd503b3f77`,
+  tracked clean before/after. No source-copy fallback.
+- **Three sequential runs PASS on first attempt, each fixture exit 0**.
+  Per-run PostgreSQL 17.11 created `ginbar_perf`, seeded exactly
+  **100,000** synthetic posts and completed five buffered SQL
+  EXPLAIN plans with hot post/media index access, no hot-table
+  sequential scan and no disk spill; 2,000 measured HTTP 200
+  requests per each of five cases, zero errors: **15 cells,
+  30,000/30,000 successful requests**. Raw Go API logs corroborate
+  startup, DB logs show CREATE DATABASE and readiness without FATAL.
+  The previously observed bootstrap-`pg_isready` missing-database
+  race did not recur under authenticated TCP SQL readiness.
+- p95 ranges across the three new target-host runs (milliseconds):
+  first feed c1 **0.893–0.933**, ID cursor c1 **0.946–1.032**,
+  tag+score c1 **2.701–2.771**, around-post c1
+  **2.013–2.117**, around-post c8 **3.726–4.290**.
+  These are raw reproducibility observations only;
+  `GINBAR_PERF_BUDGET_FILE` unset. No accepted universal numeric
+  p95/p99/throughput thresholds or production SLO claimed.
+- Negative tests both rejected before Docker resource creation:
+  deliberately incorrect expected SHA exit **2**, missing SHA
+  with `GITHUB_SHA` unset exit **2**, and pre/post Docker
+  inventories identical. Host before/during/after observation
+  captured; real during-run PG/API/short-lived Go benchmark
+  containers on a disposable network visible at run 3.
+  Permanent service list and Docker network inventory identical
+  before/after; 14 existing containers remained up. All created
+  containers/networks and task worktree/cache cleaned.
+  Original tracked checkout clean. No existing service restart,
+  production DB write or deployment reported.
+- Exact executable candidate feature push `v2 CI` workflow
+  `374214168`, run `37848213706`, correctness job
+  `113554321060`, SHA
+  `5712176ceb2e6e886578bad71d1515ee6d0cec1a`,
+  completed/success, all 8/8 job steps success;
+  live GitHub Actions run/job independently reverified.
+- **CODING acceptance decision:** `INDEPENDENT_EVIDENCE_PASS`
+  and **`CODING_ACCEPTED`** on the exact executable SHA above
+  for the bounded synthetic performance/plan-shape/HTTP fixture and
+  readiness isolation. Not a calibrated latency regression budget,
+  production load test, or performance SLO.
+  Pre-integration `v2` still
+  `36e27ed4f1671f7a50a3e99833ffb2fecb2c6e7f`.
+  This STATE update is documentation-only above the already
+  accepted executable candidate; it does not change the
+  executable/configuration bits or satisfy the post-integration gate.
+
+**Exactly ONE next task:** CODING performs a **guarded non-force
+expected-SHA fast-forward** of `v2` from live
+`36e27ed4f1671f7a50a3e99833ffb2fecb2c6e7f` to
+**exact executable/configuration SHA**
+`5712176ceb2e6e886578bad71d1515ee6d0cec1a`
+(**do not merge feature documentation-only HEAD**), and
+verifies distinct `v2` branch `push` post-integration
+`v2 CI` success on that exact SHA before marking this slice
+`CLOSED`. If any SHA, branch relationship or permission
+changed, stop and re-review; do not force or modify `master`.
