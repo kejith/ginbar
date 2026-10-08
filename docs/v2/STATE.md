@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-08
-Phase: **M7 production hardening in progress; first native process/file limits candidate pending CI/review; nginx/KDF accepted and integrated**
+Phase: **M7 production hardening in progress; first native process/file limits exact-candidate CI green, awaiting independent acceptance; nginx/KDF accepted and integrated**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -36,7 +36,7 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - first authenticated inbox/direct-thread frontend slice: **accepted, browser-gated and integrated; exact-candidate/post-integration CI green**.
   - consolidated M6 private-messages milestone gate: **accepted; M6 closed**.
 - M7 production hardening: **in progress**.
-  - first native process/file resource-limits candidate: **implemented on branch; exact-candidate CI and independent acceptance pending; not integrated**.
+  - first native process/file resource-limits candidate: **implemented on branch; full exact-candidate CI green, independent real-binary execution acceptance pending; not integrated**.
   - bounded password-KDF admission control: **accepted, target-host profiled and integrated; exact-candidate/post-integration CI green**.
   - first v2 production nginx serving boundary: **accepted and integrated; exact-candidate/post-integration CI green; live target-host nginx unchanged**.
 
@@ -237,7 +237,7 @@ Decision: **accept and close the first v2 production nginx serving-boundary slic
 Verified live integration base: `544a4412141eacf6148daf4c74a1553fb9ab6b22` (documentation/state-only).
 Accepted integrated executable/configuration beneath it: `20be4765e935e715f2cd8862da0a6382e1322281`.
 Implementation branch: `astra/m7-service-limits`.
-Exact executable/configuration candidate: `47f1a1b883898a33760a29117035fc7cd1897cd4`.
+Exact executable/configuration candidate: `b67a4c7cfd90e6849fa4817a2e73bb6c54dcbe94`.
 No integration or production deployment has been performed.
 
 The existing `wallium.service` and scripts belong to the legacy Docker Compose deployment; v2 has native Go and Rust executables and a separate accepted nginx configuration, but no installed v2 service manager configuration. The smallest fitting initial serving model is therefore two standalone native systemd service units under `systemd/v2/`, without replacing the legacy service or adding installer/update automation.
@@ -250,9 +250,16 @@ The existing `wallium.service` and scripts belong to the legacy Docker Compose d
 - The CI workflow now watches `systemd/v2/**` and the fixture; scoped CI treats such changes as `scope=all`. The application correctness suite and target-worker build remain separate checks.
 - `systemd/v2/README.md` documents exact deployment prerequisites, test isolation and limitations.
 
-CI status at this writing: **pending** for exact candidate `47f1a1b883898a33760a29117035fc7cd1897cd4`, workflow run `37732772249`, job `113165689879`. Previous superseded candidate runs were cancelled; neither success nor failure was inferred from them. Do not accept, integrate or hand this candidate to the local agent without completed green exact-candidate CI.
+Exact-candidate **v2 CI GREEN** for `b67a4c7cfd90e6849fa4817a2e73bb6c54dcbe94`:
+- workflow run `37733659202`, correctness job `113168249765`, conclusion **success**, exact checkout verified;
+- full `scope=all` gate passed: Rust worker formatting/check/tests/clippy (including PostgreSQL), Go formatting/vet/PostgreSQL-backed tests, frontend 48/48 tests/typecheck/Vite build, and real nginx serving fixture (`v2-nginx-test: PASS https_port=32779 ... streaming_upstream_seen=true`);
+- isolated real-systemd fixture: `v2-service-limits-test: PASS fds=4096/1024 tasks=256/128 memory=1G/4G restart=verified`; unit syntax, applied process open-files rlimits, service task/memory cgroup boundaries, active start, restart-on-failure and post-restart limits all passed with disposable stand-in executables;
+- target-worker release-build **applicability** passed (worker source unchanged, binary rebuild skipped); tracked checkout clean and all workflow steps successful;
+- `v2-ci: PASS sha=b67a4c7cfd90e6849fa4817a2e73bb6c54dcbe94 scope=all`.
 
-Outstanding evidence: tests must finish green; effective service startup/normal operation with **real** Go/Rust binaries and disposable PostgreSQL/media workloads remains untested under systemd. The 1 GiB/4 GiB caps are provisional containment, not measured peak-size recommendations. An independent execution gate on an isolated production-class host is required before acceptance. No target-host live deployment changes are authorized.
+Superseded fixture candidates exposed a Docker cgroup setup defect, not a v2 executable defect: the first PID1 systemd container exited before initialization, with `Failed to create /init.scope control group: No such file or directory`. A host cgroup bind mount conflicting with Docker's private cgroup namespace was removed, and the exact final candidate booted a real isolated systemd instance successfully. CI runs `37732772249`, `37733140585`, `37733373317`, `37733509736` failed the previous systemd fixture; other superseded candidates were cancelled on newer pushes. None is treated as successful evidence.
+
+Outstanding evidence: effective service startup/normal operation with **real** Go/Rust binaries and disposable PostgreSQL/media workloads remains untested under systemd. The 1 GiB/4 GiB caps are provisional containment, not measured peak-size recommendations. The next gate is independent execution using the same units with actual binaries and disposable PostgreSQL/media workloads on an isolated production-class host, including representative memory/thread/FD observations and clean shutdown/restart. CI verifies cgroup containment using stand-ins, not real workload capacity. Do not accept/integrate the candidate or modify a live deployment before this evidence is reviewed.
 
 ## M6 private messages — first backend foundation accepted and integrated
 
@@ -1601,6 +1608,8 @@ No unresolved correctness, admission-capacity, cancellation, HTTP-semantics, all
 
 No unresolved correctness, security-boundary, cache-policy, range, source-exposure, proxy-header, upload-streaming or CI blocker remains from the accepted first v2 production nginx serving boundary. Live deployment is intentionally unchanged; certificate provisioning, host-specific deployment/update mechanics, process/file limits, trusted-proxy/client-IP policy, abuse/rate limiting, PostgreSQL tuning, backups/recovery and broader production observability remain separate M7 work.
 
+The first native service-limits candidate has no known exact-candidate CI or systemd syntax/limit-application blocker. Real-binary systemd startup, normal media processing, peak memory/tasks/FD headroom, forced failure recovery and stop behavior remain to be independently exercised with disposable data. The provisional caps must not be represented as measured production capacity, and no host deployment has been changed.
+
 ## Single best next task
 
-Resolve the **exact-candidate CI gate** for native resource-limits candidate `47f1a1b883898a33760a29117035fc7cd1897cd4` (run `37732772249`, job `113165689879`). Inspect failures and fix only the relevant implementation/fixture defects if needed, with a new exact-candidate green run before any independent local-agent execution gate. Do not integrate or deploy yet.
+Run an **independent real-binary systemd resource-limits acceptance gate** for executable/configuration candidate `b67a4c7cfd90e6849fa4817a2e73bb6c54dcbe94` (`v2 CI` run `37733659202`, job `113168249765`, green). With `ginbar-handoff`, execute only on a disposable isolated production-class host/VM using actual Go API and Rust media worker binaries, dedicated disposable PostgreSQL/media fixtures, and tracked systemd units. Verify normal API/worker startup, processing, graceful termination/restart, applied FD/task/memory limits, measured peak headroom and cleanup; collect raw logs/metrics and `findings.md` in one retained `.local-agent-results/` ZIP and return its exact path and SHA-256. No live service, host configuration, production database, repository/tracked-file, branch, commit or deployment writes. The primary assistant must review evidence before acceptance/integration.
