@@ -80,8 +80,17 @@ function reply(req, res, bytes) {
 }
 
 let streamProbeSeen = false;
+let authUpstreamCount = 0;
 
 const server = http.createServer((req, res) => {
+  if (req.url === "/fixture-auth-count") {
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify({ count: authUpstreamCount }));
+    return;
+  }
+  if (req.method === "POST" && (req.url === "/api/v2/auth/login" || req.url === "/api/v2/auth/register")) {
+    authUpstreamCount++;
+  }
   if (req.url === "/stream-probe") {
     res.statusCode = 200;
     res.setHeader("Content-Type", "application/json");
@@ -141,6 +150,9 @@ docker run --rm \
 grep -Fq 'client_max_body_size 257m;' "$TMP_ROOT/nginx-T.txt" || fail "upload body limit is not loaded"
 grep -Fq 'proxy_request_buffering off;' "$TMP_ROOT/nginx-T.txt" || fail "upload streaming directive is not loaded"
 grep -Fq 'proxy_read_timeout 135s;' "$TMP_ROOT/nginx-T.txt" || fail "ingest proxy timeout is not loaded"
+grep -Fq 'limit_req_zone $binary_remote_addr zone=ginbar_v2_auth:10m rate=2r/s;' "$TMP_ROOT/nginx-T.txt" || fail "auth rate zone missing"
+grep -Fq 'limit_req zone=ginbar_v2_auth burst=10 nodelay;' "$TMP_ROOT/nginx-T.txt" || fail "auth burst policy missing"
+grep -Fq 'limit_req_status 429;' "$TMP_ROOT/nginx-T.txt" || fail "rate rejection status missing"
 
 docker run -d --rm \
   --name "$NGINX_CONTAINER" \
@@ -276,5 +288,61 @@ if ! wait "$STREAM_CURL_PID"; then
   cat "$stream_log" >&2
   fail "slow streaming upload did not complete"
 fi
+
+
+# Exercise the real TLS listener and upstream with a single TCP peer.
+# Each auth URL is exact-matched, and both share one limit_req zone.
+auth_count() {
+  docker exec "$API_CONTAINER" node -e 'fetch("http://127.0.0.1:8080/fixture-auth-count").then(r => r.json()).then(v => process.stdout.write(String(v.count))).catch(() => process.exit(1))'
+}
+auth_post() {
+  local route="$1"
+  shift
+  "${CURL_HTTPS[@]}" --max-time 5 -H 'Content-Type: application/json' "$@" \
+    --data-binary '{"username":"fixture","password":"fixture"}' \
+    -o /dev/null -w '%{http_code}' "$HTTPS_URL/api/v2/auth/$route"
+}
+
+# Existing auth probes consumed some initial budget; allow the zone to drain.
+sleep 6
+before_auth="$(auth_count)"
+[[ "$(auth_post login)" == "200" ]] || fail "normal login did not reach Go"
+[[ "$(auth_post register)" == "200" ]] || fail "normal registration did not reach Go"
+[[ "$(auth_count)" == "$((before_auth + 2))" ]] || fail "normal auth requests did not reach upstream"
+
+# A fresh budget permits ten excess requests without artificial delay.
+sleep 6
+before_burst="$(auth_count)"
+for i in $(seq 1 10); do
+  route=login
+  if (( i % 2 == 0 )); then route=register; fi
+  [[ "$(auth_post "$route")" == "200" ]] || fail "documented auth burst was rejected at request $i"
+done
+[[ "$(auth_count)" == "$((before_burst + 10))" ]] || fail "burst traffic did not all reach upstream"
+
+# Repeated requests from the same TCP peer cannot reset the bucket by
+# rotating untrusted X-Forwarded-For identities.
+before_flood="$(auth_count)"
+rejected=0
+admitted=0
+for i in $(seq 1 35); do
+  code="$(auth_post login -H "X-Forwarded-For: 198.51.100.$i")"
+  case "$code" in
+    429) rejected=$((rejected + 1));;
+    200) admitted=$((admitted + 1));;
+    *) fail "unexpected flood response $code";;
+  esac
+done
+(( rejected >= 1 )) || fail "forged X-Forwarded-For bypassed auth rate limit"
+[[ "$(auth_count)" == "$((before_flood + admitted))" ]] || fail "rejected auth requests reached Go"
+
+# Non-auth API requests are not in the auth zone during the flood.
+non_auth_code="$("${CURL_HTTPS[@]}" -o /dev/null -w '%{http_code}' "$HTTPS_URL/api/v2/posts")"
+[[ "$non_auth_code" == "200" ]] || fail "non-auth API route was throttled"
+
+# Token-bucket capacity recovers without requiring a service restart.
+sleep 6
+[[ "$(auth_post login)" == "200" ]] || fail "auth limiter did not recover"
+[[ "$(auth_post register)" == "200" ]] || fail "shared limiter did not recover for registration"
 
 printf 'v2-nginx-test: PASS https_port=%s asset=%s streaming_upstream_seen=true\n' "$HTTPS_PORT" "$ASSET_PATH"
