@@ -1667,3 +1667,13 @@ Status: **IMPLEMENTED ON FEATURE BRANCH; NOT ACCEPTED OR INTEGRATED.** No produc
 - Target-host `18182` listener/identity could not be verified from this separate execution environment; no process was stopped.
 - No executable modification was made. Candidate remains `1e60983597f1651a738f9c095e915c7facf6e305`, NOT green-verified, unaccepted and unintegrated.
 - **ONE next task:** Run and fix the isolated real-nginx fixture on the authorized CI/Docker runner, obtain and verify a GREEN `v2 CI` run/job on the exact executable SHA, then update STATE and prepare independent review. Do not integrate beforehand.
+
+
+### Verification retry — 2026-10-08 (same candidate, no executable change)
+
+- Re-fetched STATE and verified GitHub comparison: live `v2` remains `043dd8dba33f2adcc08e657ced6ea096d09a03a6`; feature branch was five commits ahead and zero behind before this note.
+- Inspected the current tracked real-nginx fixture and its asserted scenarios. No execution-based conclusion can be drawn without its Docker/Node runner.
+- Current execution container confirms `/usr/sbin/nginx` and `git` installed, Docker missing; GitHub DNS resolution fails, and port `18182` is not listening in this container's namespace. No target-host PID identity is available; no process was terminated.
+- Available GitHub connector provides no workflow dispatch/list-all-runs action. Its commit combined status returned an empty status list and its commit-associated workflow lookup returned zero runs for executable `1e60983597f1651a738f9c095e915c7facf6e305`. These do **not** prove failure or success. Exact-SHA candidate CI remains **UNKNOWN / NOT VERIFIED GREEN** (workflow `v2 CI`, run/job unavailable). No isolated nginx fixture, `nginx -t` against candidate or shell syntax gate was performed; do not claim PASS.
+- **Integration decision: HOLD.** No feature code, CI wiring, deployed service or production state was changed. This documentation update is STATE-only; executable candidate remains unchanged.
+- **ONE next task:** Execute `bash -n scripts/v2-nginx-test.sh`, `bash scripts/v2-nginx-test.sh` and exact-candidate `v2 CI` on the network/Docker-capable authorized runner; fix concrete failures, verify workflow/run/job/SHA/conclusion and then hand off only a GREEN candidate for independent acceptance.
