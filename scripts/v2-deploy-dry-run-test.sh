@@ -201,6 +201,13 @@ check_release() {
     [[ "$(curl -ksS -o /dev/null -w "%{http_code}" https://127.0.0.1/sources/secret.txt)" == 404 ]]
   ' -- "$expected" || fail "release $expected boundary check failed"
 }
+for _ in $(seq 1 30); do
+  if docker exec "$container" test -f /srv/ginbar/worker-runtime/release \
+    && docker exec "$container" curl -fsS --max-time 1 http://127.0.0.1:8080/readyz >/dev/null 2>&1; then
+    break
+  fi
+  sleep 0.2
+done
 check_release a
 docker exec "$container" /usr/local/sbin/apply-release b
 check_release b
