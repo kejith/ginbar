@@ -3,19 +3,19 @@ package httpapi
 import (
 	"net/http"
 	"net/http/httptest"
-	"testing"
 	"strings"
+	"testing"
 )
 
 func TestTrustedProxySchemeAndSameOriginMutationContract(t *testing.T) {
 	for _, tt := range []struct {
-		name        string
-		url         string
-		remote      string
-		origin      string
-		forwarded   []string
-		trust       bool
-		wantStatus  int
+		name       string
+		url        string
+		remote     string
+		origin     string
+		forwarded  []string
+		trust      bool
+		wantStatus int
 	}{
 		{"trusted-https", "http://ginbar.test/api/v2/auth/logout", "127.0.0.1:1234", "https://ginbar.test", []string{"https"}, true, http.StatusNoContent},
 		{"trusted-http", "http://ginbar.test/api/v2/auth/logout", "127.0.0.1:1234", "http://ginbar.test", []string{"http"}, true, http.StatusNoContent},
