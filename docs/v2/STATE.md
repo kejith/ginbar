@@ -1657,3 +1657,11 @@ Implement the **first narrowly scoped nginx authentication-ingress rate-limit bo
 - Remaining risks: shared NAT policy may need real-load tuning; target-host evidence transfer server 18182 cannot be safely terminated from this environment without PID/command verification. No production deployment or legacy `master` modification occurred.
 
 **Exactly ONE next task:** Verify the post-integration `v2 CI` workflow/run/job for exact executable SHA `1e60983597f1651a738f9c095e915c7facf6e305` and record GREEN evidence in STATE before proceeding to any next M7 implementation.
+
+
+### Post-integration CI verification retry — 2026-10-08
+
+- Reverified remote `v2` is documentation-only `7344dc83b62e5bffb36fd9e1a1038cf57b7e2f85`, with integrated executable/configuration SHA `1e60983597f1651a738f9c095e915c7facf6e305` recorded above.
+- Rechecked candidate SHA through available GitHub connector: commit-associated workflow-run listing returned `[]` (this integration only covers pull-request-triggered runs) and combined commit statuses returned `[]` (not an authoritative Actions check-run listing). Direct GitHub Actions and API web retrieval failed. Therefore post-integration workflow/run/job/head SHA/conclusion **remain unverified**, neither PASS nor FAIL. Do not conflate feature-branch candidate CI run `37791902843` with a `v2` post-integration run.
+- No executable, CI configuration or production host/service changes were made; accepted integration remains in place. No process was signaled at port `18182` (no target-host PID/command identity available).
+- **Exactly ONE next task:** On a network-capable authorized host with Actions API access, locate the `v2`-branch `v2 CI` push run for `1e60983597f1651a738f9c095e915c7facf6e305`; verify its correctness job and conclusion, then record exact run/job/SHA and close the slice only on success. If absent or failed, diagnose the CI gate before any next M7 implementation.
