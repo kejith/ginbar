@@ -214,6 +214,16 @@ grep -Fq '"forwardedProto":"https"' "$api_body" || fail "proxy did not propagate
   -o "$api_body" \
   "$HTTPS_URL/api/v2/auth/login"
 grep -Fq '"forwardedProto":"https"' "$api_body" || fail "nginx forwarded a client-supplied scheme"
+
+# Duplicate client-supplied forwarding fields must also be replaced.
+"${CURL_HTTPS[@]}" \
+  -H 'X-Forwarded-Proto: https' \
+  -H 'X-Forwarded-Proto: http' \
+  -H 'Content-Type: application/json' \
+  --data-binary '{"username":"fixture","password":"fixture"}' \
+  -o "$api_body" \
+  "$HTTPS_URL/api/v2/auth/login"
+grep -Fq '"forwardedProto":"https"' "$api_body" || fail "nginx forwarded duplicate client scheme headers"
 grep -Fq "\"host\":\"ginbar.test:$HTTPS_PORT\"" "$api_body" || fail "nginx rewrote Host while sanitizing forwarding header"
 grep -Fq '"url":"/api/v2/auth/login"' "$api_body" || fail "API path was not preserved"
 
