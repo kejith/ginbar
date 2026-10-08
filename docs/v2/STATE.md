@@ -1658,3 +1658,12 @@ Status: **IMPLEMENTED ON FEATURE BRANCH; NOT ACCEPTED OR INTEGRATED.** No produc
 - Remaining risk: load-policy tuning under real shared NAT traffic, and actual isolated Docker/nginx CI verification. No deployment was performed.
 
 **Exactly ONE next task:** Verify/fix the exact executable candidate's nginx fixture and `v2 CI` until green, then update STATE with exact run/job/SHA and hand off the CI-green candidate for independent local acceptance.
+
+
+### Follow-up validation attempt — 2026-10-08
+
+- Reverified live `v2` matches `043dd8dba33f2adcc08e657ced6ea096d09a03a6`; implementation branch was four commits ahead, zero behind, with changes confined to nginx configuration, nginx test fixture and STATE.
+- Execution environment: nginx `1.26.3` and Git present; Docker unavailable, and `git ls-remote https://github.com/kejith/ginbar.git refs/heads/v2` failed DNS resolution. The remote GitHub connector confirmed refs and fetched STATE; GitHub Actions direct webpage access was unavailable. No new exact-SHA green CI result was obtained or claimed.
+- Target-host `18182` listener/identity could not be verified from this separate execution environment; no process was stopped.
+- No executable modification was made. Candidate remains `1e60983597f1651a738f9c095e915c7facf6e305`, NOT green-verified, unaccepted and unintegrated.
+- **ONE next task:** Run and fix the isolated real-nginx fixture on the authorized CI/Docker runner, obtain and verify a GREEN `v2 CI` run/job on the exact executable SHA, then update STATE and prepare independent review. Do not integrate beforehand.
