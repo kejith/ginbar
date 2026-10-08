@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-08
-Phase: **M7 production hardening in progress; first native process/file limits candidate pending CI/review; nginx/KDF accepted and integrated**
+Phase: **M7 production hardening in progress; password-KDF admission, production nginx serving and native service resource-limits boundaries accepted and integrated**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -36,7 +36,7 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - first authenticated inbox/direct-thread frontend slice: **accepted, browser-gated and integrated; exact-candidate/post-integration CI green**.
   - consolidated M6 private-messages milestone gate: **accepted; M6 closed**.
 - M7 production hardening: **in progress**.
-  - first native process/file resource-limits candidate: **implemented on branch; exact-candidate CI and independent acceptance pending; not integrated**.
+  - first native process/file resource-limits boundary: **accepted, integrated, independently real-binary validated and exact-candidate/post-integration CI green; live deployment unchanged**.
   - bounded password-KDF admission control: **accepted, target-host profiled and integrated; exact-candidate/post-integration CI green**.
   - first v2 production nginx serving boundary: **accepted and integrated; exact-candidate/post-integration CI green; live target-host nginx unchanged**.
 
@@ -232,27 +232,36 @@ Post-integration `v2 CI`:
 
 Decision: **accept and close the first v2 production nginx serving-boundary slice**. There is no known correctness, security-boundary, range, caching, upload-streaming, same-origin proxy or CI blocker from this slice. M7 production hardening remains in progress.
 
-## M7 production hardening — first native process/file resource boundary awaiting acceptance
+## M7 production hardening — native API/worker resource-limits boundary accepted and integrated
 
-Verified live integration base: `544a4412141eacf6148daf4c74a1553fb9ab6b22` (documentation/state-only).
-Accepted integrated executable/configuration beneath it: `20be4765e935e715f2cd8862da0a6382e1322281`.
+Verified original integration base: `544a4412141eacf6148daf4c74a1553fb9ab6b22` (documentation-only); preceding accepted executable/configuration SHA: `20be4765e935e715f2cd8862da0a6382e1322281`.
+
 Implementation branch: `astra/m7-service-limits`.
-Exact executable/configuration candidate: `47f1a1b883898a33760a29117035fc7cd1897cd4`.
-No integration or production deployment has been performed.
+**Exact accepted and integrated executable/configuration SHA: `b67a4c7cfd90e6849fa4817a2e73bb6c54dcbe94`.** The feature branch subsequently received documentation/state-only commits; those were **not** integrated.
 
-The existing `wallium.service` and scripts belong to the legacy Docker Compose deployment; v2 has native Go and Rust executables and a separate accepted nginx configuration, but no installed v2 service manager configuration. The smallest fitting initial serving model is therefore two standalone native systemd service units under `systemd/v2/`, without replacing the legacy service or adding installer/update automation.
+- API native systemd unit `systemd/v2/ginbar-api-v2.service`: `LimitNOFILE=4096`, `TasksMax=256`, `MemoryMax=1G`, `TimeoutStopSec=30s`.
+- Rust worker native systemd unit `systemd/v2/ginbar-worker-v2.service`: `LimitNOFILE=1024`, `TasksMax=128`, `MemoryMax=4G`, `TimeoutStopSec=90s`.
+- Both run as `ginbar` with private env files, `KillMode=control-group`, `OOMPolicy=kill`, `MemoryAccounting=yes`, `Restart=on-failure`, `RestartSec=10s`, and 5 starts per 5 minutes. Worker memory/tasks include spawned FFmpeg/FFprobe child processes.
+- Paths and prerequisites are documented under `systemd/v2/README.md`; no tracked v2 deployment automation was introduced; the legacy Docker Compose `wallium.service` is untouched.
+- `scripts/v2-service-limits-test.sh` validates unit syntax, actual process/cgroup limits and restart under disposable Docker systemd on isolated CI. The CI path filter and `scope=all` correctness gate include the new units and fixture.
 
-- API: `/usr/local/bin/ginbar-api-v2`, `LimitNOFILE=4096`, `TasksMax=256`, `MemoryMax=1G`.
-- Worker: `/usr/local/bin/ginbar-worker-v2 run`, `LimitNOFILE=1024`, `TasksMax=128`, `MemoryMax=4G`; tasks and memory account for child FFmpeg/FFprobe processes.
-- Both: `User/Group=ginbar`, dedicated environment files under `/etc/ginbar/v2/`, group-wide kill, `OOMPolicy=kill`, `Restart=on-failure`, `RestartSec=10s`, and `StartLimitBurst=5` per five minutes. API shutdown timeout is 30 seconds, worker timeout 90 seconds.
-- Existing media path shared with nginx: `/srv/ginbar/media`. No production host provisioning, service install/reload, or credentials are committed.
-- `scripts/v2-service-limits-test.sh` builds an ephemeral Docker systemd PID 1 fixture on an isolated CI VM, verifies both units with `systemd-analyze verify`, observes applied process FD limits and actual cgroup `memory.max`/`pids.max`, starts both service paths using stand-in executables, and checks restart after forced API termination.
-- The CI workflow now watches `systemd/v2/**` and the fixture; scoped CI treats such changes as `scope=all`. The application correctness suite and target-worker build remain separate checks.
-- `systemd/v2/README.md` documents exact deployment prerequisites, test isolation and limitations.
+Exact-candidate `v2 CI`: run `37733659202`, correctness job `113168249765`, `head_sha=b67a4c7cfd90e6849fa4817a2e73bb6c54dcbe94`, **success**, `scope=all`; including Rust/PostgreSQL tests/clippy, Go/PostgreSQL tests/vet/format, frontend 48/48/typecheck/build, nginx fixture and isolated systemd fixture (`v2-service-limits-test: PASS fds=4096/1024 tasks=256/128 memory=1G/4G restart=verified`). Earlier candidate CI failures were due to a disposable Docker cgroup bind-mount defect; the final systemd fixture corrected it before acceptance.
 
-CI status at this writing: **pending** for exact candidate `47f1a1b883898a33760a29117035fc7cd1897cd4`, workflow run `37732772249`, job `113165689879`. Previous superseded candidate runs were cancelled; neither success nor failure was inferred from them. Do not accept, integrate or hand this candidate to the local agent without completed green exact-candidate CI.
+Independent uploaded local-agent evidence archive `resource-limits-20261008T061043Z.zip`, independently hashed on receipt: SHA-256 `a2f9cfac0429e6c5a4fc90b467a6d3efdef6864d76fd7cd4155aacdea5027a08`; ZIP integrity verified and raw evidence inspected. The archive's in-file hash `9f72152ffccccab72fe9e814dbf40e8657d3e4441b05f1443add295f8393c0ed` was explicitly marked provisional before repacking, not the transferred archive hash.
 
-Outstanding evidence: tests must finish green; effective service startup/normal operation with **real** Go/Rust binaries and disposable PostgreSQL/media workloads remains untested under systemd. The 1 GiB/4 GiB caps are provisional containment, not measured peak-size recommendations. An independent execution gate on an isolated production-class host is required before acceptance. No target-host live deployment changes are authorized.
+Independent real-executable evidence on Ubuntu 24.04 WSL2, systemd 255, PostgreSQL 16.15, Go 1.27.1, and Rust release:
+- detached exact-candidate worktree was tracked-clean; Go API and worker binaries built from the exact SHA;
+- user-scope transient systemd services applied exact FD/task/memory/restart/stop/OOM/kill policies; verified through `systemctl show`, `/proc/<PID>/limits`, and cgroup `pids.max`/`memory.max`;
+- API `/healthz` 200, unauthenticated `auth/me` 401, invitation-backed registration 201, login 200 and authenticated session read passed;
+- upload 201 created post/job 1; worker `run` processed PNG to AVIF and thumbnail, job succeeded in one attempt, release published, and media status reported ready;
+- cgroup peaks under this small test: API `140963840` bytes (~134.4 MiB), 12 tasks, 7 open FDs; worker `17440768` bytes (~16.6 MiB), 23 tasks, 7 open FDs;
+- graceful stops left both units inactive and freed the API port; after forced API `SIGKILL`, systemd restarted it after ~10 seconds with the original limits intact;
+- disposable DB dropped and confirmed absent; PG stopped; all test units/worktree/media/binaries removed; canonical checkout's pre-existing tracked/untracked changes remained unchanged. No live host/deployment/production-data modification.
+
+**Acceptance:** the first native process/file resource-containment boundary is **accepted and integrated**. The independent WSL test used systemd **user** transient units with equivalent numeric settings, not installed system-scope `User=ginbar` units; the separate exact-candidate CI verified actual system-scope unit syntax/limit effects with stubs. The fixture is one small PNG and does not establish worst-case 4 GiB video/FFmpeg or 1 GiB API memory capacity. Host-specific unit installation and production-load calibration remain separate M7 work.
+
+Integration was a non-force fast-forward of live `v2` from `544a4412141eacf6148daf4c74a1553fb9ab6b22` to exact candidate `b67a4c7cfd90e6849fa4817a2e73bb6c54dcbe94`, with ahead=10, behind=0 and expected-SHA lease.
+Post-integration `v2 CI`: run `37737804515`, correctness job `113181252646`, branch `v2`, exact `head_sha=b67a4c7cfd90e6849fa4817a2e73bb6c54dcbe94`, **success**. Full `scope=all` correctness, service fixture, real nginx fixture, Rust worker release-build applicability/execution and tracked-clean checkout all passed. No CI/correctness blocker remains from this slice.
 
 ## M6 private messages — first backend foundation accepted and integrated
 
@@ -1599,8 +1608,10 @@ No unresolved correctness, navigation, stale-response, retained-state or browser
 
 No unresolved correctness, admission-capacity, cancellation, HTTP-semantics, allocation or target-resource blocker remains from the accepted M7 password-KDF admission slice. The production-class target supports the conservative 1-running/4-queued default; measured 2-way/4-way KDF concurrency increased RSS and memory-bandwidth contention enough that no higher default is justified. The target lacked a C compiler for `-race`; this remains an evidence-environment limitation, not an application blocker. The uploaded evidence ZIP hash differs from the local-agent-reported retained hash even though its raw contents are internally consistent and ZIP-clean; future evidence packaging should return the checksum of the exact transferred archive without post-hash repacking.
 
-No unresolved correctness, security-boundary, cache-policy, range, source-exposure, proxy-header, upload-streaming or CI blocker remains from the accepted first v2 production nginx serving boundary. Live deployment is intentionally unchanged; certificate provisioning, host-specific deployment/update mechanics, process/file limits, trusted-proxy/client-IP policy, abuse/rate limiting, PostgreSQL tuning, backups/recovery and broader production observability remain separate M7 work.
+No unresolved correctness, security-boundary, cache-policy, range, source-exposure, proxy-header, upload-streaming or CI blocker remains from the accepted first v2 production nginx serving boundary. Live deployment is intentionally unchanged; certificate provisioning, host-specific deployment/update mechanics, trusted-proxy/client-IP policy, abuse/rate limiting, PostgreSQL tuning, backups/recovery and broader production observability remain separate M7 work.
+
+No known resource-limit unit, applied-cgroup, real-binary startup, graceful shutdown/restart, cleanup, or CI blocker remains after the accepted native service-boundary gate. Resource caps are provisional containment rather than established production-load capacity; untested large-video peak usage, FFmpeg child-process load and installed system-scope service operation must be revalidated separately before production deployment.
 
 ## Single best next task
 
-Resolve the **exact-candidate CI gate** for native resource-limits candidate `47f1a1b883898a33760a29117035fc7cd1897cd4` (run `37732772249`, job `113165689879`). Inspect failures and fix only the relevant implementation/fixture defects if needed, with a new exact-candidate green run before any independent local-agent execution gate. Do not integrate or deploy yet.
+Implement the **first v2 trusted reverse-proxy scheme-header boundary** for the Go API behind the accepted nginx TLS proxy. The existing `requestScheme` accepts client-supplied `X-Forwarded-Proto` without authenticating the forwarding hop; retain nginx's explicitly controlled `Host` and `X-Forwarded-Proto` behavior and the existing same-origin mutation contract while defining and testing an explicit trusted-proxy rule that rejects spoofed forwarding from untrusted direct clients. Start from accepted executable `b67a4c7cfd90e6849fa4817a2e73bb6c54dcbe94` (post-integration CI run `37737804515`, job `113181252646`, green); branch from freshly verified live `v2`. Keep the slice limited to scheme-header trust and its HTTP/nginx contract tests: no per-IP abuse limits, WAF, PostgreSQL tuning, deployment automation, observability, backup/recovery or unrelated changes. Require exact-candidate CI green before any review/local-agent handoff; do not modify live host services. Record results in `STATE.md`.
