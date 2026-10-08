@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-08
-Phase: **M7 production hardening in progress; trusted-proxy scheme-header security boundary accepted, independently validated and integrated; exact/post-integration CI green**
+Phase: **M7 production hardening in progress; nginx authentication-ingress limiter accepted and integrated; post-integration CI verification pending**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -36,6 +36,7 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - first authenticated inbox/direct-thread frontend slice: **accepted, browser-gated and integrated; exact-candidate/post-integration CI green**.
   - consolidated M6 private-messages milestone gate: **accepted; M6 closed**.
 - M7 production hardening: **in progress**.
+  - nginx authentication-ingress rate limiter: **independently accepted and integrated; post-integration CI verification pending**.
   - first trusted reverse-proxy scheme-header boundary: **ACCEPTED and integrated, nginx→real-Go/PostgreSQL and nonloopback direct-peer independently gated, exact-candidate/post-integration CI green; no production deployment**.
   - first native process/file resource-limits boundary: **accepted, integrated, independently real-binary validated and exact-candidate/post-integration CI green; live deployment unchanged**.
   - bounded password-KDF admission control: **accepted, target-host profiled and integrated; exact-candidate/post-integration CI green**.
@@ -1641,3 +1642,18 @@ No known resource-limit unit, applied-cgroup, real-binary startup, graceful shut
 
 Implement the **first narrowly scoped nginx authentication-ingress rate-limit boundary** for v2 `POST /api/v2/auth/login` and `POST /api/v2/auth/register` to bound abusive KDF submissions *before* they reach Go, using nginx's native low-overhead rate limiting keyed from the **actual immediate TCP peer** (`$binary_remote_addr`), never attacker-controlled `X-Forwarded-For`. Keep existing nginx Host/`X-Forwarded-Proto`, TLS, upload/URL-import streaming, and all other API routes unchanged. Define conservative explicit rate/burst policy and status (429), consider shared-NAT tradeoffs, bounded memory and burst behavior; add deterministic isolated nginx fixture tests for threshold/recovery, spoofed XFF immunity, allowed normal auth, and unaffected non-auth routes. Coordinate final shutdown of the prior disposable evidence-transfer HTTP server on port `18182` only after verifying its PID/command identity (or request manual host cleanup); never touch production/live services. Start on feature branch from freshly verified live `v2` (accepted executable `a142272cde7a74d40a128cdd9803c903fc86ef02` beneath documentation-only STATE). Scope is the nginx authentication ingress boundary only: no backend per-user limiter, Redis, WAF, DB tuning, backups, observability or deployment automation. Require applicable exact-SHA green CI before independent acceptance/integration and update STATE with evidence, unresolved issues, and exactly ONE next task.
 
+
+
+## M7 native nginx authentication-ingress limiting — accepted and integrated
+
+**Decision (2026-10-08): ACCEPT independent evidence, integrate executable; do not close the post-integration CI gate without its own success evidence.**
+
+- Live integration base verified before update: `043dd8dba33f2adcc08e657ced6ea096d09a03a6` (STATE-only); integration performed via non-force fast-forward with expected-SHA lease.
+- Accepted executable/configuration candidate and integrated exact SHA: `1e60983597f1651a738f9c095e915c7facf6e305`. After update, remote `v2` compared identical to this SHA. Branch: `astra/m7-nginx-auth-ingress-limit`; branch STATE-only commits excluded from integration.
+- Config: shared 10 MiB `limit_req_zone $binary_remote_addr zone=ginbar_v2_auth:10m rate=2r/s`, `burst=10 nodelay`, HTTP 429 for two exact auth route locations. TCP-peer-derived key ignores spoofed XFF. Shared-NAT peers share budget. Other API locations, TLS, explicit Host/forwarded proto and upload/URL streaming directives left intact.
+- Exact candidate `v2 CI`: workflow id `374214168`, run `37791902843`, correctness job `113361650640`, head SHA `1e60983597f1651a738f9c095e915c7facf6e305`, **completed/success**, verified in local acceptance archive via recorded GitHub API run/job/check-run JSON. Job logs unavailable due token restrictions; CI verdict is based on recorded API conclusions.
+- Independently supplied acceptance ZIP `nginx-auth-accept-20261008T145859Z.zip` integrity-verified and SHA-256 `8d9fa93f1d87e0c8131db618566a8da827228f62f80e634f47e39d4ca24cfd79`; inspected findings, raw nginx test results and CI records. Exact-SHA detached-clean real nginx 1.24.0 acceptance PASS: bash syntax and isolated `nginx -t`, Host/scheme/header sanitation, login/register +2 upstream, shared burst 10/10, forged-XFF flood 34×429/1×200 with only +1 upstream, shared exhausted registration 429, non-auth route 200, recovery without restart. Isolated fixture/probe was Docker-free; exact Docker fixture coverage is via green candidate CI. No acceptance blocker found.
+- **Post-integration `v2 CI`: not yet verified.** Available GitHub connector does not provide a general workflow run listing/dispatch and public Actions URL could not be fetched here. Do not claim post-integration success or final CI closure until workflow/run/job/head SHA/result are inspected. This is an evidence gate, not a demonstrated defect.
+- Remaining risks: shared NAT policy may need real-load tuning; target-host evidence transfer server 18182 cannot be safely terminated from this environment without PID/command verification. No production deployment or legacy `master` modification occurred.
+
+**Exactly ONE next task:** Verify the post-integration `v2 CI` workflow/run/job for exact executable SHA `1e60983597f1651a738f9c095e915c7facf6e305` and record GREEN evidence in STATE before proceeding to any next M7 implementation.
