@@ -151,7 +151,7 @@ check_args=("$results" --requests "$requests")
 if [[ -n "${GINBAR_PERF_BUDGET_FILE:-}" ]]; then
   check_args+=(--budget-file "$GINBAR_PERF_BUDGET_FILE")
 fi
-python3 "$bench/check_regression.py" "${check_args[@]}" | tee "$results/validation.txt"
 printf '\n== raw PostgreSQL EXPLAIN (ANALYZE, BUFFERS) ==\n'
 cat "$results/explain.txt"
+python3 "$bench/check_regression.py" "${check_args[@]}" | tee "$results/validation.txt"
 git -C "$root" status --short --branch > "$results/git-status-after.txt"
