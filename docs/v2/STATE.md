@@ -2152,3 +2152,142 @@ Do **not** silently insert speculative numeric thresholds into CI,
 make schema/index changes, run production-data benchmarks or
 start a new implementation before establishing a defensible
 baseline and separate acceptance gate.
+
+### M7 numerical performance-budget calibration assessment — 2026-10-09 (documentation only)
+
+**Decision: NOT YET CALIBRATED.** No enforceable p95, p99 or minimum-RPS
+limits are currently justified for target-host or CI environments. Retain
+the already-CLOSED performance-regression fixture's **deterministic**
+HTTP success/error, five SQL plan shape/buffer/no-spill and exact-source
+provenance checks as the active gate. Keep
+`GINBAR_PERF_BUDGET_FILE` unset; no budget schema or runtime behavior
+has been modified. This calibration review does **not reopen** the
+closed fixture acceptance/integration CI gates. Overall M7 remains open.
+
+**State and source provenance:** fetched live `v2` at
+`edd3f1a1b40b6045cf80935b6b7f91f8edadd857`, which
+differs from accepted executable/configuration
+`5712176ceb2e6e886578bad71d1515ee6d0cec1a`
+only in `docs/v2/STATE.md`. Accepted exact-candidate feature push
+`v2 CI` workflow `374214168`, run `37848213706`,
+job `113554321060`, completed/success. The distinct
+post-integration `v2` push run `37855607480`, correctness
+job `113578910879`, exact executable SHA, 8/8 job steps,
+completed/success, remains verified. This review changes documentation
+only, not the executable tested by these runs.
+
+**Accepted comparable target-host data** from the independently audited
+ZIP `m7-perf-shared-auth-20261008T224019Z.zip`,
+exact archive SHA-256
+`3c768f4d92f2c15c456ba1c95a76d1a6834a741bc74c52cd6bdb7bb3bd7ac781`;
+133/133 internal manifest hashes verified. The three fresh first-attempt
+runs occurred within **2026-10-08T22:40:26Z to 22:42:53Z** on one
+explicitly authorized shared host (`amp.kejith.de`), with exact
+executable SHA, identical Go 1.25.0 and PostgreSQL 17.11 container
+images, synthetic 100,000-post seed, identical five cases, 20 warmups,
+2,000 measured successful HTTP 200 per cell, zero errors. Raw inputs:
+`run{1,2,3}/http-*.json`, `run{1,2,3}/summary.json`,
+`run{1,2,3}/explain.txt`, `run{1,2,3}/environment.txt`,
+`versions.txt`, `resources-{global,run*}-*.txt`, negative tests
+and cleanup evidence. Metrics below are **descriptive statistics**,
+not pass/fail budget proposals. Spread = 100*(max/min-1) over 3 rounds.
+
+| Case | Target p95 median ms | p95 range ms / spread | p99 range ms / spread | RPS range / spread |
+| --- | ---: | --- | --- | --- |
+| feed-first-c1 | 0.915 | 0.893–0.933 / 4.4% | 0.974–1.727 / 77.4% | 1320.6–1391.7 / 5.4% |
+| feed-cursor-c1 | 0.957 | 0.946–1.032 / 9.1% | 1.166–1.308 / 12.1% | 1217.7–1293.4 / 6.2% |
+| search-tag-score-c1 | 2.728 | 2.701–2.771 / 2.6% | 2.859–3.207 / 12.2% | 566.9–578.3 / 2.0% |
+| around-50000-c1 | 2.050 | 2.013–2.117 / 5.2% | 2.221–2.382 / 7.3% | 604.1–631.1 / 4.5% |
+| around-50000-c8 | 3.796 | 3.726–4.290 / 15.1% | 4.519–5.881 / 30.1% | 2639.0–2726.0 / 3.3% |
+
+**CI measurements are an UNLIKE environment, not a pooled target
+sample.** Independently re-read exact-SHA raw runner logs:
+- Feature candidate `37848213706`/`113554321060`, five
+  p95/p99/RPS: first c1 `1.276/1.692/1075.3`,
+  cursor c1 `1.142/1.293/1097.5`,
+  search c1 `2.949/3.432/507.4`,
+  around c1 `2.328/2.675/537.0`,
+  around c8 `7.237/9.079/1845.1`.
+- Post-integration `37855607480`/`113578910879`,
+  same five cases: first `1.088/1.251/1139.1`,
+  cursor `1.278/1.582/986.6`,
+  search `3.023/3.361/494.7`,
+  around c1 `2.400/2.738/509.6`,
+  around c8 `7.178/9.166/1838.3`.
+  The CI c8 p95 is approximately **1.9x** the target-host
+  median c8 p95, while throughput is lower. Runner VM, cgroup,
+  background activity, scheduling and CPU profile are not
+  controlled/equated to the authorized target host, so
+  **no cross-environment threshold and no claimed speedup**.
+  The historical M2 around c1/c8 p95 of 2.277/4.871 ms is
+  likewise not a directly matched workload baseline.
+
+**Why no defendable hard limits yet:**
+1. Only three back-to-back target rounds (single short time window),
+   not independent days/load states or an established noise envelope.
+   Target first-feed p99 spans **77.4%**, around c8 p99 **30.1%**
+   and c8 p95 **15.1%**. Even 2,000 observations inside a round
+   do not independently sample host-to-host or time-to-time variance.
+2. During-run `resources-run*-during.txt` mostly records
+   `docker ps` service/container status, not time-aligned
+   CPU pressure, per-service CPU/RSS, host runqueue/IO, contention
+   or cgroup throttling at benchmark execution; before/after
+   host memory and coarse preflight load cannot stratify latency
+   outliers. Shared-host services remained unchanged, but their
+   changing activity is a confounder.
+3. Only two standalone CI runner snapshots at the exact SHA,
+   with no repeated CI-environment distribution, hardware/runner
+   equivalence contract, controlled idle/loaded pairing, or
+   pinned runner performance class. Accepting target values for
+   CI would produce foreseeable false-positive regressions.
+4. A budget should be able to detect material regressions without
+   noisy flaky failures, with documented sample distribution,
+   threshold rationale, environment policy and intervention
+   criteria. The evidence is descriptive, not enough to fit that
+   policy. Therefore **proposed enforceable numeric limits:
+   NONE** for p95, p99 or RPS, in any environment.
+
+**Calibration policy for a separate decision (not activated):**
+- Define separate profiles for an authorized target-host class and
+  a specifically pinned CI runner class. Each requires matching exact
+  synthetic seed, query/HTTP fixture, PostgreSQL/Go image digests,
+  concurrency, API pool cap, CPU/cgroup class and workload settings.
+- Collect **at least 10** full independent rounds per host/load
+  condition across **at least three separate time windows**;
+  observe quiet/typical-shared-load conditions, with intentional
+  no-production-change policy. Log time-aligned host + relevant
+  service CPU/RSS/loadavg/pressure/cgroup throttling and resource
+  cleanup for **each HTTP cell**, not just a container-list snapshot.
+  Compare raw p50/p95/p99/RPS distribution and within-condition
+  variability; investigate tail outliers and check the first/last
+  rounds for warm-cache/time drift.
+- Analyze each environment separately. Only once the spread and
+  acceptable load envelope are measured should CODING propose
+  `schema: 1` budget JSON values in `maxP95Ms`,
+  `maxP99Ms`, `minRequestsPerSecond` with exact evidence
+  provenance, explicitly stated safety/noise headroom, version,
+  scope and agreed false-positive policy. Retain structural
+  hard failures; a first numeric breach should collect complete
+  raw evidence, be reproduced in the same pinned environment,
+  and be investigated against host contention before claiming
+  an application performance regression. No automatic service
+  tuning, schema/index change or production mitigation.
+- A prior user approval on `amp.kejith.de` was **one-task-only and
+  already consumed**. Any further shared-host measurements require
+  **new specific operator authorization**; no background benchmark,
+  production-data run, target-host write, or CI activation is
+  authorized by this documentation decision.
+
+**Exactly ONE next task:** CODING obtains **new explicit task-specific
+authorization** for a controlled **LOCAL independent measurement-only
+calibration gate** on an eligible isolated target/runner host,
+including the above minimum per-condition rounds and time-aligned
+resource observations. Only after the user approves may CODING
+issue a narrowly permissioned LOCAL execution handoff at accepted
+executable SHA
+`5712176ceb2e6e886578bad71d1515ee6d0cec1a`
+to collect a raw ZIP with versions, manifest/SHA-256, per-cell
+timings, resource conditions and cleanup. Do not repeat the
+previous completed acceptance, invent numerical budgets or
+change code/CI until that separate measurement evidence is
+reviewed and an explicit threshold policy accepted.
