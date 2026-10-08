@@ -78,8 +78,8 @@ check() {
   [[ "$(systemctl show -P StartLimitBurst "$unit")" == 5 ]]
   pid="$(systemctl show -P MainPID "$unit")"
   [[ "$pid" =~ ^[1-9][0-9]*$ ]]
-  [[ "$(awk "/Max open files/ {print \\$4}" "/proc/$pid/limits")" == "$fds" ]]
-  [[ "$(awk "/Max open files/ {print \\$5}" "/proc/$pid/limits")" == "$fds" ]]
+  [[ "$(awk "/Max open files/ {print \$4}" "/proc/$pid/limits")" == "$fds" ]]
+  [[ "$(awk "/Max open files/ {print \$5}" "/proc/$pid/limits")" == "$fds" ]]
   cg="$(systemctl show -P ControlGroup "$unit")"
   [[ "$(cat "/sys/fs/cgroup$cg/pids.max")" == "$tasks" ]]
   [[ "$(cat "/sys/fs/cgroup$cg/memory.max")" == "$memory" ]]
@@ -92,7 +92,7 @@ old_pid="$(systemctl show -P MainPID ginbar-api-v2.service)"
 kill -KILL "$old_pid"
 for i in $(seq 1 40); do
   new_pid="$(systemctl show -P MainPID ginbar-api-v2.service)"
-  if [[ "$new_pid" =~ ^[1-9][0-9]*$ && "$new_pid" != "$old_pid ]] \
+  if [[ "$new_pid" =~ ^[1-9][0-9]*$ && "$new_pid" != "$old_pid" ]] \
      && [[ "$(systemctl show -P ActiveState ginbar-api-v2.service)" == active ]]; then
     check ginbar-api-v2.service 4096 256 1073741824
     echo "v2-service-limits-test: PASS fds=4096/1024 tasks=256/128 memory=1G/4G restart=verified"
