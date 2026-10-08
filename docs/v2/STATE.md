@@ -2260,3 +2260,56 @@ single missing permission/environment capability changes, CODING
 may issue one new independent-acceptance execution handoff with
 narrow permissions and exact SHA. Do not run tests on that host or
 integrate before authorization and compliant evidence.
+
+### Operator explicitly authorizes a fresh shared-host disposable benchmark — 2026-10-09
+
+- User responded **"Yes"** directly to the exact authorization
+  question: "Do you explicitly authorize a fresh, isolated, disposable
+  Ginbar v2 performance benchmark on amp.kejith.de, despite the other
+  live services on that host?" This is **new, task-specific approval**,
+  not retroactive approval of earlier evidence.
+- Permitted scope: **one fresh LOCAL INDEPENDENT ACCEPTANCE task**, with
+  up to three **sequential** fixture runs on `amp.kejith.de` at exact
+  executable SHA `5712176ceb2e6e886578bad71d1515ee6d0cec1a`,
+  detached tracked-clean temporary Git worktree, only temporary
+  Docker PostgreSQL/API/build/HTTP benchmark containers and private
+  network, and evidence capture. Existing shared applications and
+  databases must remain untouched; inspect disk/RAM/load/cgroup and
+  active containers before each run and stop safely rather than
+  interfere with persistent workloads. Collect pre/during/post
+  load/resource snapshots and prove isolation and cleanup. This
+  authorization does **not** permit production deployment, existing
+  container restarts/stops/changes, persisted service/database writes,
+  repository commits/merges, broad Docker prunes, or unrelated tasks.
+- Capability routing: CODING can read/write GitHub repository and
+  verify exact Actions runs, but has no direct authorized SSH/Docker
+  execution route to the target host in this environment. LOCAL
+  OpenCode/VS Code is the execution owner, via the personal
+  `ginbar-handoff` skill. Do not invent execution or assume
+  integration on consent alone.
+- Live `v2` checked at
+  `36e27ed4f1671f7a50a3e99833ffb2fecb2c6e7f` and feature HEAD
+  `21570146c0011bd17b543b1e7ecc68ce91931fad` before this
+  documentation-only update. Exact-candidate CI remains GREEN:
+  workflow `v2 CI` ID `374214168`, feature `push`
+  run `37848213706`, job `113554321060`, SHA
+  `5712176ceb2e6e886578bad71d1515ee6d0cec1a`,
+  completed/success, 8/8 steps passed. Feature HEAD above executable
+  modifies only `docs/v2/STATE.md`; the executable is unchanged.
+- **Gate:** `EXACT_CANDIDATE_CI_GREEN`. Explicit execution permission
+  blocker has been resolved **prospectively**; fresh independent
+  evidence is still outstanding. `INDEPENDENT_EVIDENCE_PASS`,
+  `CODING_ACCEPTED`, `INTEGRATED`,
+  `POST_INTEGRATION_CI_GREEN`, `CLOSED` **not** reached.
+  Numeric performance budgets still uncalibrated and not enforced.
+
+**Exactly ONE next task:** LOCAL INDEPENDENT ACCEPTANCE on the now
+explicitly authorized `amp.kejith.de` host, restricted to disposable
+sequential fixture runs at executable SHA
+`5712176ceb2e6e886578bad71d1515ee6d0cec1a`; verify host
+safety preflight, capture complete raw evidence/negative tests and
+before/during/after resource snapshots, cleanup, and provide exactly
+one evidence ZIP with internal manifest plus external ZIP SHA-256.
+If host resources are unsafe or permission scope cannot be honored,
+stop and return BLOCKED with the first concrete reason. CODING then
+reviews raw evidence; no integration before independent acceptance.
