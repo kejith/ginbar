@@ -1678,3 +1678,17 @@ Verify the **first narrowly scoped PostgreSQL backup/restore boundary** for v2 o
 - Raw API JSON (workflows, both run-listing pages, run, jobs, branch) retained in evidence ZIP `post-integration-ci-20261008T160515Z.zip`.
 
 **Decision: the nginx authentication-ingress slice is CLOSED.** Exact-candidate CI, independent nginx acceptance, and post-integration CI are all green with no known correctness, security-boundary, burst/recovery, spoof-immunity, or CI blocker remaining. Shared-NAT budget tuning stays a real-load calibration item, not a slice blocker. M7 production hardening remains in progress.
+
+
+## M7 PostgreSQL logical backup/restore primitive — candidate awaiting CI
+
+**Status (2026-10-08): implementation committed to feature branch, NOT CI-green verified, NOT accepted or integrated.**
+
+- Integration base: verified remote `v2` `8732c12b0e8998d12df5b8d0ff26661847790359` (STATE-only); accepted executable beneath `1e60983597f1651a738f9c095e915c7facf6e305`.
+- Branch `astra/m7-pg-backup-restore` started from the verified live base. Executable/CI candidate before this STATE-only update: `501ddefffb637d73a62d5ec6bc4e5f049ec9ecc6`.
+- New `scripts/v2-pg-backup-test.sh`: isolated disposable PostgreSQL 17.11 container; creates separate source/restore databases; migrates SQL files from the v2 schema; seeds FK-linked users/credentials/posts/tags/comments/votes plus nondefault identity values; `pg_dump -Fc` and `pg_restore --exit-on-error --no-owner --no-privileges`; deterministic sorted JSONB row fingerprints and counts for all public tables, sequence catalog comparison, schema-only dump comparison, and transactional identity/FK usability probe. Prints versions, SHA-256, size and elapsed time. Container and temporary files removed via EXIT cleanup. Does not access production connections or data.
+- `scripts/v2-ci.sh` auto-scope includes the fixture path and invokes its gate in the nginx/all CI path; `.github/workflows/v2-ci.yml` push paths include the fixture. This is intentionally full-scope CI.
+- **Validation evidence: NOT YET RUN** on a Docker-capable execution runner; no reproducible PASS claim, exact-candidate workflow/run/job/SHA/result or fixture timing is available. Potential fixture/schema incompatibilities must be fixed before acceptance. A green CI verdict on the exact executable SHA is mandatory before LOCAL review.
+- No changes to legacy `master`, persistent production state, services, deployment, WAL/PITR, retention, or automation. No integration performed.
+
+**Exactly ONE next task:** Run/fix the disposable PostgreSQL backup/restore fixture and exact-SHA `v2 CI` to GREEN, document precise results, then request independent LOCAL EXECUTION AGENT acceptance. Do not integrate until accepted.
