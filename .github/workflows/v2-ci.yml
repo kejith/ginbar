@@ -13,6 +13,7 @@ on:
       - 'systemd/v2/**'
       - 'scripts/v2-ci.sh'
       - 'scripts/v2-nginx-test.sh'
+      - 'scripts/v2-pg-backup-test.sh'
       - 'scripts/v2-service-limits-test.sh'
       - 'scripts/v2-worker-build.sh'
       - 'src/backend/v2/**'
