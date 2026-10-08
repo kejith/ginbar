@@ -50,7 +50,7 @@ docker run --rm --entrypoint systemd-analyze "$image" verify \
 
 # Docker is on the disposable CI VM. The private cgroup namespace keeps the
 # fixture services/cgroup mutations out of the host systemd unit namespace.
-docker run -d --rm --name "$container" --privileged --cgroupns=private \
+docker run -d --name "$container" --privileged --cgroupns=private \
   --tmpfs /run --tmpfs /run/lock \
   -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
   "$image" >/dev/null
@@ -61,7 +61,7 @@ for i in $(seq 1 40); do
   if [[ "$state" == running || "$state" == degraded ]]; then ready=1; break; fi
   sleep 1
 done
-[[ "$ready" -eq 1 ]] || { docker logs "$container" >&2; echo "systemd did not boot" >&2; exit 1; }
+[[ "$ready" -eq 1 ]] || { docker inspect --format 'status={{.State.Status}} exit={{.State.ExitCode}} error={{.State.Error}}' "$container" >&2 || true; docker logs "$container" >&2 || true; echo "systemd did not boot" >&2; exit 1; }
 
 docker exec "$container" systemctl start ginbar-api-v2.service ginbar-worker-v2.service
 
