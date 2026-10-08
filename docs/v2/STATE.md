@@ -2080,3 +2080,66 @@ concrete failure, then request fresh independent LOCAL acceptance in
 a user-authorized **non-production isolated environment**. Never
 silently reuse unauthorized target-host evidence, and do not integrate
 or start another M7 slice before independent acceptance.
+
+### PostgreSQL readiness-race repair: exact-candidate CI GREEN — 2026-10-08
+
+**Verified corrected executable/configuration SHA:** `5712176ceb2e6e886578bad71d1515ee6d0cec1a`.
+Prior `d25046f78e4343d7612f04fbff9f58dc9cb81f74` is superseded;
+its independent target evidence identified the missing-database startup
+race. The feature branch had a later documentation-only HEAD
+`137a1574c4e91769ee08e8ddcd370def756dff45` before this
+STATE update; live `v2` remains
+`36e27ed4f1671f7a50a3e99833ffb2fecb2c6e7f`.
+
+**EXACT_CANDIDATE_CI_GREEN verified from live GitHub Actions run/job/step
+API plus downloaded raw job log:**
+- Workflow `v2 CI` ID `374214168`
+- Run **`37848213706`**, correctness job **`113554321060`**
+- Branch/event: `astra/m7-performance-regression-gate` / `push`
+- Exact head SHA: `5712176ceb2e6e886578bad71d1515ee6d0cec1a`
+- Completed/**success** (last updated `2026-10-08T21:44:18Z`),
+  attempt 1, **8/8 successful steps**, including full `scope=all`
+  correctness, target Rust worker release build, tracked checkout unchanged.
+- Raw log markers:
+  `v2-perf-regression: PASS shape=bounded/indexed/no-spill http=all-200 budget=not-yet-calibrated`,
+  `v2-perf-regression: exit=0 sha=5712176ceb2e6e886578bad71d1515ee6d0cec1a ... containers_removed=yes`,
+  `v2-ci: PASS sha=5712176ceb2e6e886578bad71d1515ee6d0cec1a scope=all`.
+- CI observation p95/p99/RPS, synthetic 100,000-post DB, 2,000
+  requests per cell: feed-first c1 **1.276/1.692/1075.3**;
+  feed-cursor c1 **1.142/1.293/1097.5**;
+  search-tag-score c1 **2.949/3.432/507.4**;
+  around c1 **2.328/2.675/537.0**;
+  around c8 **7.237/9.079/1845.1**.
+  These are CI environment measurements **only**.
+- No production data/host, integration ref, legacy `master`,
+  deployment or persistent service was changed by CODING.
+
+**Decision:** corrected provisioning script is implemented and exact
+candidate CI GREEN. **Independent acceptance is not yet satisfied
+for SHA `5712176...`**: previous three target measurements were
+from prior SHA `d25046f...`, contained a real race, and were gathered
+on a production-adjacent host without fresh explicit user authorization.
+They remain useful diagnostics but are not retroactively accepted.
+No environment-independent p95/p99/RPS budget has been calibrated or enabled.
+The current acceptance scope is a deterministic structural/API
+regression fixture plus reproducible measurements; no blanket latency
+SLO is claimed.
+
+**Gate:** `IMPLEMENTED` → `LOCAL_FIXTURE_PASS` (isolated CI fixture)
+→ **`EXACT_CANDIDATE_CI_GREEN`**. `INDEPENDENT_EVIDENCE_PASS`,
+`CODING_ACCEPTED`, `INTEGRATED`, `POST_INTEGRATION_CI_GREEN`
+and `CLOSED` remain outstanding; overall M7 open.
+
+**Exactly ONE next task:** Independent LOCAL acceptance for
+`5712176ceb2e6e886578bad71d1515ee6d0cec1a`, in a
+user-authorized isolated **non-production** environment and real
+detached/clean worktree, no copied sources or production data.
+Perform three fresh full fixture runs with
+`GINBAR_PERF_EXPECT_SHA` set, preserve raw stdout/stderr, all five
+HTTP JSONs and SQL plans per run, negative SHA checks, full-source
+provenance and before/during/after resource snapshots; verify that the
+PostgreSQL startup race is absent. Return one raw-evidence ZIP,
+manifest, SHA-256, versions and cleanup proof under
+`.local-agent-results/`. Local cannot write tracked files, deploy,
+merge or authorize target-host access. CODING reviews evidence before
+any integration or subsequent M7 slice.
