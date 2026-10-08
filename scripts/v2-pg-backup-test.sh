@@ -92,8 +92,12 @@ docker exec -i "$container" pg_restore -U ginbar_fixture -d ginbar_restore --exi
 snapshot ginbar_restore "$tmp/after"
 cmp "$tmp/before" "$tmp/after"
 
-dump --schema-only -d ginbar_source > "$tmp/schema-before"
-dump --schema-only -d ginbar_restore > "$tmp/schema-after"
+# Ignore database-specific comment headings and pg_dump's per-invocation
+# random psql restrict tokens; compare the actual restored schema DDL.
+dump --schema-only --no-owner --no-privileges -d ginbar_source \
+  | sed -E '/^-- Database:/d; /^\\\\(un)?restrict /d' > "$tmp/schema-before"
+dump --schema-only --no-owner --no-privileges -d ginbar_restore \
+  | sed -E '/^-- Database:/d; /^\\\\(un)?restrict /d' > "$tmp/schema-after"
 cmp "$tmp/schema-before" "$tmp/schema-after"
 
 # Exercise restored foreign keys and identity sequences without modifying source.
