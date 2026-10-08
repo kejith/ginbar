@@ -81,10 +81,8 @@ fn ready_once(database_url: &str) -> Result<(), String> {
 
 fn check_database_readiness(database_url: &str) -> Result<(), String> {
     readiness_result(|| {
-        let factory = ProductionConnectionFactory::new_with_timeout(
-            database_url,
-            READINESS_DB_TIMEOUT,
-        )?;
+        let factory =
+            ProductionConnectionFactory::new_with_timeout(database_url, READINESS_DB_TIMEOUT)?;
         let mut client = factory.connect()?;
         client
             .simple_query("SELECT 1")
@@ -440,7 +438,10 @@ mod tests {
                 Err("database unavailable".to_owned())
             }
         });
-        assert_eq!(first.expect_err("dependency should be unavailable"), "worker not ready");
+        assert_eq!(
+            first.expect_err("dependency should be unavailable"),
+            "worker not ready"
+        );
 
         dependency_ready = true;
         let second = readiness_result(|| {
