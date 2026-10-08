@@ -24,7 +24,7 @@ func (s *Server) getUserRoles(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) grantModerator(w http.ResponseWriter, r *http.Request) {
-	if !sameOrigin(r) {
+	if !s.sameOrigin(r) {
 		writeError(w, http.StatusForbidden, "origin_not_allowed", "request origin is not allowed")
 		return
 	}
@@ -43,7 +43,7 @@ func (s *Server) grantModerator(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) revokeModerator(w http.ResponseWriter, r *http.Request) {
-	if !sameOrigin(r) {
+	if !s.sameOrigin(r) {
 		writeError(w, http.StatusForbidden, "origin_not_allowed", "request origin is not allowed")
 		return
 	}
@@ -62,7 +62,7 @@ func (s *Server) revokeModerator(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) grantAdmin(w http.ResponseWriter, r *http.Request) {
-	if !sameOrigin(r) {
+	if !s.sameOrigin(r) {
 		writeError(w, http.StatusForbidden, "origin_not_allowed", "request origin is not allowed")
 		return
 	}
@@ -81,7 +81,7 @@ func (s *Server) grantAdmin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) revokeAdmin(w http.ResponseWriter, r *http.Request) {
-	if !sameOrigin(r) {
+	if !s.sameOrigin(r) {
 		writeError(w, http.StatusForbidden, "origin_not_allowed", "request origin is not allowed")
 		return
 	}

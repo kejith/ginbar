@@ -14,7 +14,7 @@ type commentVoteRequest struct {
 }
 
 func (s *Server) setCommentVote(w http.ResponseWriter, r *http.Request) {
-	if !sameOrigin(r) {
+	if !s.sameOrigin(r) {
 		writeError(w, http.StatusForbidden, "origin_not_allowed", "request origin is not allowed")
 		return
 	}
