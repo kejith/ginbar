@@ -44,7 +44,7 @@ resolve_auto_scope() {
       src/frontend/*)
         frontend=1
         ;;
-      nginx/v2/*|scripts/v2-nginx-test.sh)
+      nginx/v2/*|systemd/v2/*|scripts/v2-nginx-test.sh|scripts/v2-service-limits-test.sh)
         nginx=1
         ;;
       go.work|scripts/v2-ci.sh|.github/workflows/v2-ci.yml|.gitignore)
@@ -334,6 +334,8 @@ fi
 if ((run_nginx)); then
   printf '\n== nginx: v2 production serving boundary ==\n'
   bash scripts/v2-nginx-test.sh
+  printf '\n== services: v2 systemd resource-limits boundary ==\n'
+  bash scripts/v2-service-limits-test.sh
 fi
 
 printf '\nv2-ci: PASS sha=%s scope=%s\n' "$(git rev-parse HEAD)" "$requested_scope"

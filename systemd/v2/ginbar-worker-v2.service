@@ -1,0 +1,26 @@
+[Unit]
+Description=Ginbar v2 Rust media worker
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=5min
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=ginbar
+Group=ginbar
+EnvironmentFile=/etc/ginbar/v2/worker.env
+Environment=GINBAR_MEDIA_ROOT=/srv/ginbar/media
+ExecStart=/usr/local/bin/ginbar-worker-v2 run
+Restart=on-failure
+RestartSec=10s
+TimeoutStopSec=90s
+KillMode=control-group
+OOMPolicy=kill
+LimitNOFILE=1024
+TasksMax=128
+MemoryAccounting=yes
+MemoryMax=4G
+
+[Install]
+WantedBy=multi-user.target
