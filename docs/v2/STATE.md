@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-08
-Phase: **M7 production hardening in progress; nginx authentication-ingress limiter accepted, integrated, and post-integration CI verified green**
+Phase: **M7 production hardening in progress; API/worker health-readiness boundary accepted and integrated, post-integration CI pending**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -1640,9 +1640,7 @@ No known resource-limit unit, applied-cgroup, real-binary startup, graceful shut
 
 ## Single best next task
 
-Verify the **first narrowly scoped PostgreSQL backup/restore boundary** for v2 on disposable data only: prove a full logical backup of a seeded disposable database restores into an isolated target with byte-identical authoritative application state (row counts plus SHA-256 over ordered dumps of the authoritative tables, or an equivalent exact comparison), then record the exact commands, tool versions, timings and restore verification as the first backup/recovery procedure. Never touch production data, the shared development database, or live services. Add no backup automation, scheduling, WAL archiving, PITR, off-host storage, or retention policy in this slice; establish only the verified restore primitive and the recorded procedure. Start on a feature branch from freshly verified live `v2` (accepted executable `1e60983597f1651a738f9c095e915c7facf6e305` beneath documentation-only STATE). Scope is the backup/restore primitive only: no DB tuning, backend per-user limiter, Redis, WAF, observability, or deployment automation. Require applicable exact-SHA green CI before independent acceptance/integration and update STATE with evidence, unresolved issues, and exactly ONE next task.
-
-
+Verify the **post-integration** `v2 CI` branch-push run `37828358188` for exact executable/configuration SHA `5da0bbad5c21f2ee289265c128f84a1cf7a597c9`, including correctness job SHA, conclusion and all required steps. Mark this health/readiness boundary CLOSED only after independent exact integration-push GREEN is verified. Do not start another M7 slice before this gate.
 
 ## M7 native nginx authentication-ingress limiting — accepted and integrated
 
@@ -1722,3 +1720,20 @@ Verify the **first narrowly scoped PostgreSQL backup/restore boundary** for v2 o
 - All mandatory gates are now complete: IMPLEMENTED → diagnostic fixture PASS → EXACT_CANDIDATE_CI_GREEN → INDEPENDENT_EVIDENCE_PASS → CODING_ACCEPTED → INTEGRATED → POST_INTEGRATION_CI_GREEN → **CLOSED**. No known backup/restore primitive correctness or CI blocker remains. This establishes a disposable logical-backup/restore verification procedure, not scheduled/off-host backup durability or PITR. M7 remains open.
 
 **Exactly ONE next task:** Implement a narrowly scoped v2 API/worker operational health and readiness observability boundary, starting from freshly verified live `v2`: establish low-cost health/readiness signals and deterministic isolated tests without new deployment automation, production host changes, metrics storage, or alerting infrastructure. Obtain exact-SHA green CI and independent evidence before integration.
+
+
+## M7 API/worker health-readiness observability — accepted and integrated; post-integration CI pending
+
+**Decision 2026-10-08: ACCEPT independent evidence and integrate exact executable. Do not mark CLOSED until verified post-integration push CI GREEN.**
+
+- Verified integration base before fast-forward: `2550fac27c9d7fd1dbf7c96c85f5daaf7d68dce9` (documentation-only), prior accepted executable `6eb1721ba280278f022bf11c13c1fd698b565b3b`.
+- Feature branch `astra/m7-health-readiness`; exact accepted executable/configuration SHA `5da0bbad5c21f2ee289265c128f84a1cf7a597c9`. Feature branch STATE-only HEAD `f70fa41fa25f7913244fcd8eb9f300281c78cf5f` explicitly excluded from integration.
+- API `GET /healthz` remains liveness only (200 `{"status":"ok"}`), independent of PostgreSQL. Added `GET /readyz` (bounded one-second PostgreSQL ping, one in-flight DB probe per API process, 200 `{"status":"ready"}` or generic 503 `{"status":"not_ready"}`, no-store). Worker adds a separate `ready` one-shot bounded PostgreSQL `SELECT 1` command with generic failure, no claims or media-root requirement. Systemd stays the worker process-liveness authority.
+- Exact-candidate `v2 CI`: workflow ID `374214168`, run `37826767139`, correctness job `113481508806`, exact candidate SHA, feature-branch push, completed/success, full scope=all and all eight recorded job steps successful (including worker release build and tracked-clean check).
+- Independently uploaded evidence ZIP `m7-health-readiness-20261008T185353Z.zip`, verified integrity and SHA-256 of exact uploaded bytes `e3fd990358f635fb8bb85b1737dbc79b04f6e29970593ec3dd7ac0e8c6ebbaae`. Inspected `findings.md`, raw API HTTP transcripts, concurrency summary, CI JSON, build logs, worker stdout/stderr/exit timing, durable before/after state, provenance and cleanup. Exact detached-clean candidate SHA. Evidence PASS: API health stayed 200 while readiness changed 200→503→200 on disposable DB loss/recovery in same API process; readiness generic/no leak; 50/50 liveness and 42/50 readiness 200 with 8/50 fail-closed 503 under concurrent pressure, observed peak DB connection 1 and FDs 8→8, threads 10→10; worker healthy/unavailable/recovered `ready` exited 0/1/0 with generic failure and no mutation, exact same binary on recovery; disposable database/worktree/media/services cleaned.
+- Limitations: local Docker unavailable, authorized native disposable PostgreSQL fallback used; peak DB connections sampled at 5 ms intervals and may under-sample. Combined evidence and CI sufficient for this narrow boundary, not a general performance/availability assurance.
+- **CODING_ACCEPTED → INTEGRATED:** non-force expected-SHA fast-forward moved `v2` from `2550fac27c9d7fd1dbf7c96c85f5daaf7d68dce9` to `5da0bbad5c21f2ee289265c128f84a1cf7a597c9`, and re-read remote `v2` confirms exact SHA, zero divergence.
+- **Post-integration CI:** workflow `v2 CI` ID `374214168`, run `37828358188`, branch `v2`, event `push`, exact head SHA `5da0bbad5c21f2ee289265c128f84a1cf7a597c9`, observed `queued`; correctness job/result not yet verified. The feature-branch candidate run cannot substitute for it.
+- No deployment, persistent production change, live systemd/nginx change, backup/PITR or `master` modification.
+
+**Exactly ONE next task:** Verify `v2` push run `37828358188` and its correctness job to GREEN for exact executable SHA, then update STATE and mark CLOSED only if successful.
