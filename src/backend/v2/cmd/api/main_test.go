@@ -163,7 +163,7 @@ func TestLoadRuntimeConfigProxyTrustRequiresExplicitOptIn(t *testing.T) {
 	}
 	for _, tt := range []struct {
 		value string
-		want bool
+		want  bool
 		valid bool
 	}{
 		{"true", true, true},
