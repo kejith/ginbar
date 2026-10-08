@@ -53,7 +53,7 @@ resolve_auto_scope() {
     esac
   done < <(git diff --name-only "$base" HEAD)
 
-  if ((shared)); then
+  if ((shared || (nginx && (worker || backend || frontend)))); then
     printf 'all\n'
   elif ((worker && backend && frontend)); then
     printf 'all\n'
