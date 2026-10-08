@@ -1,7 +1,7 @@
 # Ginbar v2 state / handoff
 
 Last updated: 2026-10-08
-Phase: **M7 production hardening in progress; bounded password-KDF admission and first v2 production nginx serving boundary accepted and integrated**
+Phase: **M7 production hardening in progress; first native process/file limits candidate pending CI/review; nginx/KDF accepted and integrated**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
 
@@ -36,6 +36,7 @@ Read this file first. Use [`PLAN.md`](PLAN.md) for stable milestone/product rule
   - first authenticated inbox/direct-thread frontend slice: **accepted, browser-gated and integrated; exact-candidate/post-integration CI green**.
   - consolidated M6 private-messages milestone gate: **accepted; M6 closed**.
 - M7 production hardening: **in progress**.
+  - first native process/file resource-limits candidate: **implemented on branch; exact-candidate CI and independent acceptance pending; not integrated**.
   - bounded password-KDF admission control: **accepted, target-host profiled and integrated; exact-candidate/post-integration CI green**.
   - first v2 production nginx serving boundary: **accepted and integrated; exact-candidate/post-integration CI green; live target-host nginx unchanged**.
 
@@ -230,6 +231,28 @@ Post-integration `v2 CI`:
 - tracked checkout remained unchanged and all workflow steps completed successfully.
 
 Decision: **accept and close the first v2 production nginx serving-boundary slice**. There is no known correctness, security-boundary, range, caching, upload-streaming, same-origin proxy or CI blocker from this slice. M7 production hardening remains in progress.
+
+## M7 production hardening — first native process/file resource boundary awaiting acceptance
+
+Verified live integration base: `544a4412141eacf6148daf4c74a1553fb9ab6b22` (documentation/state-only).
+Accepted integrated executable/configuration beneath it: `20be4765e935e715f2cd8862da0a6382e1322281`.
+Implementation branch: `astra/m7-service-limits`.
+Exact executable/configuration candidate: `47f1a1b883898a33760a29117035fc7cd1897cd4`.
+No integration or production deployment has been performed.
+
+The existing `wallium.service` and scripts belong to the legacy Docker Compose deployment; v2 has native Go and Rust executables and a separate accepted nginx configuration, but no installed v2 service manager configuration. The smallest fitting initial serving model is therefore two standalone native systemd service units under `systemd/v2/`, without replacing the legacy service or adding installer/update automation.
+
+- API: `/usr/local/bin/ginbar-api-v2`, `LimitNOFILE=4096`, `TasksMax=256`, `MemoryMax=1G`.
+- Worker: `/usr/local/bin/ginbar-worker-v2 run`, `LimitNOFILE=1024`, `TasksMax=128`, `MemoryMax=4G`; tasks and memory account for child FFmpeg/FFprobe processes.
+- Both: `User/Group=ginbar`, dedicated environment files under `/etc/ginbar/v2/`, group-wide kill, `OOMPolicy=kill`, `Restart=on-failure`, `RestartSec=10s`, and `StartLimitBurst=5` per five minutes. API shutdown timeout is 30 seconds, worker timeout 90 seconds.
+- Existing media path shared with nginx: `/srv/ginbar/media`. No production host provisioning, service install/reload, or credentials are committed.
+- `scripts/v2-service-limits-test.sh` builds an ephemeral Docker systemd PID 1 fixture on an isolated CI VM, verifies both units with `systemd-analyze verify`, observes applied process FD limits and actual cgroup `memory.max`/`pids.max`, starts both service paths using stand-in executables, and checks restart after forced API termination.
+- The CI workflow now watches `systemd/v2/**` and the fixture; scoped CI treats such changes as `scope=all`. The application correctness suite and target-worker build remain separate checks.
+- `systemd/v2/README.md` documents exact deployment prerequisites, test isolation and limitations.
+
+CI status at this writing: **pending** for exact candidate `47f1a1b883898a33760a29117035fc7cd1897cd4`, workflow run `37732772249`, job `113165689879`. Previous superseded candidate runs were cancelled; neither success nor failure was inferred from them. Do not accept, integrate or hand this candidate to the local agent without completed green exact-candidate CI.
+
+Outstanding evidence: tests must finish green; effective service startup/normal operation with **real** Go/Rust binaries and disposable PostgreSQL/media workloads remains untested under systemd. The 1 GiB/4 GiB caps are provisional containment, not measured peak-size recommendations. An independent execution gate on an isolated production-class host is required before acceptance. No target-host live deployment changes are authorized.
 
 ## M6 private messages — first backend foundation accepted and integrated
 
@@ -1580,4 +1603,4 @@ No unresolved correctness, security-boundary, cache-policy, range, source-exposu
 
 ## Single best next task
 
-Implement the **first v2 production process/file resource-limits boundary** for the Go API and Rust media worker. Start from the accepted nginx-integrated executable `20be4765e935e715f2cd8862da0a6382e1322281`; inspect the actual deployment/runtime model before choosing the mechanism, then add the smallest explicit limits needed for file descriptors, process/task growth and service memory/restart containment with reproducible isolated validation. Do not modify a live host, do not tune PostgreSQL, and do not add trusted-proxy/client-IP policy, abuse/rate limits, WAF rules, backups or broader observability in this slice.
+Resolve the **exact-candidate CI gate** for native resource-limits candidate `47f1a1b883898a33760a29117035fc7cd1897cd4` (run `37732772249`, job `113165689879`). Inspect failures and fix only the relevant implementation/fixture defects if needed, with a new exact-candidate green run before any independent local-agent execution gate. Do not integrate or deploy yet.
