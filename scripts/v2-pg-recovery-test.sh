@@ -33,8 +33,6 @@ pg() { docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -U ginbar_fixture 
 dump() { docker exec "$container" pg_dump -U ginbar_fixture "$@"; }
 
 pg -d postgres -c 'CREATE DATABASE ginbar_source'
-pg -d postgres -c 'CREATE DATABASE ginbar_restore'
-
 # Run every checked-in migration, sorted by name, against the disposable source.
 mapfile -t migrations < <(find src/backend/v2/internal/schema/migrations -maxdepth 1 -type f -name '*.sql' | LC_ALL=C sort)
 (("${#migrations[@]}" > 0)) || { echo 'v2-pg-recovery-test: no migrations' >&2; exit 1; }
