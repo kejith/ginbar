@@ -1,6 +1,6 @@
 # Ginbar v2 state / handoff
 
-Last updated: 2026-10-08
+Last updated: 2026-10-09
 Phase: **M7 production hardening in progress; deployment/update-and-rollback dry-run CLOSED (accepted, integrated, post-integration CI green)**
 Integration branch: `v2`
 Legacy branch: `master` (read-only for rewrite work)
@@ -2422,3 +2422,24 @@ implementation slice before that gate is resolved.
 **Operator instruction 2026-10-09:** proceed using only these two windows; do not require, schedule or execute a third window or repeat benchmarks. Close *this measurement campaign* with the above documented limitations, not with invented green numeric gates. Keep `GINBAR_PERF_BUDGET_FILE` unset and do not add `maxP95Ms`, `maxP99Ms` or `minRequestsPerSecond` thresholds, revise CI, alter application/config/schema, or infer a production speedup. No production host changes or further test execution by CODING.
 
 **Exactly ONE next task:** CODING conducts a planning-only review of the remaining M7 PostgreSQL backup/restore and recovery boundary, with fresh STATE/live-ref verification and a single narrowly scoped proposed implementation gate. Do not conflate this deferred numerical-calibration campaign with the closed structural correctness gate.
+
+
+## M7 PostgreSQL operational recovery boundary — planning review (2026-10-09)
+
+**Status: PLANNING COMPLETE; implementation not started.** Fresh GitHub resolution verified live `v2` at `68ae5849cbdcccb0385d7e2c29ce9c4054838976`. The accepted executable/configuration remains `5712176ceb2e6e886578bad71d1515ee6d0cec1a`; comparison from that executable to live `v2` is five commits ahead / zero behind and changes only `docs/v2/STATE.md`. This section is documentation-only and creates no executable candidate.
+
+**Applicable accepted executable CI rechecked:** `v2 CI` run `37855607480`, correctness job `113578910879`, completed/SUCCESS. Raw job logs show checkout and gate SHA `5712176ceb2e6e886578bad71d1515ee6d0cec1a`, `v2-pg-backup-test: PASS`, and `v2-ci: PASS sha=5712176ceb2e6e886578bad71d1515ee6d0cec1a scope=all`. No CI is claimed or required for this planning-only STATE change.
+
+**Existing closed primitive retained:** `scripts/v2-pg-backup-test.sh` already uses PostgreSQL custom format (`pg_dump -Fc`), applies every checked-in migration in deterministic filename order, seeds FK-linked rows and non-default identities, compares deterministic public-table and sequence snapshots, compares native archive TOC schema inventories, restores strictly with `pg_restore --exit-on-error --no-owner --no-privileges`, and transactionally checks restored identity/FK usability. That logical backup/restore correctness gate remains CLOSED and must not be reopened or replaced by a weaker parallel fixture.
+
+**Missing operational boundary identified:** there is no operator-facing artifact command that securely creates, validates and atomically publishes a logical backup plus credential-free integrity/version metadata; no tracked recovery drill exercises that exact operator path through source loss into a fresh database; and current CI does not prove destination collision, archive corruption, failed/interrupted creation cleanup, credential non-disclosure, or completed-looking-artifact fail-closed behavior. The deployment rollback fixture remains mock orchestration only and does not establish database migration rollback.
+
+**Narrow implementation gate selected:** add an operator-invoked native PostgreSQL logical-backup command (preferred `scripts/v2-pg-backup.sh`) and a disposable PostgreSQL 17.11 cold-recovery fixture (preferred `scripts/v2-pg-recovery-test.sh`) that calls the real operator command. The backup command must use standard libpq inputs without logging credentials, `umask 077`, same-filesystem temporary output, `pg_dump -Fc`, native `pg_restore --list` validation, SHA-256/size/UTC/tool+server version metadata without secrets, atomic final publication only after validation, collision refusal, and signal/failure cleanup with no completed-looking output. The recovery fixture must reuse/factor the existing snapshot/sequence/TOC/FK+identity checks, prove source non-mutation, simulate source loss/unavailability, restore into a new empty database using strict `pg_restore` flags, and cover corrupt/truncated restore failure, collision refusal, interrupted/failed creation cleanup, credential non-disclosure, permissions/metadata integrity, and complete disposable cleanup.
+
+**CI/documentation scope:** wire the new recovery fixture into full-scope `scripts/v2-ci.sh` and `.github/workflows/v2-ci.yml` only as required, and document the operator procedure and limitations under v2 operations/recovery documentation. Keep the existing `v2-pg-backup-test.sh` unless factoring shared helpers is materially cleaner; do not weaken its assertions.
+
+**Explicit exclusions/risks:** no scheduler/timer, retention deletion, off-host storage/upload, object storage, encryption/key management, WAL/PITR, replication, production-data or production-host execution, RPO/RTO guarantee, schema/index/database change, migration rollback machinery, deployment automation, numerical performance calibration/budgets, or legacy `master` change. This future gate will prove logical artifact creation and cold restore mechanics only. Effective RPO remains bounded by the age of the latest independently durable backup; a local dump does not protect against host loss; large-database duration/disk/IO impact remains unestablished; deployment rollback across migrations remains separate; privileged database credential handling requires explicit review.
+
+**Execution capability note:** this CODING environment has GitHub repository write and CI-read capability but no local repository checkout, Docker, `psql`, or `pg_restore`. Implementation can be authored remotely, but fixture execution must occur on a capable disposable executor; lack of local execution must not be represented as a pass.
+
+**Exactly ONE next task:** CODING implements the bounded PostgreSQL operational logical-backup + disposable cold-recovery gate above on a new isolated branch from the then-live `v2` (suggested `astra/m7-pg-operational-recovery`), obtains tracked fixture evidence in a capable disposable environment and exact-candidate `v2 CI` GREEN, updates STATE with exact candidate/workflow/run/job/SHA/result evidence, and only then issues a separate LOCAL EXECUTION AGENT INDEPENDENT ACCEPTANCE handoff. Do not integrate before that independent evidence is reviewed and accepted.
