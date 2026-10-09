@@ -121,7 +121,6 @@ schema_inventory() {
     sed -nE '/^[[:digit:]]+; /{s/^[[:digit:]]+; [[:digit:]]+ [[:digit:]]+ / /;p;}' |
     LC_ALL=C sort > "$out"
 }
-schema_inventory ginbar_source "$tmp/schema-before"
 schema_inventory ginbar_restore "$tmp/schema-after"
 test -s "$tmp/schema-before"
 cmp "$tmp/schema-before" "$tmp/schema-after"
@@ -234,6 +233,8 @@ fi
 
 # Simulate complete loss of the source database, then cold restore from the
 # independently published logical artifact into a new empty database.
+# Preserve the source's schema TOC before simulating its destruction.
+schema_inventory ginbar_source "$tmp/schema-before"
 pg -d postgres -c 'DROP DATABASE ginbar_source WITH (FORCE)'
 pg -d postgres -c 'CREATE DATABASE ginbar_restore'
 docker exec -i "$container" pg_restore -U ginbar_fixture -d ginbar_restore \
