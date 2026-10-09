@@ -14,6 +14,8 @@ on:
       - 'scripts/v2-ci.sh'
       - 'scripts/v2-nginx-test.sh'
       - 'scripts/v2-pg-backup-test.sh'
+      - 'scripts/v2-pg-backup.sh'
+      - 'scripts/v2-pg-recovery-test.sh'
       - 'scripts/v2-service-limits-test.sh'
       - 'scripts/v2-deploy-dry-run-test.sh'
       - 'scripts/v2-perf-regression-test.sh'
