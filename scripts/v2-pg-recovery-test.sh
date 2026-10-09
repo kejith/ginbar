@@ -86,7 +86,7 @@ start="$(date +%s)"
 snapshot ginbar_source "$tmp/before"
 
 backup_client() {
-  docker run --rm --network "container:$container" \
+  docker run --rm --user "$(id -u):$(id -g)" --network "container:$container" \
     -v "$tmp:/work" -v "$ROOT/scripts/v2-pg-backup.sh:/backup.sh:ro" \
     -e PGHOST=127.0.0.1 -e PGPORT=5432 \
     -e PGUSER=ginbar_fixture -e PGDATABASE=ginbar_source \
@@ -98,6 +98,9 @@ test -s "$tmp/artifact/backup.dump"
 test "$(stat -c %a "$tmp/artifact")" = 700
 test "$(stat -c %a "$tmp/artifact/backup.dump")" = 600
 test "$(stat -c %a "$tmp/artifact/metadata.txt")" = 600
+# Bind-mounted artifacts must be owned by the invoking runner for cleanup.
+test "$(stat -c %u "$tmp/artifact")" = "$(id -u)"
+test "$(stat -c %g "$tmp/artifact")" = "$(id -g)"
 grep -Fx 'format=postgresql-custom' "$tmp/artifact/metadata.txt"
 grep -Fx "sha256=$(sha256sum "$tmp/artifact/backup.dump" | cut -d ' ' -f 1)" "$tmp/artifact/metadata.txt"
 grep -Fx "bytes=$(wc -c < "$tmp/artifact/backup.dump")" "$tmp/artifact/metadata.txt"
@@ -124,7 +127,7 @@ exit 37
 WRAPPER
 chmod 700 "$tmp/wrappers/pg_dump"
 injected_backup() {
-  docker run --rm --network "container:$container" \
+  docker run --rm --user "$(id -u):$(id -g)" --network "container:$container" \
     -v "$tmp:/work" -v "$ROOT/scripts/v2-pg-backup.sh:/backup.sh:ro" \
     -e PGHOST=127.0.0.1 -e PGUSER=ginbar_fixture \
     -e PGDATABASE=ginbar_source -e PGPASSWORD=disposable_only \
