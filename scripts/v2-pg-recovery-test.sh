@@ -219,6 +219,26 @@ if docker run --rm --network "container:$container" \
 fi
 test ! -e "$tmp/failed"
 ! find "$tmp" -maxdepth 1 -name '.v2-pg-backup.partial.*' | grep -q .
+
+# Simulate a signal during dump and require trap cleanup.
+cat > "$tmp/wrappers/pg_dump" <<'WRAPPER'
+#!/bin/sh
+kill -TERM "$PPID"
+sleep 1
+exit 143
+WRAPPER
+chmod 700 "$tmp/wrappers/pg_dump"
+if docker run --rm --network "container:$container" \
+    -v "$tmp:/work" -v "$ROOT/scripts/v2-pg-backup.sh:/backup.sh:ro" \
+    -e PGHOST=127.0.0.1 -e PGUSER=ginbar_fixture \
+    -e PGDATABASE=ginbar_source -e PGPASSWORD=disposable_only \
+    -e PATH=/work/wrappers:/usr/local/bin:/usr/bin:/bin \
+    "$image" bash /backup.sh /work/interrupted > "$tmp/interrupted.log" 2>&1; then
+  echo 'v2-pg-recovery-test: interruption unexpectedly succeeded' >&2; exit 1
+fi
+test ! -e "$tmp/interrupted"
+! find "$tmp" -maxdepth 1 -name '.v2-pg-backup.partial.*' | grep -q .
+! grep -Fq 'disposable_only' "$tmp/interrupted.log"
 ! grep -Fq 'disposable_only' "$tmp/failed.log"
 ! grep -Fq 'disposable_only' "$tmp/collision.log"
 
