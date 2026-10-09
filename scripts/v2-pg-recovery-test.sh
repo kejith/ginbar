@@ -33,7 +33,7 @@ pg() { docker exec -i "$container" psql -X -v ON_ERROR_STOP=1 -U ginbar_fixture 
 dump() { docker exec "$container" pg_dump -U ginbar_fixture "$@"; }
 
 pg -d postgres -c 'CREATE DATABASE ginbar_source'
-
+pg -d postgres -c 'CREATE DATABASE ginbar_restore'
 
 # Run every checked-in migration, sorted by name, against the disposable source.
 mapfile -t migrations < <(find src/backend/v2/internal/schema/migrations -maxdepth 1 -type f -name '*.sql' | LC_ALL=C sort)
@@ -87,8 +87,6 @@ SQL
 start="$(date +%s)"
 snapshot ginbar_source "$tmp/before"
 
-# Use the real operator command in a PostgreSQL client container sharing the
-# disposable server's network namespace. The host bind mount is disposable.
 backup_client() {
   docker run --rm --network "container:$container" \
     -v "$tmp:/work" -v "$ROOT/scripts/v2-pg-backup.sh:/backup.sh:ro" \
@@ -99,21 +97,89 @@ backup_client() {
 }
 backup_client /work/artifact > "$tmp/backup.log" 2>&1
 test -s "$tmp/artifact/backup.dump"
-test -s "$tmp/artifact/metadata.txt"
 test "$(stat -c %a "$tmp/artifact")" = 700
 test "$(stat -c %a "$tmp/artifact/backup.dump")" = 600
 test "$(stat -c %a "$tmp/artifact/metadata.txt")" = 600
 grep -Fx 'format=postgresql-custom' "$tmp/artifact/metadata.txt"
 grep -Fx "sha256=$(sha256sum "$tmp/artifact/backup.dump" | cut -d ' ' -f 1)" "$tmp/artifact/metadata.txt"
 grep -Fx "bytes=$(wc -c < "$tmp/artifact/backup.dump")" "$tmp/artifact/metadata.txt"
-grep -Eq '^created_utc=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z
+grep -Eq '^created_utc=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$' "$tmp/artifact/metadata.txt"
+grep -Fx 'server_version=17.11' "$tmp/artifact/metadata.txt"
+grep -Fq 'pg_dump_version=pg_dump (PostgreSQL) 17.11' "$tmp/artifact/metadata.txt"
+grep -Fq 'pg_restore_version=pg_restore (PostgreSQL) 17.11' "$tmp/artifact/metadata.txt"
+docker exec -i "$container" pg_restore --list < "$tmp/artifact/backup.dump" > "$tmp/archive.toc"
+test -s "$tmp/archive.toc"
+snapshot ginbar_source "$tmp/source-after"
+cmp "$tmp/before" "$tmp/source-after"
+
+sha256sum "$tmp/artifact/backup.dump" "$tmp/artifact/metadata.txt" > "$tmp/collision-before"
+if backup_client /work/artifact > "$tmp/collision.log" 2>&1; then
+  echo 'v2-pg-recovery-test: collision unexpectedly succeeded' >&2; exit 1
+fi
+sha256sum "$tmp/artifact/backup.dump" "$tmp/artifact/metadata.txt" > "$tmp/collision-after"
+cmp "$tmp/collision-before" "$tmp/collision-after"
+
+mkdir "$tmp/wrappers"
+cat > "$tmp/wrappers/pg_dump" <<'WRAPPER'
+#!/bin/sh
+exit 37
+WRAPPER
+chmod 700 "$tmp/wrappers/pg_dump"
+injected_backup() {
+  docker run --rm --network "container:$container" \
+    -v "$tmp:/work" -v "$ROOT/scripts/v2-pg-backup.sh:/backup.sh:ro" \
+    -e PGHOST=127.0.0.1 -e PGUSER=ginbar_fixture \
+    -e PGDATABASE=ginbar_source -e PGPASSWORD=disposable_only \
+    -e PATH=/work/wrappers:/usr/local/bin:/usr/bin:/bin \
+    "$image" bash /backup.sh "$@"
+}
+if injected_backup /work/failed > "$tmp/failed.log" 2>&1; then
+  echo 'v2-pg-recovery-test: injected failure unexpectedly succeeded' >&2; exit 1
+fi
+test ! -e "$tmp/failed"
+! find "$tmp" -maxdepth 1 -name '.v2-pg-backup.partial.*' | grep -q .
+
+cat > "$tmp/wrappers/pg_dump" <<'WRAPPER'
+#!/bin/sh
+kill -TERM "$PPID"
+sleep 1
+exit 143
+WRAPPER
+chmod 700 "$tmp/wrappers/pg_dump"
+if injected_backup /work/interrupted > "$tmp/interrupted.log" 2>&1; then
+  echo 'v2-pg-recovery-test: interruption unexpectedly succeeded' >&2; exit 1
+fi
+test ! -e "$tmp/interrupted"
+! find "$tmp" -maxdepth 1 -name '.v2-pg-backup.partial.*' | grep -q .
+for file in "$tmp/backup.log" "$tmp/collision.log" "$tmp/failed.log" \
+    "$tmp/interrupted.log" "$tmp/artifact/metadata.txt"; do
+  ! grep -Fq 'disposable_only' "$file"
+done
+
+head -c 128 "$tmp/artifact/backup.dump" > "$tmp/truncated.dump"
+pg -d postgres -c 'CREATE DATABASE ginbar_corrupt'
+if docker exec -i "$container" pg_restore -U ginbar_fixture \
+    -d ginbar_corrupt --exit-on-error --no-owner --no-privileges \
+    < "$tmp/truncated.dump" > "$tmp/corrupt.log" 2>&1; then
+  echo 'v2-pg-recovery-test: truncated restore unexpectedly succeeded' >&2; exit 1
+fi
+
+schema_inventory() {
+  local db="$1" out="$2"
+  dump -Fc --schema-only --no-owner --no-privileges -d "$db" > "$tmp/schema-$db.dump"
+  docker exec -i "$container" pg_restore --list < "$tmp/schema-$db.dump" |
+    sed -nE '/^[[:digit:]]+; /{s/^[[:digit:]]+; [[:digit:]]+ [[:digit:]]+ / /;p;}' |
+    LC_ALL=C sort > "$out"
+}
+
+schema_inventory ginbar_source "$tmp/schema-before"
+pg -d postgres -c 'DROP DATABASE ginbar_source WITH (FORCE)'
+pg -d postgres -c 'CREATE DATABASE ginbar_restore'
+docker exec -i "$container" pg_restore -U ginbar_fixture \
+  -d ginbar_restore --exit-on-error --no-owner --no-privileges \
+  < "$tmp/artifact/backup.dump"
 snapshot ginbar_restore "$tmp/after"
 cmp "$tmp/before" "$tmp/after"
-
-# Compare schema object inventories from PostgreSQL's native archive TOC.
-# Textual pg_dump DDL is not byte-stable across restore: PostgreSQL may
-# deparse a semantically identical CHECK expression with different parentheses.
-# Strict pg_restore already verifies each object could be reconstructed.
 schema_inventory ginbar_restore "$tmp/schema-after"
 test -s "$tmp/schema-before"
 cmp "$tmp/schema-before" "$tmp/schema-after"
@@ -134,168 +200,5 @@ SQL
 printf 'v2-pg-recovery-test: PASS tables=%s hash=%s dump_bytes=%s duration_s=%s\n' \
   "$(wc -l < "$tmp/before")" "$(sha256sum "$tmp/before" | cut -d ' ' -f 1)" \
   "$(wc -c < "$tmp/artifact/backup.dump")" "$(($(date +%s) - start))"
-docker exec "$container" pg_dump --version
-docker exec "$container" pg_restore --version
- "$tmp/artifact/metadata.txt"
-grep -Eq '^server_version=17\\.11
-snapshot ginbar_restore "$tmp/after"
-cmp "$tmp/before" "$tmp/after"
-
-# Compare schema object inventories from PostgreSQL's native archive TOC.
-# Textual pg_dump DDL is not byte-stable across restore: PostgreSQL may
-# deparse a semantically identical CHECK expression with different parentheses.
-# Strict pg_restore already verifies each object could be reconstructed.
-schema_inventory() {
-  local db="$1" out="$2"
-  dump -Fc --schema-only --no-owner --no-privileges -d "$db" > "$tmp/schema-$db.dump"
-  docker exec -i "$container" pg_restore --list < "$tmp/schema-$db.dump" |
-    sed -nE '/^[[:digit:]]+; /{s/^[[:digit:]]+; [[:digit:]]+ [[:digit:]]+ / /;p;}' |
-    LC_ALL=C sort > "$out"
-}
-schema_inventory ginbar_source "$tmp/schema-before"
-schema_inventory ginbar_restore "$tmp/schema-after"
-test -s "$tmp/schema-before"
-cmp "$tmp/schema-before" "$tmp/schema-after"
-
-# Exercise restored foreign keys and identity sequences without modifying source.
-pg -d ginbar_restore >/dev/null <<'SQL'
-BEGIN;
-DO $$
-DECLARE next_id bigint;
-BEGIN
-  INSERT INTO users(username) VALUES ('restored_sequence_probe') RETURNING id INTO next_id;
-  IF next_id <= 42 THEN RAISE EXCEPTION 'restored user sequence failed: %', next_id; END IF;
-  INSERT INTO user_roles(user_id, role) VALUES (next_id, 0);
-END $$;
-ROLLBACK;
-SQL
-
-printf 'v2-pg-recovery-test: PASS tables=%s hash=%s dump_bytes=%s duration_s=%s\n' \
-  "$(wc -l < "$tmp/before")" "$(sha256sum "$tmp/before" | cut -d ' ' -f 1)" \
-  "$(wc -c < "$tmp/backup.dump")" "$(($(date +%s) - start))"
-docker exec "$container" pg_dump --version
-docker exec "$container" pg_restore --version
- "$tmp/artifact/metadata.txt"
-grep -q '^pg_dump_version=pg_dump (PostgreSQL) 17.11' "$tmp/artifact/metadata.txt"
-grep -q '^pg_restore_version=pg_restore (PostgreSQL) 17.11' "$tmp/artifact/metadata.txt"
-! grep -Fq 'disposable_only' "$tmp/backup.log"
-! grep -Fq 'disposable_only' "$tmp/artifact/metadata.txt"
-docker exec -i "$container" pg_restore --list < "$tmp/artifact/backup.dump" > "$tmp/archive.toc"
-test -s "$tmp/archive.toc"
-
-# Source must remain byte-for-byte equivalent after the backup command.
-snapshot ginbar_source "$tmp/source-after"
-cmp "$tmp/before" "$tmp/source-after"
-
-# Existing destination is never overwritten, including its metadata.
-sha256sum "$tmp/artifact/backup.dump" "$tmp/artifact/metadata.txt" > "$tmp/collision-before"
-if backup_client /work/artifact > "$tmp/collision.log" 2>&1; then
-  echo 'v2-pg-recovery-test: collision unexpectedly succeeded' >&2; exit 1
-fi
-sha256sum "$tmp/artifact/backup.dump" "$tmp/artifact/metadata.txt" > "$tmp/collision-after"
-cmp "$tmp/collision-before" "$tmp/collision-after"
-
-# Failed dump must not publish an artifact or leave partial directories.
-mkdir "$tmp/wrappers"
-cat > "$tmp/wrappers/pg_dump" <<'WRAPPER'
-#!/bin/sh
-exit 37
-WRAPPER
-chmod 700 "$tmp/wrappers/pg_dump"
-if docker run --rm --network "container:$container" \
-    -v "$tmp:/work" -v "$ROOT/scripts/v2-pg-backup.sh:/backup.sh:ro" \
-    -e PGHOST=127.0.0.1 -e PGUSER=ginbar_fixture \
-    -e PGDATABASE=ginbar_source -e PGPASSWORD=disposable_only \
-    -e PATH=/work/wrappers:/usr/local/bin:/usr/bin:/bin \
-    "$image" bash /backup.sh /work/failed > "$tmp/failed.log" 2>&1; then
-  echo 'v2-pg-recovery-test: injected failure unexpectedly succeeded' >&2; exit 1
-fi
-test ! -e "$tmp/failed"
-! find "$tmp" -maxdepth 1 -name '.v2-pg-backup.partial.*' | grep -q .
-
-# Simulate a signal during dump and require trap cleanup.
-cat > "$tmp/wrappers/pg_dump" <<'WRAPPER'
-#!/bin/sh
-kill -TERM "$PPID"
-sleep 1
-exit 143
-WRAPPER
-chmod 700 "$tmp/wrappers/pg_dump"
-if docker run --rm --network "container:$container" \
-    -v "$tmp:/work" -v "$ROOT/scripts/v2-pg-backup.sh:/backup.sh:ro" \
-    -e PGHOST=127.0.0.1 -e PGUSER=ginbar_fixture \
-    -e PGDATABASE=ginbar_source -e PGPASSWORD=disposable_only \
-    -e PATH=/work/wrappers:/usr/local/bin:/usr/bin:/bin \
-    "$image" bash /backup.sh /work/interrupted > "$tmp/interrupted.log" 2>&1; then
-  echo 'v2-pg-recovery-test: interruption unexpectedly succeeded' >&2; exit 1
-fi
-test ! -e "$tmp/interrupted"
-! find "$tmp" -maxdepth 1 -name '.v2-pg-backup.partial.*' | grep -q .
-! grep -Fq 'disposable_only' "$tmp/interrupted.log"
-! grep -Fq 'disposable_only' "$tmp/failed.log"
-! grep -Fq 'disposable_only' "$tmp/collision.log"
-
-# Truncation must fail strict restoration.
-head -c 128 "$tmp/artifact/backup.dump" > "$tmp/truncated.dump"
-pg -d postgres -c 'CREATE DATABASE ginbar_corrupt'
-if docker exec -i "$container" pg_restore -U ginbar_fixture \
-    -d ginbar_corrupt --exit-on-error --no-owner --no-privileges \
-    < "$tmp/truncated.dump" > "$tmp/corrupt.log" 2>&1; then
-  echo 'v2-pg-recovery-test: truncated restore succeeded' >&2; exit 1
-fi
-
-# Simulate complete loss of the source database, then cold restore from the
-# independently published logical artifact into a new empty database.
-schema_inventory() {
-  local db="$1" out="$2"
-  dump -Fc --schema-only --no-owner --no-privileges -d "$db" > "$tmp/schema-$db.dump"
-  docker exec -i "$container" pg_restore --list < "$tmp/schema-$db.dump" |
-    sed -nE '/^[[:digit:]]+; /{s/^[[:digit:]]+; [[:digit:]]+ [[:digit:]]+ / /;p;}' |
-    LC_ALL=C sort > "$out"
-}
-
-
-# Preserve the source's schema TOC before simulating its destruction.
-schema_inventory ginbar_source "$tmp/schema-before"
-pg -d postgres -c 'DROP DATABASE ginbar_source WITH (FORCE)'
-pg -d postgres -c 'CREATE DATABASE ginbar_restore'
-docker exec -i "$container" pg_restore -U ginbar_fixture -d ginbar_restore \
-  --exit-on-error --no-owner --no-privileges < "$tmp/artifact/backup.dump"
-
-snapshot ginbar_restore "$tmp/after"
-cmp "$tmp/before" "$tmp/after"
-
-# Compare schema object inventories from PostgreSQL's native archive TOC.
-# Textual pg_dump DDL is not byte-stable across restore: PostgreSQL may
-# deparse a semantically identical CHECK expression with different parentheses.
-# Strict pg_restore already verifies each object could be reconstructed.
-schema_inventory() {
-  local db="$1" out="$2"
-  dump -Fc --schema-only --no-owner --no-privileges -d "$db" > "$tmp/schema-$db.dump"
-  docker exec -i "$container" pg_restore --list < "$tmp/schema-$db.dump" |
-    sed -nE '/^[[:digit:]]+; /{s/^[[:digit:]]+; [[:digit:]]+ [[:digit:]]+ / /;p;}' |
-    LC_ALL=C sort > "$out"
-}
-schema_inventory ginbar_source "$tmp/schema-before"
-schema_inventory ginbar_restore "$tmp/schema-after"
-test -s "$tmp/schema-before"
-cmp "$tmp/schema-before" "$tmp/schema-after"
-
-# Exercise restored foreign keys and identity sequences without modifying source.
-pg -d ginbar_restore >/dev/null <<'SQL'
-BEGIN;
-DO $$
-DECLARE next_id bigint;
-BEGIN
-  INSERT INTO users(username) VALUES ('restored_sequence_probe') RETURNING id INTO next_id;
-  IF next_id <= 42 THEN RAISE EXCEPTION 'restored user sequence failed: %', next_id; END IF;
-  INSERT INTO user_roles(user_id, role) VALUES (next_id, 0);
-END $$;
-ROLLBACK;
-SQL
-
-printf 'v2-pg-recovery-test: PASS tables=%s hash=%s dump_bytes=%s duration_s=%s\n' \
-  "$(wc -l < "$tmp/before")" "$(sha256sum "$tmp/before" | cut -d ' ' -f 1)" \
-  "$(wc -c < "$tmp/backup.dump")" "$(($(date +%s) - start))"
 docker exec "$container" pg_dump --version
 docker exec "$container" pg_restore --version
