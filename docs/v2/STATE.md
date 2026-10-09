@@ -2291,3 +2291,111 @@ timings, resource conditions and cleanup. Do not repeat the
 previous completed acceptance, invent numerical budgets or
 change code/CI until that separate measurement evidence is
 reviewed and an explicit threshold policy accepted.
+
+### Ten-round calibration ZIP review: usable diagnostics, formal calibration still blocked — 2026-10-09
+
+**Uploaded evidence:** `m7-perf-calibration-20261008T230231Z.zip`,
+exact uploaded-byte SHA-256
+`5a8fa6ac7f792025676185c01c50a1d76ec958255939b410659de5ae7206a03d`,
+size 224,814 bytes, **478 regular ZIP entries**. Independently verified
+ZIP CRC (all entries readable); inspected raw `findings.md`,
+`repo-state.txt`, `host/environment.txt`, each of 10 full round
+results, individual HTTP JSONs, SQL EXPLAINs, timeseries, provenance,
+and cleanup. **There is NO `MANIFEST.sha256` (or other file-level
+hash manifest) in the uploaded ZIP**; therefore the mandatory 478-file
+manifest reconciliation and separate archive packaging provenance
+were **not satisfied**. The exact uploaded archive itself was hashed;
+this is not a claim that an absent manifest passed.
+
+**Raw technical result:** 10/10 fixture runs, all first-attempt exit 0,
+at exact detached tracked-clean executable/configuration SHA
+`5712176ceb2e6e886578bad71d1515ee6d0cec1a`, each
+`expected_sha=tested_sha`, `GINBAR_PERF_BUDGET_FILE=none`,
+PostgreSQL `17.11`, Go image `1.25.0`, seeded
+100,000 synthetic posts. Each round: five HTTP JSON cases with
+2,000/2,000 HTTP 200 and zero errors, five completed indexed
+EXPLAIN ANALYZE plans with zero detected hot posts/media table
+sequential scans or disk sort/spill. **50 HTTP cases,
+100,000/100,000 successes, 50/50 acceptable SQL plans.**
+Three LOCAL-defined windows are only about twenty minutes apart:
+W1 `23:03:25–23:07:10Z` (rounds 1–4), W2
+`23:12:19–23:15:00Z` (5–7), W3
+`23:20:06–23:22:46Z` (8–10) on 2026-10-08;
+there are two ~5-minute idle gaps. The experiment sampled one
+quiet/typical shared-host condition, not independent days or
+controlled competing-load regimes. During-run sampling is sparse
+(~14–15 rows per ~52-s round, `docker stats --no-stream`
+sampling slow) and is not precisely synchronized to all five HTTP
+cell start/finish times. No new CI-runner baseline was measured;
+the same prior exact-SHA feature/post-integration CI provenance
+was included for reference only.
+
+**Independently recomputed 10-round descriptive target-host data**
+(min/median/max, all times milliseconds except RPS):
+- `feed-first-c1`: p95 **0.872/0.899/1.182**,
+  p99 **0.981/1.028/1.832**, RPS
+  **1271.159/1366.916/1387.054**.
+- `feed-cursor-c1`: p95 **0.932/0.971/1.014**,
+  p99 **1.016/1.122/1.241**, RPS
+  **1245.566/1280.803/1321.234**.
+- `search-tag-score-c1`: p95 **2.724/2.763/2.798**,
+  p99 **2.901/3.089/3.185**, RPS
+  **546.141/560.601/576.146**.
+- `around-50000-c1`: p95 **2.047/2.060/2.078**,
+  p99 **2.264/2.321/2.370**, RPS
+  **613.571/622.542/628.353**.
+- `around-50000-c8`: p95 **3.783/3.913/4.567**,
+  p99 **4.586/4.906/5.806**, RPS
+  **2509.869/2703.455/2727.984**.
+Spread `100*(max/min - 1)` is **86.7%** for first-feed
+p99, **35.5%** for first-feed p95, and **26.6%** for
+around-c8 p99; stable around-c1 p95 is only **1.5%**.
+These are **descriptive diagnostics**, not accepted numeric
+thresholds or CI-VM comparisons.
+
+**Permission/gate blocker:** The prior operator's explicit
+`amp.kejith.de` authorization was **one acceptance task**,
+consumed by the 3-run archive
+`m7-perf-shared-auth-20261008T224019Z.zip`.
+Following closure, STATE explicitly required new task-specific
+authorization before further shared-host calibration executions.
+The new 10-run ZIP does not contain evidence of **fresh approval**,
+and no such operator approval has been supplied in this chat.
+Do not infer consent merely from a ZIP upload or retroactively
+expand earlier permission. This archive's provenance can be
+examined as a technical diagnostic but cannot count as a
+permission-compliant separate independent measurement gate.
+Cleanup records report temporary worktree/cache and
+performance containers/networks gone, canonical tracked status
+clean, and pre-existing services unchanged. Those observations
+do not cure the authorization and manifest gaps.
+
+**CODING calibration decision:** hard numerical `maxP95Ms`,
+`maxP99Ms`, `minRequestsPerSecond` still **NOT ACCEPTED**
+and **NOT ACTIVATED**, including on shared host and CI runner.
+Retain structural correctness/SQL gate unchanged and
+`GINBAR_PERF_BUDGET_FILE` unset. No production-data test,
+schema/API/index change, master edit, release deployment,
+or executable/CI change by CODING. The closed M7
+structural performance-regression fixture stays CLOSED;
+overall M7 remains open. Live `v2` reverified at
+`e1717fafc464ddf201587fcf22bf8a0e2ba293c3` before
+this documentation-only STATE commit; the accepted
+executable remains
+`5712176ceb2e6e886578bad71d1515ee6d0cec1a`
+with exact post-integration `v2` push CI run
+`37855607480` / job `113578910879`,
+completed/success on that exact SHA.
+
+**Exactly ONE next task:** Obtain **new explicit operator approval**
+for a **separate, bounded LOCAL measurement-only calibration gate**
+on `amp.kejith.de` or a genuinely non-production test host,
+with measurements in meaningfully separated time/load windows,
+safe resource envelope and no production-data access. Only
+after approval issue a narrow LOCAL handoff requiring a detached
+clean exact-SHA checkout, raw per-cell results and precisely
+timestamped host/service pressure observations, a complete
+`MANIFEST.sha256`, separately computed uploaded ZIP SHA-256,
+and cleanup proof. Do not repeat another execution with unchanged
+permissions, accept a numeric budget, or start another M7
+implementation slice before that gate is resolved.
