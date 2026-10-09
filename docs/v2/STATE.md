@@ -2399,3 +2399,26 @@ timestamped host/service pressure observations, a complete
 and cleanup proof. Do not repeat another execution with unchanged
 permissions, accept a numeric budget, or start another M7
 implementation slice before that gate is resolved.
+
+## M7 performance calibration — operator-limited two-window closeout (2026-10-09)
+
+**Decision: close the optional numerical-calibration measurement campaign as FINAL-TRUNCATED / DIAGNOSTIC-REVIEWED; numerical thresholds NOT ACCEPTED and NOT ACTIVATED. No further calibration runs requested.** This is an operator-directed stop, not a 10-round / 3-window compliance PASS. The already CLOSED structural PostgreSQL/API performance fixture remains CLOSED; overall M7 remains in progress.
+
+**Independently inspected uploaded bytes:** `m7-perf-calibration-20261009T103500Z.zip`, SHA-256 `2af1f59f9d1748344e0e5e147a500e00a52f8320f474ceb5356844dacbcda3fd`, 241 entries, ZIP CRC clean. Exact tested detached-clean executable/configuration SHA `5712176ceb2e6e886578bad71d1515ee6d0cec1a`; live `v2` at review `44cd31051a8c977fb7d2ffb8a4a48ca70e74a1cd`, four docs-only commits ahead, only `docs/v2/STATE.md` changed. Applicable prior post-integration `v2 CI` workflow `374214168`, run `37855607480`, job `113578910879`, exact executable SHA `5712176ceb2e6e886578bad71d1515ee6d0cec1a`, push on `v2`, completed/SUCCESS. This documentation decision creates no new executable candidate; do not claim new CI.
+
+**Measured, independently rechecked from raw JSON:** 7/7 fixture rounds exit 0 in two time windows, 35/35 individual HTTP cases, 70,000/70,000 measured HTTP 200, zero errors; 100,000 synthetic posts per disposable round; five bounded indexed EXPLAIN query blocks per round (35 total), no hot posts/media/post_tags sequential scan, no external sort or spill. The only sequential scans were over the tiny 100-row `tags` table, two per round. PostgreSQL 17.11 and Go image 1.25.0; `budget_file=none`.
+
+**Observed raw p95 min/median/max, milliseconds (not budgets):**
+- `feed-first-c1`: 0.867 / 0.908 / 0.987; p99 0.963–2.074.
+- `feed-cursor-c1`: 0.928 / 0.964 / 1.109; p99 1.003–1.659.
+- `search-tag-score-c1`: 2.429 / 2.706 / 2.920; p99 2.816–3.319.
+- `around-50000-c1`: 1.972 / 2.018 / 2.175; p99 2.044–2.645.
+- `around-50000-c8`: 63.876 / 79.331 / 80.100; p99 67.901–84.025, RPS 270.2–971.8. This gate enforced a two-CPU container cap, saturating PostgreSQL in c8 and making the c8 workload **not comparable** to prior uncapped ~3.9ms p95 target-host measurements. Round 6 c8 had a bimodal distribution (p50 3.105ms, p95 63.876ms); the observation is retained, not excluded.
+
+**Timing:** W1 rounds 1–3 started ~10:35Z; W2 rounds 4–7 started ~13:05Z on 2026-10-09. W2 began ~2.5 hours after W1 (operator waiver of original six-hour minimum); W3 was cancelled by operator; no first-to-last 24-hour separation. Both windows sample one shared-host setting and do not establish independent-day or runner-class variance.
+
+**Evidence/provenance limitations:** Uploaded ZIP lacked `MANIFEST.sha256` and separately retained raw final cleanup-command outputs; `findings.md` reports cleanup but independent proof was not bundled. A reviewer-generated 241-entry file-hash index for uploaded members exists outside this ZIP, not as original packaging provenance. Host/service telemetry samples are not individually aligned to every HTTP cell, and the original fresh authorization for W1 is not proven in this archive. The operator's recorded W2 early waiver and W3 cancellation do not retroactively prove W1 authorization. The diagnostic observations therefore **must not** be promoted to a formally permission-compliant independent calibration acceptance.
+
+**Operator instruction 2026-10-09:** proceed using only these two windows; do not require, schedule or execute a third window or repeat benchmarks. Close *this measurement campaign* with the above documented limitations, not with invented green numeric gates. Keep `GINBAR_PERF_BUDGET_FILE` unset and do not add `maxP95Ms`, `maxP99Ms` or `minRequestsPerSecond` thresholds, revise CI, alter application/config/schema, or infer a production speedup. No production host changes or further test execution by CODING.
+
+**Exactly ONE next task:** CODING conducts a planning-only review of the remaining M7 PostgreSQL backup/restore and recovery boundary, with fresh STATE/live-ref verification and a single narrowly scoped proposed implementation gate. Do not conflate this deferred numerical-calibration campaign with the closed structural correctness gate.
