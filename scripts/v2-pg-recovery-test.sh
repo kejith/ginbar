@@ -114,13 +114,6 @@ cmp "$tmp/before" "$tmp/after"
 # Textual pg_dump DDL is not byte-stable across restore: PostgreSQL may
 # deparse a semantically identical CHECK expression with different parentheses.
 # Strict pg_restore already verifies each object could be reconstructed.
-schema_inventory() {
-  local db="$1" out="$2"
-  dump -Fc --schema-only --no-owner --no-privileges -d "$db" > "$tmp/schema-$db.dump"
-  docker exec -i "$container" pg_restore --list < "$tmp/schema-$db.dump" |
-    sed -nE '/^[[:digit:]]+; /{s/^[[:digit:]]+; [[:digit:]]+ [[:digit:]]+ / /;p;}' |
-    LC_ALL=C sort > "$out"
-}
 schema_inventory ginbar_restore "$tmp/schema-after"
 test -s "$tmp/schema-before"
 cmp "$tmp/schema-before" "$tmp/schema-after"
@@ -253,6 +246,15 @@ fi
 
 # Simulate complete loss of the source database, then cold restore from the
 # independently published logical artifact into a new empty database.
+schema_inventory() {
+  local db="$1" out="$2"
+  dump -Fc --schema-only --no-owner --no-privileges -d "$db" > "$tmp/schema-$db.dump"
+  docker exec -i "$container" pg_restore --list < "$tmp/schema-$db.dump" |
+    sed -nE '/^[[:digit:]]+; /{s/^[[:digit:]]+; [[:digit:]]+ [[:digit:]]+ / /;p;}' |
+    LC_ALL=C sort > "$out"
+}
+
+
 # Preserve the source's schema TOC before simulating its destruction.
 schema_inventory ginbar_source "$tmp/schema-before"
 pg -d postgres -c 'DROP DATABASE ginbar_source WITH (FORCE)'
