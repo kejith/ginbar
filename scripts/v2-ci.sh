@@ -44,7 +44,7 @@ resolve_auto_scope() {
       src/frontend/*)
         frontend=1
         ;;
-      nginx/v2/*|systemd/v2/*|scripts/v2-nginx-test.sh|scripts/v2-pg-backup-test.sh|scripts/v2-pg-backup.sh|scripts/v2-pg-recovery-test.sh|scripts/v2-service-limits-test.sh|scripts/v2-deploy-dry-run-test.sh)
+      nginx/v2/*|systemd/v2/*|scripts/v2-nginx-test.sh|scripts/v2-pg-backup-test.sh|scripts/v2-pg-backup.sh|scripts/v2-pg-recovery-test.sh|scripts/v2-migration-guard.py|scripts/v2-migration-compat-test.sh|scripts/testdata/v2-migration-compat/*|scripts/v2-service-limits-test.sh|scripts/v2-deploy-dry-run-test.sh)
         nginx=1
         ;;
       go.work|scripts/v2-ci.sh|.github/workflows/v2-ci.yml|.gitignore)
@@ -353,6 +353,20 @@ fi
 if ((run_nginx)); then
   printf '\n== PostgreSQL: operational backup and cold recovery ==\n'
   bash scripts/v2-pg-recovery-test.sh
+fi
+
+
+if ((run_backend || run_nginx)); then
+  printf '\n== PostgreSQL: forward-only migration compatibility guard ==\n'
+  command -v python3 >/dev/null 2>&1 || fail 'python3 required for migration guard'
+  guard_base="$base_sha"
+  if [[ -z "$guard_base" ]]; then
+    guard_base="$(git rev-parse HEAD^)"
+    printf 'v2-migration-guard: local fallback base=%s\n' "$guard_base"
+  fi
+  python3 scripts/v2-migration-guard.py --base "$guard_base"
+  printf '\n== PostgreSQL: disposable additive schema compatibility ==\n'
+  bash scripts/v2-migration-compat-test.sh
 fi
 
 if ((run_nginx)); then
