@@ -113,7 +113,9 @@ write_probe() {
   pg -d "$1" > /dev/null <<'SQL'
 BEGIN;
 INSERT INTO users(id,username) OVERRIDING SYSTEM VALUE VALUES(99,'compat_write');
-INSERT INTO user_credentials(user_id,kind,secret_hash) VALUES(99,0,'fixture');
+-- Explicit credential identity avoids nontransactional nextval() on rollback.
+INSERT INTO user_credentials(id,user_id,kind,secret_hash)
+  OVERRIDING SYSTEM VALUE VALUES(99,99,0,'fixture');
 INSERT INTO posts(id,author_user_id,release_state,released_at)
   OVERRIDING SYSTEM VALUE VALUES(101,99,1,'2025-01-01T00:00:00Z');
 INSERT INTO comments(id,post_id,user_id,body)
